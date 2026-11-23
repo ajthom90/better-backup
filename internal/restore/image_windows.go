@@ -16,6 +16,7 @@ const (
 	ioctlDiskGetLengthInfo = 0x0007405C
 	fsctlLockVolume        = 0x00090018
 	fsctlDismountVolume    = 0x00090020
+	ioctlVolumeDiskExtents = 0x00560000
 )
 
 var driveLetter = regexp.MustCompile(`^[A-Za-z]:\\?$`)
@@ -71,7 +72,75 @@ func openImageTarget(path string, size int64) (io.WriterAt, func() error, error)
 		f.Close()
 		return nil, nil, fmt.Errorf("dismounting %s: %w", dev, err)
 	}
-	// Closing the handle releases the lock; Windows mounts the restored
-	// file system the next time the volume is used.
-	return f, f.Close, nil
+	v := &volumeWriter{w: f}
+	// Write through the disk under the volume where there is exactly
+	// one: Windows may try to mount a half-written file system when
+	// something else looks at the volume, and then refuses writes made
+	// through the volume itself. The lock held here keeps the disk
+	// region writable.
+	var disk *os.File
+	var ext struct {
+		Count  uint32
+		_      uint32
+		Disk   uint32
+		_      uint32
+		Start  int64
+		Length int64
+	}
+	if err := windows.DeviceIoControl(h, ioctlVolumeDiskExtents, nil, 0, (*byte)(unsafe.Pointer(&ext)), uint32(unsafe.Sizeof(ext)), &n, nil); err == nil && ext.Count == 1 && ext.Length >= size {
+		dp, _ := windows.UTF16PtrFromString(fmt.Sprintf(`\\.\PhysicalDrive%d`, ext.Disk))
+		if dh, err := windows.CreateFile(dp, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0); err == nil {
+			disk = os.NewFile(uintptr(dh), "disk")
+			v.w, v.base = disk, ext.Start
+		}
+	}
+	// Blank the boot sector so the old file system is not recognized
+	// while its replacement is incomplete.
+	if _, err := v.w.WriteAt(make([]byte, 4096), v.base); err != nil {
+		f.Close()
+		if disk != nil {
+			disk.Close()
+		}
+		return nil, nil, fmt.Errorf("writing to %s: %w", dev, err)
+	}
+	return v, func() error {
+		err := v.finish()
+		if disk != nil {
+			if cerr := disk.Close(); err == nil {
+				err = cerr
+			}
+		}
+		// Drop the blank file system Windows may have mounted meanwhile.
+		// Closing the handle releases the lock, and Windows mounts the
+		// restored file system the next time the volume is used.
+		windows.DeviceIoControl(h, fsctlDismountVolume, nil, 0, nil, 0, &n, nil)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		return err
+	}, nil
+}
+
+// volumeWriter writes an image to a volume and holds back the first
+// block, which contains the boot sector, until everything else is there.
+type volumeWriter struct {
+	w     io.WriterAt
+	base  int64
+	first []byte
+}
+
+func (v *volumeWriter) WriteAt(p []byte, off int64) (int, error) {
+	if off == 0 {
+		v.first = append([]byte(nil), p...)
+		return len(p), nil
+	}
+	return v.w.WriteAt(p, v.base+off)
+}
+
+func (v *volumeWriter) finish() error {
+	if v.first == nil {
+		return nil
+	}
+	_, err := v.w.WriteAt(v.first, v.base)
+	return err
 }

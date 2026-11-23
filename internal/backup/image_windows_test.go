@@ -48,7 +48,13 @@ func newVolume(t *testing.T, sizeMB int) string {
 	if letter == "" {
 		t.Fatal("no free drive letter")
 	}
-	vhd := filepath.Join(t.TempDir(), "disk.vhdx")
+	// diskpart must be given the same spelling of the path every time,
+	// so resolve the short (8.3) names in the temporary directory.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vhd := filepath.Join(dir, "disk.vhdx")
 	diskpart(t, fmt.Sprintf("create vdisk file=\"%s\" maximum=%d type=expandable\nattach vdisk\ncreate partition primary\nformat fs=ntfs quick\nassign letter=%s\n", vhd, sizeMB, letter))
 	// The detach script is written now: cleanup runs after the test, when
 	// no new temporary files may be made.
@@ -66,6 +72,7 @@ func newVolume(t *testing.T, sizeMB int) string {
 			if err := os.Remove(vhd); err == nil || os.IsNotExist(err) {
 				break
 			}
+			exec.Command("powershell", "-NoProfile", "-Command", "Dismount-DiskImage -ImagePath '"+vhd+"'").Run()
 			time.Sleep(time.Second)
 		}
 	})
