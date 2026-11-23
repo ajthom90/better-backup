@@ -20,13 +20,15 @@ backup until it has run beside your current one for a while.
   another machine. Only files that differ from the backup are rewritten.
 - **VSS snapshots on Windows**: each backup reads a frozen shadow copy of the
   volume, so files that are open or locked are backed up, and VSS-aware
-  applications flush their data first. NTFS owners and permissions are
-  backed up and restored.
+  applications flush their data first. NTFS owners, permissions and
+  alternate data streams are backed up and restored.
 - **Agents for Windows, macOS and Linux**, enrolled with a one-time token and
   authenticated with per-agent TLS certificates. Agents dial out to the
   server, so only the server needs an open port.
 - **Schedules and retention**: run every N hours or daily at a set time; keep
   the last N, daily, weekly, monthly and yearly snapshots.
+- **Email alerts** when a backup, restore or repository check fails, and when
+  a scheduled backup is missed, for example because a machine is switched off.
 - **Encryption at rest** (AES-256-GCM) and zstd compression.
 - **Repository maintenance**: garbage collection, and a full verify that reads
   and checks every stored chunk.
@@ -111,9 +113,27 @@ bb restore SNAPSHOT --agent other-machine --target /srv/restore --wait
 ```
 
 The web UI at `https://your-server:8443/` shows agents, policies, jobs and
-snapshots, and can start backups and restores. Sign in with the admin token
+snapshots, creates and edits policies, sets up email alerts, and can start
+backups and restores. Sign in with the admin token
 from `admin.json` in the data directory. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
+
+### Email alerts
+
+Set them up under "Email alerts" in the web UI, or from the command line:
+
+```sh
+export BB_SMTP_PASSWORD='...'    # only if the mail server needs a sign-in
+bb alerts set --smtp smtp.example.com:587 --smtp-user backups@example.com \
+    --from backups@example.com --to admin@example.com
+bb alerts test
+```
+
+The server emails when a job fails and when a scheduled policy goes one and a
+half schedule periods without a successful backup (36 hours for a daily
+policy). Add `--on-warning` to also hear about backups that finish with
+warnings, such as skipped files. The SMTP password is kept in the server's
+database in the data directory, so protect that directory like `repo.key`.
 
 ### If the server is lost
 
@@ -145,7 +165,7 @@ bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
 | Phase | Scope |
 | --- | --- |
 | 1. Foundation (this release) | Server, file agent, dedup store, restore in place, Docker and native services |
-| 2. Windows VSS (in progress) | Done: VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI. To do: email alerts |
+| 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images | Host-level VM backup with Resilient Change Tracking, VM restore in place or as a copy, volume image backup |
 | 4. System state and AD | System state through VSS writers, domain controller backup, DSRM-assisted authoritative and non-authoritative restore |
 | 5. Scale and offsite | S3-compatible backends, replication, Proxmox and KVM providers, Postgres option, user roles |

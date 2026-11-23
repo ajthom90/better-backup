@@ -7,10 +7,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -48,6 +50,13 @@ Usage:
                                          without --target, restores in place
   bb gc [--wait]                         reclaim space from forgotten snapshots
   bb verify [--wait]                     read and check every stored chunk
+  bb alerts                              show the email alert settings
+  bb alerts set [--smtp HOST[:PORT]] [--security starttls|tls|none]
+        [--from ADDRESS] [--to ADDRESS ...] [--smtp-user USER]
+        [--on-warning[=false]]           email failed and missed backups; the
+                                         SMTP password is read from $BB_SMTP_PASSWORD
+  bb alerts test                         send a test message
+  bb alerts off                          stop sending alerts
   bb login --server URL --token TOKEN --fingerprint FP
                                          save connection settings for this user
   bb version
@@ -89,6 +98,12 @@ var (
 	fOver    = fs.String("overwrite", "", "")
 	fWait    = fs.Bool("wait", false, "")
 	fNoSnap  = fs.Bool("no-snapshot", false, "")
+	fSMTP    = fs.String("smtp", "", "")
+	fSec     = fs.String("security", "", "")
+	fFrom    = fs.String("from", "", "")
+	fUser    = fs.String("smtp-user", "", "")
+	fOnWarn  = fs.Bool("on-warning", false, "")
+	fTo      cli.Multi
 	fPaths   cli.Multi
 	fExcl    cli.Multi
 	fKeep    api.Retention
@@ -237,6 +252,7 @@ func main() {
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	fs.Var(&fPaths, "path", "")
 	fs.Var(&fExcl, "exclude", "")
+	fs.Var(&fTo, "to", "")
 	fs.IntVar(&fKeep.KeepLast, "keep-last", 0, "")
 	fs.IntVar(&fKeep.KeepDaily, "keep-daily", 0, "")
 	fs.IntVar(&fKeep.KeepWeekly, "keep-weekly", 0, "")
@@ -412,10 +428,80 @@ func main() {
 		var j api.Job
 		do("POST", "/api/v1/repo/"+pos[0], nil, &j)
 		follow(&j)
+	case "alerts":
+		var a api.AlertSettings
+		switch sub {
+		case "":
+			do("GET", "/api/v1/alerts", nil, &a)
+			printAlerts(&a)
+		case "set":
+			do("GET", "/api/v1/alerts", nil, &a)
+			a.Enabled = true
+			set := map[string]bool{}
+			fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+			if set["smtp"] {
+				a.Host, a.Port = *fSMTP, 0
+				if h, p, err := net.SplitHostPort(*fSMTP); err == nil {
+					n, err := strconv.Atoi(p)
+					if err != nil {
+						cli.Fatal(fmt.Errorf("--smtp: %q is not a port number", p))
+					}
+					a.Host, a.Port = h, n
+				}
+			}
+			if set["security"] {
+				if !set["smtp"] || a.Port == 0 {
+					a.Port = 0 // follow the new security setting's usual port
+				}
+				a.Security = *fSec
+			}
+			if set["from"] {
+				a.From = *fFrom
+			}
+			if set["to"] {
+				a.To = fTo
+			}
+			if set["smtp-user"] {
+				a.Username = *fUser
+			}
+			if set["on-warning"] {
+				a.OnWarning = *fOnWarn
+			}
+			if pw, ok := os.LookupEnv("BB_SMTP_PASSWORD"); ok {
+				a.Password, a.PasswordSet = pw, false
+			}
+			do("PUT", "/api/v1/alerts", a, &a)
+			printAlerts(&a)
+			tabs.Flush()
+			fmt.Println("\nSend a test message with: bb alerts test")
+		case "off":
+			do("GET", "/api/v1/alerts", nil, &a)
+			a.Enabled = false
+			do("PUT", "/api/v1/alerts", a, &a)
+			fmt.Println("email alerts are off; the settings are kept")
+		case "test":
+			do("POST", "/api/v1/alerts/test", nil, nil)
+			fmt.Println("test message sent")
+		default:
+			cli.Fatal(errors.New("usage: bb alerts [set|test|off]"))
+		}
 	default:
 		fs.Usage()
 		os.Exit(2)
 	}
+}
+
+func printAlerts(a *api.AlertSettings) {
+	if a.Host == "" {
+		fmt.Println("email alerts are not set up; see: bb help")
+		return
+	}
+	yes := map[bool]string{true: "yes", false: "no"}
+	fmt.Fprintf(tabs, "Sending alerts\t%s\nMail server\t%s:%d (%s)\n", yes[a.Enabled], a.Host, a.Port, a.Security)
+	if a.Username != "" {
+		fmt.Fprintf(tabs, "Signs in as\t%s (password saved: %s)\n", a.Username, yes[a.PasswordSet])
+	}
+	fmt.Fprintf(tabs, "From\t%s\nTo\t%s\nBackups with warnings\t%s\n", a.From, strings.Join(a.To, ", "), yes[a.OnWarning])
 }
 
 func sub2(pos []string) string {

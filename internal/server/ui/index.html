@@ -59,7 +59,7 @@ pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:
   <div id="err"></div><button class="primary">Sign in</button></form>
 </div>
 <div id="app" hidden>
-<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="logout">Sign out</button></header>
+<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="alerts">Email alerts</button><button id="logout">Sign out</button></header>
 <main>
   <section><div class="stats" id="stats"></div></section>
   <section><h2><span>Agents</span><button id="newToken">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
@@ -203,6 +203,50 @@ function policyDialog(p) {
   $("dlg").showModal();
 }
 $("newPolicy").onclick = () => policyDialog(null);
+
+async function alertsDialog() {
+  const a = await call("GET", "/api/v1/alerts");
+  const enabled = el("input", { type: "checkbox", checked: a.enabled });
+  const host = el("input", { value: a.host || "", placeholder: "smtp.example.com" });
+  const port = el("input", { type: "number", min: 1, max: 65535, value: a.port || "", placeholder: "Usual port" });
+  const sec = el("select", null, el("option", { value: "starttls", textContent: "STARTTLS (usually port 587)" }),
+    el("option", { value: "tls", textContent: "TLS (usually port 465)" }), el("option", { value: "none", textContent: "No encryption (port 25)" }));
+  sec.value = a.security || "starttls";
+  const user = el("input", { value: a.username || "", placeholder: "Leave empty if the server needs no sign-in", autocomplete: "off" });
+  const pass = el("input", { type: "password", placeholder: a.password_set ? "Saved. Type to replace it." : "", autocomplete: "new-password" });
+  const from = el("input", { value: a.from || "", placeholder: "backups@example.com" });
+  const to = el("textarea", { rows: 2, value: (a.to || []).join("\n"), placeholder: "One address per line" });
+  const warn = el("input", { type: "checkbox", checked: !!a.on_warning });
+  const msg = el("div", { id: "err" });
+  const body = () => ({ enabled: enabled.checked, host: host.value.trim(), port: parseInt(port.value, 10) || 0, security: sec.value, username: user.value.trim(),
+    password: pass.value, password_set: !pass.value && !!a.password_set && !!user.value.trim(), from: from.value.trim(), to: lines(to.value), on_warning: warn.checked });
+  const say = (text, good) => { msg.textContent = text; msg.style.color = good ? "var(--good)" : ""; };
+  const save = el("button", { className: "primary", textContent: "Save" });
+  save.onclick = async () => { try { await call("PUT", "/api/v1/alerts", body()); $("dlg").close(); } catch (e) { say(e.message); } };
+  const test = el("button", { textContent: "Save and send a test", style: "margin-right:auto" });
+  test.onclick = async () => {
+    say("Sending…", true);
+    try {
+      const saved = await call("PUT", "/api/v1/alerts", body());
+      a.password_set = saved.password_set; pass.value = ""; if (saved.password_set) pass.placeholder = "Saved. Type to replace it.";
+      port.value = saved.port;
+      await call("POST", "/api/v1/alerts/test");
+      say("Test message sent. Check the inbox.", true);
+    } catch (e) { say(e.message); }
+  };
+  $("dlgBody").replaceChildren(el("h3", { textContent: "Email alerts" }),
+    el("div", { className: "hint", textContent: "Sends an email when a backup, restore or repository check fails, and when a scheduled backup is missed, for example because a machine is switched off." }),
+    el("label", { className: "check" }, enabled, "Send email alerts"),
+    el("label", { textContent: "Mail server (SMTP)" }), el("div", { className: "two" }, host, port),
+    el("label", { textContent: "Connection security" }), sec,
+    el("label", { textContent: "Sign in as" }), el("div", { className: "two" }, user, pass),
+    el("label", { textContent: "From address" }), from,
+    el("label", { textContent: "Send alerts to" }), to,
+    el("label", { className: "check" }, warn, "Also email when a backup finishes with warnings, such as skipped files"),
+    msg, el("div", { className: "row" }, test, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
+  $("dlg").showModal();
+}
+$("alerts").onclick = () => alertsDialog().catch(e => notice("Something went wrong", e.message));
 
 function restoreDialog(s) {
   const target = el("input", { placeholder: "Leave empty to restore in place, over the original files" });

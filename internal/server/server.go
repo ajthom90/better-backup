@@ -83,6 +83,7 @@ type Server struct {
 	wake    map[string]chan struct{}
 	kick    chan struct{}
 	stop    chan struct{} // closed at shutdown to release long polls
+	mail    chan mailMsg  // alerts waiting to be sent
 }
 
 // New opens, or on first start creates, the server state and repository.
@@ -100,7 +101,7 @@ func New(cfg Config) (*Server, error) {
 		cfg.Tick = 20 * time.Second
 	}
 	s := &Server{cfg: cfg, log: cfg.Log, snaps: map[string]*tree.Snapshot{}, running: map[string]string{},
-		wake: map[string]chan struct{}{}, kick: make(chan struct{}, 1), stop: make(chan struct{})}
+		wake: map[string]chan struct{}{}, kick: make(chan struct{}, 1), stop: make(chan struct{}), mail: make(chan mailMsg, 64)}
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -256,6 +257,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); s.background(bg) }()
+	go s.mailer(s.stop)
 	go func() {
 		<-ctx.Done()
 		close(s.stop)
@@ -324,6 +326,9 @@ func (s *Server) routes() http.Handler {
 	ad("PUT /api/v1/policies/{id}", s.handleSavePolicy)
 	ad("DELETE /api/v1/policies/{id}", s.handleDeletePolicy)
 	ad("POST /api/v1/policies/{id}/run", s.handleRunPolicy)
+	ad("GET /api/v1/alerts", s.handleAlertSettings)
+	ad("PUT /api/v1/alerts", s.handleSaveAlertSettings)
+	ad("POST /api/v1/alerts/test", s.handleTestAlert)
 	ad("GET /api/v1/jobs", s.handleJobs)
 	ad("GET /api/v1/jobs/{id}", s.handleJob)
 	ad("GET /api/v1/snapshots", s.handleSnapshots)
@@ -431,6 +436,7 @@ func (s *Server) finish(j *api.Job, status, errMsg string, result any, warnings 
 	}
 	s.mu.Unlock()
 	s.kickBackground()
+	s.alertJob(j, status, errMsg, warnings)
 	s.log.Info("job finished", "job", j.ID, "type", j.Type, "status", status, "error", errMsg)
 	return err
 }

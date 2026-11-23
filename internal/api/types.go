@@ -168,3 +168,23 @@ type Error struct {
 
 // MaxWarnings caps the warning messages kept per job.
 const MaxWarnings = 200
+
+// AlertSettings configures email alerts for failed and missed backups.
+type AlertSettings struct {
+	Enabled bool   `json:"enabled"`
+	Host    string `json:"host"`
+	Port    int    `json:"port,omitempty"` // default: 587 for starttls, 465 for tls, 25 for none
+	// Security is "starttls" (the default), "tls" (TLS from the first
+	// byte, usually port 465) or "none".
+	Security string `json:"security,omitempty"`
+	Username string `json:"username,omitempty"`
+	// Password is never returned by the server. When saving, leave it
+	// empty and set PasswordSet to keep the stored password.
+	Password    string   `json:"password,omitempty"`
+	PasswordSet bool     `json:"password_set,omitempty"`
+	From        string   `json:"from"`
+	To          []string `json:"to"`
+	// OnWarning also sends mail for backups that finish with warnings,
+	// such as skipped files.
+	OnWarning bool `json:"on_warning,omitempty"`
+}

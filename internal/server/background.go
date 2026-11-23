@@ -21,6 +21,7 @@ func (s *Server) background(ctx context.Context) {
 	for {
 		s.expireJobs()
 		s.schedule(time.Now())
+		s.checkMissed(time.Now())
 		s.maintain()
 		select {
 		case <-ctx.Done():
