@@ -51,7 +51,7 @@ jobs:
           done
       - name: Offsite copy against a real S3 server (MinIO)
         run: |
-          docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=bbtest -e MINIO_ROOT_PASSWORD=bbtest-secret minio/minio server /data
+          docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=bbtest -e MINIO_ROOT_PASSWORD=bbtest-secret quay.io/minio/minio server /data
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:9000/minio/health/live; then break; fi
             sleep 1
