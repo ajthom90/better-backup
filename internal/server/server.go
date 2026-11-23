@@ -80,10 +80,13 @@ type Server struct {
 	snaps   map[string]*tree.Snapshot
 	running map[string]string // agent id -> its running job
 	maint   bool              // GC or verify in progress: no agent jobs start
-	wake    map[string]chan struct{}
-	kick    chan struct{}
-	stop    chan struct{} // closed at shutdown to release long polls
-	mail    chan mailMsg  // alerts waiting to be sent
+	// offsiteBusy is set while the offsite copy is being updated;
+	// garbage collection waits for it.
+	offsiteBusy bool
+	wake        map[string]chan struct{}
+	kick        chan struct{}
+	stop        chan struct{} // closed at shutdown to release long polls
+	mail        chan mailMsg  // alerts waiting to be sent
 }
 
 // New opens, or on first start creates, the server state and repository.
@@ -336,6 +339,10 @@ func (s *Server) routes() http.Handler {
 	ad("DELETE /api/v1/snapshots/{id}", s.handleDeleteSnapshot)
 	ad("GET /api/v1/snapshots/{id}/ls", s.handleList)
 	ad("POST /api/v1/restores", s.handleRestore)
+	ad("GET /api/v1/offsite", s.handleOffsite)
+	ad("PUT /api/v1/offsite", s.handleSaveOffsite)
+	ad("POST /api/v1/offsite/test", s.handleTestOffsite)
+	ad("POST /api/v1/offsite/run", s.handleRunOffsite)
 	ad("POST /api/v1/repo/gc", s.handleMaintenance(api.JobGC))
 	ad("POST /api/v1/repo/verify", s.handleMaintenance(api.JobVerify))
 	return mux

@@ -60,6 +60,16 @@ Usage:
                                          SMTP password is read from $BB_SMTP_PASSWORD
   bb alerts test                         send a test message
   bb alerts off                          stop sending alerts
+  bb offsite                             show the offsite copy and how it is doing
+  bb offsite set --folder DIR [--daily-at 03:00]
+                                         keep a copy on another disk or share
+  bb offsite set --s3-endpoint URL --s3-bucket NAME [--s3-region REGION]
+        [--s3-prefix FOLDER] [--s3-access-key KEY] [--daily-at 03:00]
+                                         keep a copy in S3-compatible storage; the
+                                         secret key is read from $BB_S3_SECRET_KEY
+  bb offsite test                        check the copy's location can be used
+  bb offsite run [--wait]                bring the copy up to date now
+  bb offsite off                         stop updating the copy
   bb login --server URL --token TOKEN --fingerprint FP
                                          save connection settings for this user
   bb version
@@ -107,6 +117,13 @@ var (
 	fFrom    = fs.String("from", "", "")
 	fUser    = fs.String("smtp-user", "", "")
 	fOnWarn  = fs.Bool("on-warning", false, "")
+	fFolder  = fs.String("folder", "", "")
+	fS3End   = fs.String("s3-endpoint", "", "")
+	fS3Buck  = fs.String("s3-bucket", "", "")
+	fS3Reg   = fs.String("s3-region", "", "")
+	fS3Pre   = fs.String("s3-prefix", "", "")
+	fS3Key   = fs.String("s3-access-key", "", "")
+	fS3VHost = fs.Bool("s3-virtual-host", false, "")
 	fTo      cli.Multi
 	fVols    cli.Multi
 	fPaths   cli.Multi
@@ -495,9 +512,102 @@ func main() {
 		default:
 			cli.Fatal(errors.New("usage: bb alerts [set|test|off]"))
 		}
+	case "offsite":
+		var st api.OffsiteStatus
+		switch sub {
+		case "":
+			do("GET", "/api/v1/offsite", nil, &st)
+			printOffsite(&st)
+		case "set":
+			do("GET", "/api/v1/offsite", nil, &st)
+			o := st.OffsiteSettings
+			o.Enabled = true
+			set := map[string]bool{}
+			fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+			if set["folder"] {
+				o.Kind, o.Folder = "folder", *fFolder
+			}
+			if set["s3-endpoint"] {
+				o.Kind, o.Endpoint = "s3", *fS3End
+			}
+			if set["s3-bucket"] {
+				o.Kind, o.Bucket = "s3", *fS3Buck
+			}
+			if set["s3-region"] {
+				o.Region = *fS3Reg
+			}
+			if set["s3-prefix"] {
+				o.Prefix = *fS3Pre
+			}
+			if set["s3-access-key"] {
+				o.AccessKey = *fS3Key
+			}
+			if set["s3-virtual-host"] {
+				o.VirtualHost = *fS3VHost
+			}
+			if set["daily-at"] {
+				o.DailyAt = *fDaily
+			} else if o.DailyAt == "" && st.Saved.IsZero() {
+				o.DailyAt = "03:00"
+			}
+			if k, ok := os.LookupEnv("BB_S3_SECRET_KEY"); ok {
+				o.SecretKey, o.SecretKeySet = k, false
+			}
+			do("PUT", "/api/v1/offsite", o, &st)
+			printOffsite(&st)
+			tabs.Flush()
+			fmt.Println("\nCheck it with: bb offsite test    Start the first copy with: bb offsite run")
+		case "off":
+			do("GET", "/api/v1/offsite", nil, &st)
+			o := st.OffsiteSettings
+			o.Enabled = false
+			do("PUT", "/api/v1/offsite", o, &st)
+			fmt.Println("the offsite copy is no longer updated; the settings and the copy are kept")
+		case "test":
+			var t api.OffsiteTest
+			do("POST", "/api/v1/offsite/test", nil, &t)
+			fmt.Printf("the location can be read and written; it holds %d files (%s)\n", t.Objects, cli.Size(t.Bytes))
+		case "run":
+			var j api.Job
+			do("POST", "/api/v1/offsite/run", nil, &j)
+			follow(&j)
+		default:
+			cli.Fatal(errors.New("usage: bb offsite [set|test|run|off]"))
+		}
 	default:
 		fs.Usage()
 		os.Exit(2)
+	}
+}
+
+func printOffsite(st *api.OffsiteStatus) {
+	if st.Kind == "" {
+		fmt.Println("no offsite copy is set up; see: bb help")
+		return
+	}
+	yes := map[bool]string{true: "yes", false: "no"}
+	fmt.Fprintf(tabs, "Updating the copy\t%s\n", yes[st.Enabled])
+	if st.Kind == "folder" {
+		fmt.Fprintf(tabs, "Folder\t%s\n", st.Folder)
+	} else {
+		where := st.Bucket
+		if st.Prefix != "" {
+			where += "/" + st.Prefix
+		}
+		fmt.Fprintf(tabs, "Bucket\t%s at %s\nAccess key\t%s (secret key saved: %s)\n", where, st.Endpoint, st.AccessKey, yes[st.SecretKeySet])
+	}
+	when := "only when started by hand"
+	if st.DailyAt != "" {
+		when = "every day at " + st.DailyAt
+	}
+	fmt.Fprintf(tabs, "Schedule\t%s\n", when)
+	last := "never"
+	if st.LastSuccess != nil {
+		last = st.LastSuccess.Local().Format(timeForm)
+	}
+	fmt.Fprintf(tabs, "Last complete copy\t%s\n", last)
+	if j := st.LastJob; j != nil && j.Status == api.StatusFailed {
+		fmt.Fprintf(tabs, "Last run failed\t%s\n", j.Error)
 	}
 }
 

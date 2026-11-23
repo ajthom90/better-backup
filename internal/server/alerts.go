@@ -173,7 +173,7 @@ func (s *Server) alertJob(j *api.Job, status, errMsg string, warnings []string) 
 	if !a.Enabled || (status == api.StatusWarning && !a.OnWarning) {
 		return
 	}
-	what := map[string]string{api.JobBackup: "Backup", api.JobRestore: "Restore", api.JobGC: "Garbage collection", api.JobVerify: "Repository verification"}[j.Type]
+	what := map[string]string{api.JobBackup: "Backup", api.JobRestore: "Restore", api.JobGC: "Garbage collection", api.JobVerify: "Repository verification", api.JobOffsite: "Offsite copy"}[j.Type]
 	if what == "" {
 		what = "Job"
 	}
