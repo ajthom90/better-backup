@@ -307,7 +307,7 @@ Then use the two commands above, or start a new server with
 | --- | --- |
 | 1. Foundation (this release) | Server, file agent, dedup store, restore in place, Docker and native services |
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
-| 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy. change tracking for VM backups (untested on a real host). To do: VM restore in place |
+| 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. To do: restore in place, DSRM-assisted authoritative and non-authoritative restore |
 | 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. To do: Proxmox and KVM providers, Postgres option, user roles |
 | 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |
