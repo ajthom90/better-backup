@@ -21,8 +21,10 @@ func (s *Server) background(ctx context.Context) {
 	for {
 		s.expireJobs()
 		s.schedule(time.Now())
+		s.scheduleOffsite(time.Now())
 		s.checkMissed(time.Now())
 		s.maintain()
+		s.runOffsite(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -103,12 +105,12 @@ func (s *Server) schedule(now time.Time) {
 // New agent jobs wait until it is done.
 func (s *Server) maintain() {
 	for {
-		js, err := s.jobs(`WHERE agent_id = '' AND status = ? ORDER BY created LIMIT 1`, api.StatusQueued)
+		js, err := s.jobs(`WHERE agent_id = '' AND type != ? AND status = ? ORDER BY created LIMIT 1`, api.JobOffsite, api.StatusQueued)
 		if err != nil || len(js) == 0 {
 			return
 		}
 		s.mu.Lock()
-		if len(s.running) > 0 {
+		if len(s.running) > 0 || s.offsiteBusy {
 			s.mu.Unlock()
 			return // retried when a job finishes
 		}

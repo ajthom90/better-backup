@@ -131,3 +131,22 @@ On restore the DACL is applied first and the owner second, because setting
 another account as owner needs the restore privilege. A file that inherited
 its permissions inherits again from the folder it is restored into; a file
 with inheritance blocked keeps its exact permissions.
+
+## Offsite copy
+
+`internal/offsite` keeps a second copy of the repository in a folder or in an
+S3-compatible bucket. It relies on the repository's files never changing once
+written: a run lists the snapshot records, then the pack files, uploads the
+packs the copy lacks, then the snapshots, then `config.json`, and finally
+removes files the repository no longer has. Listing snapshots before packs and
+uploading them after means the copy never holds a snapshot whose data is
+missing. The index is not copied; it is rebuilt from the pack trailers.
+
+The copy runs beside backups and restores but never beside garbage collection,
+which moves data between packs. If more than half of the copy's files would be
+removed, the run stops without removing anything, since that usually means the
+repository's disk is damaged or not mounted. The S3 client is a small
+Signature Version 4 implementation in `s3.go`, tested against the signatures
+in Amazon's documentation and against an in-process server that recomputes
+every signature. `TestRealS3` runs the same round trip against a real service
+when `BB_TEST_S3_ENDPOINT` is set.
