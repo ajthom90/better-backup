@@ -123,7 +123,7 @@ async function refresh() {
       a.revoked ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
   table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
-    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)")).join(", "),
+    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : []).join(", "),
       (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
       keeps(p.retention),
       el("div", { className: "acts" },
@@ -174,12 +174,13 @@ function policyDialog(p) {
   }));
   const enabled = el("input", { type: "checkbox", checked: p ? p.enabled : true });
   const noSnap = el("input", { type: "checkbox", checked: p ? !!p.no_snapshot : false });
+  const sysState = el("input", { type: "checkbox", id: "sysState", checked: p ? !!p.system_state : false });
   const err = el("div", { id: "err" });
   const save = el("button", { className: "primary", textContent: p ? "Save changes" : "Create policy" });
   save.onclick = async () => {
     const retention = {};
     for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
-    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value),
+    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), system_state: sysState.checked,
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
     try {
@@ -207,6 +208,8 @@ function policyDialog(p) {
     el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS." }),
     el("label", { textContent: "Hyper-V virtual machines (optional)" }), vms,
     el("div", { className: "hint", textContent: "Choose the agent on the Hyper-V host. Each machine is backed up while it runs, from a checkpoint." }),
+    el("label", { className: "check" }, sysState, "Windows: back up the system state"),
+    el("div", { className: "hint", textContent: "The registry, boot and system files, and on a domain controller the Active Directory database and SYSVOL. It can be restored to a folder; restoring it over a running system is not built yet." }),
     el("label", { textContent: "Schedule" }), el("div", { className: "two" }, kind, el("div", null, at, every)),
     el("div", { className: "hint", textContent: "Times are in the server's time zone." }),
     el("label", { textContent: "Snapshots to keep" }), grid,

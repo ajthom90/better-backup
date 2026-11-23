@@ -92,3 +92,48 @@ func TestPathMapping(t *testing.T) {
 		}
 	}
 }
+
+// TestWriters reads the metadata of the real writers on this machine.
+// Every Windows installation has a registry writer and a system writer.
+func TestWriters(t *testing.T) {
+	ws, err := Writers(5 * time.Minute)
+	if err != nil {
+		if os.Getenv("CI") == "" && strings.Contains(err.Error(), "access denied") {
+			t.Skip("not running as administrator: ", err)
+		}
+		t.Fatal(err)
+	}
+	for _, w := range ws {
+		n := 0
+		for _, c := range w.Components {
+			n += len(c.Files)
+		}
+		t.Logf("writer %q usage %q: %d components, %d file lists, %d exclusions, system state %v", w.Name, w.Usage, len(w.Components), n, len(w.Excludes), w.IsSystemState())
+	}
+	files, excludes, names := SystemState(ws)
+	t.Logf("system state: %d file lists and %d exclusions from %v", len(files), len(excludes), names)
+	if len(files) == 0 {
+		t.Fatal("no system state files reported")
+	}
+	sel := NewSelection(files, excludes)
+	hive := filepath.Join(os.Getenv("SystemRoot"), "System32", "config", "SYSTEM")
+	if !sel.Match(hive, false) {
+		for _, f := range files {
+			if strings.Contains(strings.ToLower(f.Path), "config") {
+				t.Logf("file list: %+v", f)
+			}
+		}
+		t.Fatalf("the registry hive %s is not part of the system state", hive)
+	}
+	if sel.Match(filepath.Join(os.Getenv("SystemDrive")+`\`, "pagefile.sys"), false) {
+		t.Fatal("the page file is part of the system state")
+	}
+	for _, f := range files {
+		if strings.Contains(f.Path, "%") {
+			t.Errorf("unexpanded variable in %+v", f)
+		}
+	}
+	if len(sel.Roots()) == 0 {
+		t.Fatal("no drives")
+	}
+}

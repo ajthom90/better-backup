@@ -24,6 +24,12 @@ const (
 	// configuration file and one image per virtual disk.
 	TypeVM = "vm"
 
+	// SystemStateName is the name of the source entry that holds a
+	// Windows system state: a folder with one folder per drive ("C"),
+	// each holding the files the system's VSS writers asked for at their
+	// original paths.
+	SystemStateName = "System state"
+
 	// pageSize is the target size of one page of directory entries.
 	pageSize = 1 << 20
 	// inlineContent is the most chunk ids kept inline in a file entry.

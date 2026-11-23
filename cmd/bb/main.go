@@ -36,6 +36,8 @@ Usage:
   bb policy add --name NAME --agent AGENT [--path PATH ...]
         [--volume VOLUME ...]  (block-level image: C: or /dev/vg0/data)
         [--vm NAME ...]        (Hyper-V virtual machine; '*' for all on the host)
+        [--system-state]       (Windows: registry, boot and system files,
+                                Active Directory and SYSVOL on a domain controller)
         [--exclude PATTERN ...] [--every 24h | --daily-at 02:00]
         [--no-snapshot]  (Windows: read live files instead of a VSS snapshot)
         [--keep-last N] [--keep-daily N] [--keep-weekly N]
@@ -101,6 +103,7 @@ var (
 	fTarget  = fs.String("target", "", "")
 	fOver    = fs.String("overwrite", "", "")
 	fWait    = fs.Bool("wait", false, "")
+	fSysSt   = fs.Bool("system-state", false, "")
 	fNoSnap  = fs.Bool("no-snapshot", false, "")
 	fSMTP    = fs.String("smtp", "", "")
 	fSec     = fs.String("security", "", "")
@@ -353,16 +356,20 @@ func main() {
 			if len(keep) == 0 {
 				keep = []string{"all"}
 			}
-			fmt.Fprintf(tabs, "%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.AgentID, sched, strings.Join(keep, ", "), strings.Join(append(append(p.Paths, p.Volumes...), p.VMs...), ", "))
+			what := append(append(append([]string{}, p.Paths...), p.Volumes...), p.VMs...)
+			if p.SystemState {
+				what = append(what, "system state")
+			}
+			fmt.Fprintf(tabs, "%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.AgentID, sched, strings.Join(keep, ", "), strings.Join(what, ", "))
 		}
 	case "policy":
 		switch sub {
 		case "add":
-			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols)+len(fVMs) == 0 {
-				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm"))
+			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols)+len(fVMs) == 0 && !*fSysSt {
+				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state"))
 			}
 			var p api.Policy
-			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs,
+			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, SystemState: *fSysSt,
 				Schedule: api.Schedule{Interval: *fEvery, DailyAt: *fDaily}, Retention: fKeep, NoSnapshot: *fNoSnap, Enabled: true}, &p)
 			fmt.Printf("created policy %s (%s)\n", p.Name, p.ID)
 		case "run":

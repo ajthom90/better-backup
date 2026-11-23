@@ -132,8 +132,12 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("a policy needs a name")
 		return
 	}
-	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 {
-		bad("a policy needs at least one path, volume or virtual machine")
+	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 && !p.SystemState {
+		bad("a policy needs at least one path, volume or virtual machine, or the system state")
+		return
+	}
+	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.SystemState && a.OS != "windows" {
+		bad("the system state can only be backed up on a Windows machine")
 		return
 	}
 	if a, err := s.agent(p.AgentID); err != nil || a == nil || a.Revoked {
@@ -194,7 +198,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, NoSnapshot: p.NoSnapshot}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, SystemState: p.SystemState, NoSnapshot: p.NoSnapshot}}
 	return j, s.enqueue(j)
 }
 

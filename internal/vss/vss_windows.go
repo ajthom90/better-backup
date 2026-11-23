@@ -35,6 +35,8 @@ const (
 	bcInitializeForBackup   = 5
 	bcSetBackupState        = 6
 	bcGatherWriterMetadata  = 9
+	bcGetWriterMetadataCnt  = 10
+	bcGetWriterMetadata     = 11
 	bcFreeWriterMetadata    = 12
 	bcPrepareForBackup      = 14
 	bcAbortBackup           = 15
@@ -44,6 +46,9 @@ const (
 	bcAddToSnapshotSet      = 37
 	bcDoSnapshotSet         = 38
 	bcGetSnapshotProperties = 42
+
+	// IVssExamineWriterMetadata
+	wmSaveAsXML = 12
 
 	asyncCancel      = 3
 	asyncWait        = 4
