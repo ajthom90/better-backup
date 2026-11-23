@@ -212,7 +212,7 @@ bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
 | 1. Foundation (this release) | Server, file agent, dedup store, restore in place, Docker and native services |
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume image backup and restore. To do: host-level VM backup with Resilient Change Tracking, VM restore in place or as a copy |
-| 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. To do: restore in place, System state through VSS writers, domain controller backup, DSRM-assisted authoritative and non-authoritative restore |
+| 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. To do: restore in place, DSRM-assisted authoritative and non-authoritative restore |
 | 5. Scale and offsite | S3-compatible backends, replication, Proxmox and KVM providers, Postgres option, user roles |
 | 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |
 
