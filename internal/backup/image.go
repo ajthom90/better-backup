@@ -28,8 +28,36 @@ type ImageSource struct {
 	// SkipZero records blocks of zeros as holes instead of storing them.
 	// It suits virtual disks, where unwritten parts read as zeros.
 	SkipZero bool
+	// Tracked says Changed is valid: it lists, in ascending order, every
+	// part written since the previous backup of this image. Blocks
+	// outside it are taken from that backup without being read. The
+	// caller must be sure the list is complete; a missing range means a
+	// backup that silently holds old data.
+	Tracked bool
+	Changed []Extent
+	// Verify reads the blocks Changed leaves out all the same and warns
+	// if any differs from the previous backup. The backup is then right
+	// whatever the list says. It is the way to test change tracking.
+	Verify bool
 	// Close, if set, is called when the image has been read.
 	Close func()
+}
+
+// previous returns the block ids of the last backup of an image if they
+// can stand in for blocks of src.
+func (a *archiver) previous(src *ImageSource, parent *tree.Entry) []keys.ID {
+	if !src.Tracked || parent == nil || parent.Type != tree.TypeImage || parent.Size != src.Size ||
+		parent.BlockSize != ImageBlock || parent.HolesZero != src.SkipZero {
+		return nil
+	}
+	var ids []keys.ID
+	if err := tree.EachContent(a.get, parent, func(id keys.ID) error { ids = append(ids, id); return nil }); err != nil {
+		return nil
+	}
+	if int64(len(ids)) != (src.Size+ImageBlock-1)/ImageBlock {
+		return nil
+	}
+	return ids
 }
 
 // image stores one image. A source that cannot be read is skipped with a
@@ -42,11 +70,26 @@ func (a *archiver) image(src *ImageSource, parent *tree.Entry) (*tree.Entry, err
 	ids := make([]keys.ID, 0, (src.Size+ImageBlock-1)/ImageBlock)
 	buf := make([]byte, ImageBlock)
 	used := src.Used
+	prev := a.previous(src, parent)
+	changed := src.Changed
+	var kept, wrong int64
 	for off := int64(0); off < src.Size; off += ImageBlock {
 		if err := a.ctx.Err(); err != nil {
 			return nil, err
 		}
 		n := min(int64(ImageBlock), src.Size-off)
+		same := false
+		if prev != nil {
+			for len(changed) > 0 && changed[0].Off+changed[0].Len <= off {
+				changed = changed[1:]
+			}
+			same = len(changed) == 0 || changed[0].Off >= off+n
+			if same && !src.Verify {
+				ids = append(ids, prev[off/ImageBlock])
+				kept++
+				continue
+			}
+		}
 		if src.Used != nil {
 			for len(used) > 0 && used[0].Off+used[0].Len <= off {
 				used = used[1:]
@@ -64,17 +107,24 @@ func (a *archiver) image(src *ImageSource, parent *tree.Entry) (*tree.Entry, err
 			return nil, nil
 		}
 		a.stats.BytesRead += n
-		if src.SkipZero && allZero(buf[:n]) {
-			ids = append(ids, keys.ID{})
-			a.progress()
-			continue
+		var id keys.ID
+		if !src.SkipZero || !allZero(buf[:n]) {
+			var err error
+			if id, err = a.put(buf[:n]); err != nil {
+				return nil, err
+			}
 		}
-		id, err := a.put(buf[:n])
-		if err != nil {
-			return nil, err
+		if same {
+			kept++
+			if id != prev[off/ImageBlock] {
+				wrong++
+			}
 		}
 		ids = append(ids, id)
 		a.progress()
+	}
+	if wrong > 0 {
+		a.warn("%s: change tracking is not reliable here: %d of the %d blocks it reported as unchanged had changed. This backup is correct because every block was read; do not switch change tracking on for this machine", src.Name, wrong, kept)
 	}
 	if err := tree.SetContent(e, ids, a.put); err != nil {
 		return nil, err
@@ -113,7 +163,8 @@ type VMSource struct {
 	// Open, if set, is called just before the machine is read and fills
 	// in the fields above. Taking the checkpoint here, and not when the
 	// job starts, keeps each machine's checkpoint short-lived.
-	Open func(*VMSource) error
+	// prev is the Config of the machine's previous backup, or nil.
+	Open func(vm *VMSource, prev []byte) error
 	// Close, if set, is called when the machine has been read. It is
 	// where a checkpoint is released.
 	Close func()
@@ -121,9 +172,29 @@ type VMSource struct {
 
 // vm stores one virtual machine. If any disk cannot be read the whole
 // machine is left out: half a machine is not a backup.
-func (a *archiver) vm(src *VMSource) (*tree.Entry, error) {
+func (a *archiver) vm(src *VMSource, parent *tree.Entry) (*tree.Entry, error) {
+	// The previous backup's configuration and disks, for change tracking.
+	prev := map[string]*tree.Entry{}
+	var prevConfig []byte
+	if parent != nil && parent.Type == tree.TypeVM {
+		for _, p := range parent.Subtree {
+			es, err := tree.ReadPage(a.get, p)
+			if err != nil {
+				prev = map[string]*tree.Entry{}
+				break
+			}
+			for i := range es {
+				prev[es[i].Name] = &es[i]
+			}
+		}
+	}
 	if src.Open != nil {
-		if err := src.Open(src); err != nil {
+		for _, e := range prev {
+			if e.Type == tree.TypeFile && e.Size < 1<<20 && len(e.Content) == 1 && prevConfig == nil {
+				prevConfig, _ = a.get(e.Content[0])
+			}
+		}
+		if err := src.Open(src, prevConfig); err != nil {
 			a.warn("virtual machine %s was not backed up: %v", src.Name, err)
 			return nil, nil
 		}
@@ -149,7 +220,7 @@ func (a *archiver) vm(src *VMSource) (*tree.Entry, error) {
 			}
 			continue
 		}
-		e, err := a.image(&src.Disks[i], nil)
+		e, err := a.image(&src.Disks[i], prev[src.Disks[i].Name])
 		if err != nil {
 			return nil, err
 		}

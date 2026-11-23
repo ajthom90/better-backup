@@ -138,7 +138,7 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 		}
 	}
 	for i := range opts.VMs {
-		e, err := a.vm(&opts.VMs[i])
+		e, err := a.vm(&opts.VMs[i], parents[opts.VMs[i].Name])
 		if err != nil {
 			return nil, a.stats, err
 		}

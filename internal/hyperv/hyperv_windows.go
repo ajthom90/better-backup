@@ -7,7 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
+
+	"github.com/ajthom90/better-backup/internal/vhd"
 )
 
 // Checkpoint is a frozen view of a virtual machine's disks. While it
@@ -16,6 +20,10 @@ type Checkpoint struct {
 	Config   Config
 	Warnings []string
 	id       string
+	// recovery says the checkpoint is a recovery snapshot, which becomes
+	// a reference point when it is released.
+	recovery bool
+	stateDir string
 }
 
 // tagPrefix starts the name of every checkpoint this program makes.
@@ -91,7 +99,8 @@ $fw = $null
 if ($vm.Generation -eq 2) { $fw = Get-VMFirmware -VM $vm }
 $drives = Get-VMHardDiskDrive -VM $vm
 if ($env:BB_CP) {
-  $cp = Get-VMSnapshot -VM $vm | Where-Object { $_.Id.Guid -eq $env:BB_CP }
+  $cp = @(Get-VMSnapshot -VM $vm) + @(Get-VMSnapshot -VM $vm -SnapshotType Recovery) | Where-Object { $_.Id.Guid -eq $env:BB_CP } | Select-Object -First 1
+  if (-not $cp) { throw "the backup checkpoint of '$($vm.Name)' has disappeared" }
   $drives = Get-VMHardDiskDrive -VMSnapshot $cp
 }
 [pscustomobject]@{
@@ -134,22 +143,163 @@ $cp.Id.Guid
 
 const releaseScript = `
 $vm = Get-VM -Name $env:BB_VM
-Get-VMSnapshot -VM $vm | Where-Object { $_.Id.Guid -eq $env:BB_CP } | Remove-VMSnapshot -Confirm:$false
+@(Get-VMSnapshot -VM $vm) + @(Get-VMSnapshot -VM $vm -SnapshotType Recovery) | Where-Object { $_.Id.Guid -eq $env:BB_CP } | Select-Object -First 1 | Remove-VMSnapshot -Confirm:$false
 `
+
+// wmiPrelude holds what the scripts that talk to Hyper-V's management
+// interface share. Recovery snapshots and reference points have no
+// PowerShell commands of their own.
+const wmiPrelude = `
+$ns = 'root\virtualization\v2'
+$vm = Get-VM -Name $env:BB_VM
+$svc = Get-WmiObject -Namespace $ns -Class Msvm_VirtualSystemSnapshotService
+function Invoke-Hv($obj, $method, $params, $what) {
+  $in = $obj.GetMethodParameters($method)
+  foreach ($k in $params.Keys) { $in[$k] = $params[$k] }
+  $r = $obj.InvokeMethod($method, $in, $null)
+  if ($r.ReturnValue -eq 0) { return }
+  if ($r.ReturnValue -ne 4096) { throw "$what failed with code $($r.ReturnValue)" }
+  $job = [wmi]$r.Job
+  while ($job.JobState -eq 2 -or $job.JobState -eq 3 -or $job.JobState -eq 4) { Start-Sleep -Milliseconds 500; $job.Get() }
+  if ($job.JobState -ne 7) { throw "$what failed: $($job.ErrorDescription)" }
+}
+function Get-RefPoints { @(Get-WmiObject -Namespace $ns -Class Msvm_VirtualSystemReferencePoint | Where-Object { $_.VirtualSystemIdentifier -eq $vm.Id.Guid }) }
+`
+
+// recoveryScript removes the recovery snapshot an interrupted backup
+// left (BB_OLD), makes a new one and prints its id. It first asks the
+// guest to flush its applications and settles for a crash-consistent
+// snapshot if the guest cannot.
+const recoveryScript = wmiPrelude + `
+if ($env:BB_OLD) { Get-VMSnapshot -VM $vm -SnapshotType Recovery | Where-Object { $_.Id.Guid -eq $env:BB_OLD } | Remove-VMSnapshot -Confirm:$false }
+$cs = Get-WmiObject -Namespace $ns -Class Msvm_ComputerSystem -Filter "Name='$($vm.Id.Guid)'"
+$before = @(Get-VMSnapshot -VM $vm -SnapshotType Recovery | ForEach-Object { $_.Id.Guid })
+$done = $false
+foreach ($level in 1, 2) {
+  $sd = ([wmiclass]"\\.\${ns}:Msvm_VirtualSystemSnapshotSettingData").CreateInstance()
+  $sd.ConsistencyLevel = $level
+  $sd.IgnoreNonSnapshottableDisks = $true
+  try {
+    Invoke-Hv $svc 'CreateSnapshot' @{ AffectedSystem = $cs.__PATH; SnapshotSettings = $sd.GetText(2); SnapshotType = 32768 } 'creating a recovery snapshot'
+    $done = $true
+    break
+  } catch { if ($level -eq 2) { throw } }
+}
+$new = @(Get-VMSnapshot -VM $vm -SnapshotType Recovery | Where-Object { $before -notcontains $_.Id.Guid })
+if ($new.Count -ne 1) { throw "expected one new recovery snapshot, found $($new.Count)" }
+$new[0].Id.Guid
+`
+
+// referenceScript turns the recovery snapshot into a reference point,
+// which merges the snapshot away and keeps the change tracking going.
+// It prints the new reference point's id and then removes the one this
+// program made before (BB_OLDREF).
+const referenceScript = wmiPrelude + `
+$before = @(Get-RefPoints | ForEach-Object { $_.InstanceID })
+$snap = Get-WmiObject -Namespace $ns -Class Msvm_VirtualSystemSettingData | Where-Object { $_.InstanceID -eq ('Microsoft:' + $env:BB_CP) }
+if (-not $snap) { throw "the recovery snapshot has disappeared" }
+Invoke-Hv $svc 'ConvertToReferencePoint' @{ AffectedSnapshot = $snap.__PATH } 'converting the snapshot to a reference point'
+$new = @(Get-RefPoints | Where-Object { $before -notcontains $_.InstanceID })
+if ($new.Count -ge 1) { $new[0].InstanceID }
+if ($env:BB_OLDREF) {
+  $old = Get-RefPoints | Where-Object { $_.InstanceID -eq $env:BB_OLDREF }
+  if ($old) {
+    $rsvc = Get-WmiObject -Namespace $ns -Class Msvm_VirtualSystemReferencePointService
+    try { Invoke-Hv $rsvc 'DestroyReferencePoint' @{ AffectedReferencePoint = $old.__PATH } 'removing the old reference point' } catch { }
+  }
+}
+`
+
+// state is what is remembered about a machine between backups.
+type state struct {
+	Snapshot  string `json:"snapshot,omitempty"`  // a recovery snapshot being read
+	Reference string `json:"reference,omitempty"` // the newest reference point
+}
+
+func stateFile(dir string) string { return filepath.Join(dir, "hyperv-state.json") }
+
+func loadState(dir string) map[string]state {
+	m := map[string]state{}
+	if b, err := os.ReadFile(stateFile(dir)); err == nil {
+		json.Unmarshal(b, &m)
+	}
+	return m
+}
+
+func saveState(dir, vm string, st state) {
+	if dir == "" {
+		return
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	m := loadState(dir)
+	m[strings.ToLower(vm)] = st
+	if b, err := json.Marshal(m); err == nil {
+		os.WriteFile(stateFile(dir), b, 0o600)
+	}
+}
+
+var stateMu sync.Mutex
+
+// track fills in each disk's tracking id and, where the previous backup
+// left an id the disk still knows, what was written since.
+func (c *Checkpoint) track(prev *Config) {
+	for i := range c.Config.Disks {
+		d := &c.Config.Disks[i]
+		id, err := vhd.Tracking(d.Path)
+		if err != nil || id == "" {
+			continue
+		}
+		d.TrackingID = id
+		if prev == nil {
+			continue
+		}
+		for _, p := range prev.Disks {
+			if p.File != d.File || p.TrackingID == "" {
+				continue
+			}
+			if ch, err := vhd.Changes(d.Path, p.TrackingID); err == nil {
+				d.Tracked = true
+				for _, r := range ch {
+					d.Changed = append(d.Changed, Range{r.Off, r.Len})
+				}
+			}
+		}
+	}
+}
 
 // Prepare records a machine's configuration and takes a checkpoint of
 // it. The returned Config lists the disk files as they were at the
 // checkpoint; they stay unchanged until Release. tag names the
 // checkpoint in Hyper-V Manager.
-func Prepare(name, tag string) (*Checkpoint, error) {
+//
+// With o.Tracking the checkpoint is a recovery snapshot, the kind
+// backup programs use: it leaves change tracking behind when released.
+// If Hyper-V will not make one, an ordinary checkpoint is used and the
+// disks are read in full.
+func Prepare(name, tag string, o Options) (*Checkpoint, error) {
 	env := map[string]string{"BB_VM": name, "BB_TAG": tagPrefix + tag, "BB_PREFIX": tagPrefix}
-	out, err := run(checkpointScript, env)
-	if err != nil {
-		return nil, fmt.Errorf("checkpoint of %s: %w", name, err)
+	c := &Checkpoint{stateDir: o.StateDir}
+	if o.Tracking {
+		st := loadState(o.StateDir)[strings.ToLower(name)]
+		env["BB_OLD"] = st.Snapshot
+		if out, err := run(recoveryScript, env); err != nil {
+			c.Warnings = append(c.Warnings, fmt.Sprintf("%s: change tracking could not be used, the disks are read in full: %v", name, err))
+		} else {
+			c.id, c.recovery = strings.TrimSpace(string(out)), true
+			st.Snapshot = c.id
+			saveState(o.StateDir, name, st)
+		}
 	}
-	c := &Checkpoint{id: strings.TrimSpace(string(out))}
+	if c.id == "" {
+		out, err := run(checkpointScript, env)
+		if err != nil {
+			return nil, fmt.Errorf("checkpoint of %s: %w", name, err)
+		}
+		c.id = strings.TrimSpace(string(out))
+	}
 	env["BB_CP"] = c.id
-	out, err = run(configScript, env)
+	out, err := run(configScript, env)
 	if err == nil {
 		err = json.Unmarshal(out, &c.Config)
 	}
@@ -169,6 +319,9 @@ func Prepare(name, tag string) (*Checkpoint, error) {
 		disks = append(disks, d)
 	}
 	c.Config.Disks = disks
+	if c.recovery {
+		c.track(o.Previous)
+	}
 	return c, nil
 }
 
@@ -178,9 +331,32 @@ func (c *Checkpoint) Release() error {
 	if c == nil || c.id == "" {
 		return nil
 	}
-	_, err := run(releaseScript, map[string]string{"BB_VM": c.Config.Name, "BB_CP": c.id})
+	env := map[string]string{"BB_VM": c.Config.Name, "BB_CP": c.id}
 	c.id = ""
-	return err
+	if !c.recovery {
+		_, err := run(releaseScript, env)
+		return err
+	}
+	st := loadState(c.stateDir)[strings.ToLower(c.Config.Name)]
+	env["BB_OLDREF"] = st.Reference
+	out, err := run(referenceScript, env)
+	if ref, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n"); err == nil || ref != "" {
+		// The snapshot is gone and a new reference point stands.
+		if ref = strings.TrimSpace(ref); ref != "" {
+			st.Reference = ref
+		}
+		st.Snapshot = ""
+		saveState(c.stateDir, c.Config.Name, st)
+		return err
+	}
+	// No reference point: remove the snapshot the ordinary way. The
+	// next backup then reads the disks in full.
+	if _, rerr := run(releaseScript, env); rerr != nil {
+		return rerr
+	}
+	st.Snapshot = ""
+	saveState(c.stateDir, c.Config.Name, st)
+	return nil
 }
 
 // createScript builds a machine from a configuration file and the disk

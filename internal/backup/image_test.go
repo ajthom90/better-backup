@@ -3,9 +3,12 @@ package backup_test
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ajthom90/better-backup/internal/backup"
@@ -129,14 +132,14 @@ func TestVM(t *testing.T) {
 	disk := func(name string, b []byte) backup.ImageSource {
 		return backup.ImageSource{Name: name, Size: int64(len(b)), R: bytes.NewReader(b), SkipZero: true, Close: func() { closed++ }}
 	}
-	vm := backup.VMSource{Name: "web01", Open: func(v *backup.VMSource) error {
+	vm := backup.VMSource{Name: "web01", Open: func(v *backup.VMSource, _ []byte) error {
 		opened++
 		v.ConfigName, v.Config = "vm.json", []byte(`{"name":"web01","generation":2}`)
 		v.Disks = []backup.ImageSource{disk("disk-scsi-0-0.vhdx", sys), disk("disk-scsi-0-1.vhdx", data)}
 		v.Close = func() { closed++ }
 		return nil
 	}}
-	broken := backup.VMSource{Name: "gone", Open: func(*backup.VMSource) error { return os.ErrNotExist }}
+	broken := backup.VMSource{Name: "gone", Open: func(*backup.VMSource, []byte) error { return os.ErrNotExist }}
 	var warnings []string
 	src, stats, err := backup.Run(ctx, &store{r}, backup.Options{IDKey: r.Keys().ID, VMs: []backup.VMSource{vm, broken},
 		Warn: func(m string) { warnings = append(warnings, m) }})
@@ -173,5 +176,117 @@ func TestVM(t *testing.T) {
 	// The whole machine needs a target folder, and a Hyper-V host.
 	if _, err := restore.Run(ctx, r.Get, restore.Options{Sources: src, SourceOS: runtime.GOOS}); err == nil {
 		t.Fatal("a machine was restored without a target folder")
+	}
+}
+
+// countReader counts the bytes read through it.
+type countReader struct {
+	r io.ReaderAt
+	n int64
+}
+
+func (c *countReader) ReadAt(p []byte, off int64) (int, error) {
+	c.n += int64(len(p))
+	return c.r.ReadAt(p, off)
+}
+
+// TestVMTracking backs up a machine three times: in full, then reading
+// only the ranges reported as changed, then with a report that misses a
+// change while checking is on.
+func TestVMTracking(t *testing.T) {
+	ctx := context.Background()
+	rdir := t.TempDir()
+	if err := repo.Init(rdir, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	r, err := repo.Open(rdir, []byte("pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	const mib = 1 << 20
+	content := rnd(51, 8*mib)
+	copy(content[5*mib:], make([]byte, mib)) // a block of zeros
+	var reader *countReader
+	var gotPrev string
+	var warnings []string
+	run := func(parent []tree.Entry, tracked, verify bool, changed []backup.Extent) []tree.Entry {
+		t.Helper()
+		reader = &countReader{r: bytes.NewReader(append([]byte(nil), content...))}
+		warnings = nil
+		vm := backup.VMSource{Name: "web01", Open: func(v *backup.VMSource, prev []byte) error {
+			gotPrev = string(prev)
+			v.ConfigName, v.Config = "vm.json", []byte(fmt.Sprintf(`{"name":"web01","run":%d}`, len(parent)+int(reader.n)+len(changed)+len(content)))
+			v.Disks = []backup.ImageSource{{Name: "disk-scsi-0-0.vhdx", Size: int64(len(content)), R: reader, SkipZero: true,
+				Tracked: tracked, Verify: verify, Changed: changed}}
+			return nil
+		}}
+		src, _, err := backup.Run(ctx, &store{r}, backup.Options{IDKey: r.Keys().ID, VMs: []backup.VMSource{vm}, Parent: parent,
+			Warn: func(m string) { warnings = append(warnings, m) }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return src
+	}
+	restored := func(src []tree.Entry) []byte {
+		t.Helper()
+		out := filepath.Join(t.TempDir(), "disk.img")
+		sep := "/"
+		if runtime.GOOS == "windows" {
+			sep = `\`
+		}
+		if _, err := restore.Run(ctx, r.Get, restore.Options{Sources: src, SourceOS: runtime.GOOS, Target: out, Include: []string{"web01" + sep + "disk-scsi-0-0.vhdx"}}); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	// A report of changes without an earlier backup changes nothing.
+	first := run(nil, true, false, []backup.Extent{})
+	if reader.n != 8*mib || gotPrev != "" || !bytes.Equal(restored(first), content) {
+		t.Fatalf("first backup read %d bytes, previous config %q", reader.n, gotPrev)
+	}
+	firstConfig := fmt.Sprintf(`{"name":"web01","run":%d}`, len(content))
+
+	// Two blocks change, one of them only in part; only they are read.
+	copy(content[2*mib+100:], rnd(52, 4096))
+	copy(content[5*mib:], rnd(53, mib))
+	second := run(first, true, false, []backup.Extent{{Off: 2*mib + 100, Len: 4096}, {Off: 5 * mib, Len: mib}})
+	if reader.n != 2*mib || gotPrev != firstConfig || len(warnings) != 0 {
+		t.Fatalf("second backup read %d bytes, previous config %q, warnings %v", reader.n, gotPrev, warnings)
+	}
+	if !bytes.Equal(restored(second), content) {
+		t.Fatal("the backup made from tracked changes differs from the disk")
+	}
+
+	// Without the tracked flag the list is ignored and all is read.
+	if run(second, false, false, []backup.Extent{}); reader.n != 8*mib {
+		t.Fatalf("an untracked backup read %d bytes", reader.n)
+	}
+
+	// A change the report misses: checking reads everything, stores the
+	// right data and says the tracking failed.
+	copy(content[7*mib:], rnd(54, 512))
+	copy(content[1*mib:], rnd(55, 512))
+	third := run(second, true, true, []backup.Extent{{Off: mib, Len: 512}})
+	if reader.n != 8*mib || len(warnings) != 1 || !strings.Contains(warnings[0], "1 of the 7 blocks") {
+		t.Fatalf("checked backup read %d bytes, warnings %v", reader.n, warnings)
+	}
+	if !bytes.Equal(restored(third), content) {
+		t.Fatal("the checked backup differs from the disk")
+	}
+	// A correct report passes the check quietly.
+	if run(third, true, true, []backup.Extent{}); len(warnings) != 0 {
+		t.Fatalf("a correct report was flagged: %v", warnings)
+	}
+	// A disk that changed size is read in full.
+	content = append(content, rnd(56, mib)...)
+	grown := run(third, true, false, []backup.Extent{})
+	if reader.n != 9*mib || !bytes.Equal(restored(grown), content) {
+		t.Fatalf("a grown disk read %d bytes", reader.n)
 	}
 }

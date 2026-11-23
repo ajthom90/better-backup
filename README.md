@@ -174,10 +174,33 @@ adapters and secure boot setting. Single disks can be restored on any agent.
 
 Backup and restore have been run on a real Hyper-V host, but the automated
 tests cover only the disk imaging underneath, because the test machines have
-no Hyper-V. Known gaps: every backup reads the disks in full
-(change tracking comes next), a machine cannot yet be restored over the
-original, and pass-through disks, shared disks, virtual TPMs and other device
-settings are not carried over.
+no Hyper-V.
+
+By default every backup reads the disks in full and uploads only the blocks
+that changed. With change tracking a backup also reads only what changed,
+which is much faster:
+
+```sh
+bb policy add --name vms --agent hyperv01 --vm '*' --vm-tracking check --daily-at 23:00
+```
+
+`--vm-tracking on` (in the web UI: "Read only what changed since the last
+backup") takes each backup from a Hyper-V recovery snapshot and leaves a
+reference point behind, so Hyper-V tracks what is written to the disks
+(Resilient Change Tracking, Windows Server 2016 and later). The next backup
+asks each disk what changed and takes the rest from the previous backup. The
+first backups after switching it on still read everything, and so does any
+backup where the tracking cannot be used.
+
+`--vm-tracking check` works the same way but reads every block anyway and
+warns if a block the tracking called unchanged had changed. Change tracking
+has not yet run on a real host, and a mistake in it would mean backups that
+silently hold old data, so run with `check` for a while and switch to `on`
+only if no such warning appears.
+
+Known gaps: a machine cannot yet be restored over the original, and
+pass-through disks, shared disks, virtual TPMs and other device settings are
+not carried over.
 
 ### Windows system state
 
@@ -284,7 +307,7 @@ Then use the two commands above, or start a new server with
 | --- | --- |
 | 1. Foundation (this release) | Server, file agent, dedup store, restore in place, Docker and native services |
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
-| 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy. To do: Resilient Change Tracking, VM restore in place |
+| 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. To do: restore in place, DSRM-assisted authoritative and non-authoritative restore |
 | 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. To do: Proxmox and KVM providers, Postgres option, user roles |
 | 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |

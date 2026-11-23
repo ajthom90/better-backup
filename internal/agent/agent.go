@@ -257,6 +257,7 @@ func (c *client) Get(ctx context.Context, id keys.ID) ([]byte, error) {
 
 // Agent runs jobs for one enrolled machine.
 type Agent struct {
+	dir string
 	cfg *Config
 	c   *client
 	log *slog.Logger
@@ -278,7 +279,7 @@ func New(dir string, log *slog.Logger) (*Agent, error) {
 	if missing := vss.EnablePrivileges(); len(missing) > 0 {
 		log.Warn("could not enable some backup privileges; files this account cannot open will be skipped", "missing", missing)
 	}
-	return &Agent{cfg: cfg, c: c, log: log}, nil
+	return &Agent{dir: dir, cfg: cfg, c: c, log: log}, nil
 }
 
 // Run polls for jobs until ctx is cancelled.
@@ -477,8 +478,12 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 			}
 		}
 		for _, name := range vms {
-			opts.VMs = append(opts.VMs, backup.VMSource{Name: name, Open: func(vm *backup.VMSource) error {
-				cp, err := hyperv.Prepare(vm.Name, "job "+j.ID)
+			opts.VMs = append(opts.VMs, backup.VMSource{Name: name, Open: func(vm *backup.VMSource, prev []byte) error {
+				ho := hyperv.Options{Tracking: j.Backup.VMTracking != "", StateDir: a.dir}
+				if p := new(hyperv.Config); len(prev) > 0 && json.Unmarshal(prev, p) == nil {
+					ho.Previous = p
+				}
+				cp, err := hyperv.Prepare(vm.Name, "job "+j.ID, ho)
 				if err != nil {
 					return err
 				}
@@ -503,6 +508,10 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 						}
 						release()
 						return fmt.Errorf("opening its disk %s: %w", d.Path, err)
+					}
+					src.Tracked, src.Verify = d.Tracked, j.Backup.VMTracking == "check"
+					for _, r := range d.Changed {
+						src.Changed = append(src.Changed, backup.Extent{Off: r.Off, Len: r.Len})
 					}
 					vm.Disks = append(vm.Disks, src)
 				}
