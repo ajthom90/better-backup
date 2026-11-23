@@ -1,0 +1,18 @@
+[Unit]
+Description=better-backup agent
+Documentation=https://github.com/ajthom90/better-backup
+After=network-online.target
+Wants=network-online.target
+# Starts only once the machine is enrolled: bb-agent enroll ...
+ConditionPathExists=/var/lib/better-backup-agent/agent.json
+
+[Service]
+ExecStart=/usr/bin/bb-agent run
+Environment=BB_AGENT_DIR=/var/lib/better-backup-agent
+Restart=always
+RestartSec=10
+StateDirectory=better-backup-agent
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

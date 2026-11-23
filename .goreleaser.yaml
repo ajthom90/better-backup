@@ -1,0 +1,89 @@
+version: 2
+project_name: better-backup
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: bb-server
+    main: ./cmd/bb-server
+    binary: bb-server
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: &ldflags
+      - -s -w
+      - -X github.com/ajthom90/better-backup/internal/server.Version={{ .Version }}
+      - -X github.com/ajthom90/better-backup/internal/agent.Version={{ .Version }}
+  - id: bb
+    main: ./cmd/bb
+    binary: bb
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: *ldflags
+  - id: bb-agent
+    main: ./cmd/bb-agent
+    binary: bb-agent
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: *ldflags
+
+archives:
+  - id: server
+    ids: [bb-server, bb]
+    name_template: "better-backup-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md]
+  - id: agent
+    ids: [bb-agent]
+    name_template: "better-backup-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md]
+
+nfpms:
+  - id: server
+    package_name: better-backup-server
+    ids: [bb-server, bb]
+    formats: [deb, rpm]
+    maintainer: better-backup contributors
+    description: better-backup server. Stores deduplicated, encrypted backups and coordinates agents.
+    homepage: https://github.com/ajthom90/better-backup
+    license: Apache-2.0
+    contents:
+      - src: packaging/systemd/better-backup-server.service
+        dst: /usr/lib/systemd/system/better-backup-server.service
+    scripts:
+      postinstall: packaging/scripts/postinstall-server.sh
+      preremove: packaging/scripts/preremove-server.sh
+  - id: agent
+    package_name: better-backup-agent
+    ids: [bb-agent]
+    formats: [deb, rpm]
+    maintainer: better-backup contributors
+    description: better-backup agent. Backs up and restores this machine.
+    homepage: https://github.com/ajthom90/better-backup
+    license: Apache-2.0
+    contents:
+      - src: packaging/systemd/better-backup-agent.service
+        dst: /usr/lib/systemd/system/better-backup-agent.service
+    scripts:
+      postinstall: packaging/scripts/postinstall-agent.sh
+      preremove: packaging/scripts/preremove-agent.sh
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
