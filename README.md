@@ -7,8 +7,8 @@ appliance's capacity ceiling.
 
 **Status: Phase 2 in progress.** File backup and restore work end to end on
 all three operating systems, and Windows backups read from VSS snapshots.
-Hyper-V, system state and Active Directory are on the [roadmap](#roadmap) and
-not built yet. Do not make this your only
+Hyper-V and restoring a system state or Active Directory in place are on the
+[roadmap](#roadmap) and not built yet. Do not make this your only
 backup until it has run beside your current one for a while.
 
 ## What works today
@@ -26,6 +26,10 @@ backup until it has run beside your current one for a while.
   device on Linux) and restore it over a volume, onto another disk, or into
   an image file. Windows volumes are read from a VSS snapshot and free space
   on NTFS is skipped.
+- **Windows system state**: the registry, boot and system files, and on a
+  domain controller the Active Directory database and SYSVOL, as the
+  system's own VSS writers list them. It can be restored to a folder;
+  restoring it over a running system is not built yet.
 - **Agents for Windows, macOS and Linux**, enrolled with a one-time token and
   authenticated with per-agent TLS certificates. Agents dial out to the
   server, so only the server needs an open port.
@@ -142,6 +146,24 @@ use: Windows refuses to lock a volume with open files, and the system volume
 cannot be restored from the running system (recovery media comes in Phase 6).
 The target must be at least as large as the original volume.
 
+### Windows system state
+
+```sh
+bb policy add --name dc01-state --agent dc01 --system-state --daily-at 00:30
+bb restore SNAPSHOT --path "System state" --target D:\Recovered --wait
+```
+
+Or tick "Windows: back up the system state" on a policy in the web UI. The
+agent asks the VSS writers on the machine which files make up its state (on a
+domain controller that includes `ntds.dit`, its logs and SYSVOL), and reads
+them from a snapshot. The first run stores several gigabytes of Windows
+files; later runs only store what changed. In a snapshot the files sit under
+"System state", then the drive letter, then their original path.
+
+For now it restores to a folder only. Putting a system state back over a
+running Windows, and the Directory Services Restore Mode steps for a domain
+controller, come next.
+
 ### Email alerts
 
 Set them up under "Email alerts" in the web UI, or from the command line:
@@ -190,7 +212,7 @@ bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
 | 1. Foundation (this release) | Server, file agent, dedup store, restore in place, Docker and native services |
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume image backup and restore. To do: host-level VM backup with Resilient Change Tracking, VM restore in place or as a copy |
-| 4. System state and AD | System state through VSS writers, domain controller backup, DSRM-assisted authoritative and non-authoritative restore |
+| 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. To do: restore in place, System state through VSS writers, domain controller backup, DSRM-assisted authoritative and non-authoritative restore |
 | 5. Scale and offsite | S3-compatible backends, replication, Proxmox and KVM providers, Postgres option, user roles |
 | 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |
 

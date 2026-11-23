@@ -131,3 +131,66 @@ func TestWindowsSnapshotAndPermissions(t *testing.T) {
 		t.Fatalf("an inheriting file came back with inheritance blocked: %s", got)
 	}
 }
+
+// TestWindowsSystemState backs up the registry, as the real registry
+// writer describes it, from a VSS snapshot. The hives are open and
+// locked by the running system, so only the snapshot can read them.
+func TestWindowsSystemState(t *testing.T) {
+	vss.EnablePrivileges()
+	ctx := context.Background()
+	rdir := t.TempDir()
+	if err := repo.Init(rdir, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	r, err := repo.Open(rdir, []byte("pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	ws, err := vss.Writers(5 * time.Minute)
+	if err != nil {
+		if os.Getenv("CI") == "" && strings.Contains(err.Error(), "access denied") {
+			t.Skip("not running as administrator: ", err)
+		}
+		t.Fatal(err)
+	}
+	// Only the registry: the whole system state is many gigabytes.
+	var registry []vss.Writer
+	for _, w := range ws {
+		if strings.EqualFold(w.Name, "Registry Writer") {
+			registry = append(registry, w)
+		}
+	}
+	files, excludes, names := vss.SystemState(registry)
+	if len(names) != 1 {
+		t.Fatalf("registry writer not found among %d writers", len(ws))
+	}
+	sel := vss.NewSelection(files, excludes)
+	set, skipped, err := vss.Create(sel.Roots(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("vss.Create: %v %v", err, skipped)
+	}
+	sources, stats, err := backup.Run(ctx, &store{r: r}, backup.Options{IDKey: r.Keys().ID, MapPath: set.Path,
+		SystemState: &backup.SystemState{Roots: sel.Roots(), Match: sel.Match}})
+	if cerr := set.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+	if err != nil || stats.Warnings != 0 || stats.Files < 3 {
+		t.Fatalf("backup: %+v %v", stats, err)
+	}
+	t.Logf("registry: %d files, %d bytes", stats.Files, stats.Bytes)
+
+	out := t.TempDir()
+	rs, err := restore.Run(ctx, func(id keys.ID) ([]byte, error) { return r.Get(id) },
+		restore.Options{Sources: sources, SourceOS: "windows", Target: out, Include: []string{"System state"}})
+	if err != nil || rs.Warnings != 0 || rs.Files != stats.Files {
+		t.Fatalf("restore: %+v %v", rs, err)
+	}
+	root := os.Getenv("SystemRoot")
+	hive := filepath.Join(out, "System state", root[:1], root[3:], "System32", "config", "SYSTEM")
+	b, err := os.ReadFile(hive)
+	if err != nil || len(b) < 4096 || string(b[:4]) != "regf" {
+		t.Fatalf("restored SYSTEM hive: %d bytes, %v", len(b), err)
+	}
+}
