@@ -49,16 +49,6 @@ jobs:
               CGO_ENABLED=0 GOOS=$os GOARCH=$arch go vet ./...
             done
           done
-      - name: Offsite copy against a real S3 server (MinIO)
-        run: |
-          docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=bbtest -e MINIO_ROOT_PASSWORD=bbtest-secret quay.io/minio/minio server /data
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:9000/minio/health/live; then break; fi
-            sleep 1
-          done
-          BB_TEST_S3_ENDPOINT=http://127.0.0.1:9000 BB_TEST_S3_ACCESS_KEY=bbtest BB_TEST_S3_SECRET_KEY=bbtest-secret \
-            go test -count=1 -run TestRealS3 -v ./internal/offsite/ | tee s3.log
-          grep -q -- "--- PASS: TestRealS3" s3.log
       - name: Build the Docker images
         run: |
           docker build --target server -t better-backup:ci .

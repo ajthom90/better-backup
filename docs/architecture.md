@@ -147,4 +147,6 @@ which moves data between packs. If more than half of the copy's files would be
 removed, the run stops without removing anything, since that usually means the
 repository's disk is damaged or not mounted. The S3 client is a small
 Signature Version 4 implementation in `s3.go`, tested against the signatures
-in Amazon's documentation and against MinIO in CI.
+in Amazon's documentation and against an in-process server that recomputes
+every signature. `TestRealS3` runs the same round trip against a real service
+when `BB_TEST_S3_ENDPOINT` is set.

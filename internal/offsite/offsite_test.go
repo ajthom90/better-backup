@@ -265,9 +265,9 @@ func TestDirTargetNeedsFolder(t *testing.T) {
 }
 
 // TestRealS3 runs the same round trip against a real S3-compatible
-// server. CI starts MinIO for it; elsewhere it is skipped unless
-// BB_TEST_S3_ENDPOINT, BB_TEST_S3_ACCESS_KEY and BB_TEST_S3_SECRET_KEY
-// are set.
+// service. It is skipped unless BB_TEST_S3_ENDPOINT,
+// BB_TEST_S3_ACCESS_KEY and BB_TEST_S3_SECRET_KEY are set; the keys must
+// be allowed to create a bucket.
 func TestRealS3(t *testing.T) {
 	endpoint := os.Getenv("BB_TEST_S3_ENDPOINT")
 	if endpoint == "" {
