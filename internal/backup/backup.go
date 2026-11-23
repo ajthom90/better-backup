@@ -31,6 +31,8 @@ type Store interface {
 type Options struct {
 	Paths    []string
 	Excludes []string
+	// Images are volumes or disks to copy block by block.
+	Images []ImageSource
 	// Parent holds the sources of the previous snapshot. Files whose size
 	// and modification time match it are not read again.
 	Parent []tree.Entry
@@ -75,7 +77,7 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 	if a.opts.MapPath == nil {
 		a.opts.MapPath = func(p string) string { return p }
 	}
-	if len(opts.Paths) == 0 {
+	if len(opts.Paths) == 0 && len(opts.Images) == 0 {
 		return nil, a.stats, errors.New("no paths to back up")
 	}
 	parents := map[string]*tree.Entry{}
@@ -94,6 +96,15 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 			continue
 		}
 		e, err := a.node(abs, abs, fi, parents[abs])
+		if err != nil {
+			return nil, a.stats, err
+		}
+		if e != nil {
+			sources = append(sources, *e)
+		}
+	}
+	for i := range opts.Images {
+		e, err := a.image(&opts.Images[i], parents[opts.Images[i].Name])
 		if err != nil {
 			return nil, a.stats, err
 		}

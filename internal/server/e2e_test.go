@@ -197,6 +197,35 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("status after gc: %+v (before %+v)", after, before)
 	}
 
+	// A block-level image of a disk, restored to a file. On Windows
+	// images need a real volume; that is tested in the backup package.
+	if runtime.GOOS != "windows" {
+		disk := filepath.Join(t.TempDir(), "disk.raw")
+		write(t, disk, rnd(9, 2<<20+512))
+		var ip api.Policy
+		e.do("POST", "/api/v1/policies", api.Policy{Name: "image", AgentID: agents[0].ID, Volumes: []string{disk}, Enabled: true}, &ip)
+		var ij api.Job
+		e.do("POST", "/api/v1/policies/"+ip.ID+"/run", nil, &ij)
+		done := e.wait(ij.ID)
+		if done.Status != api.StatusSuccess {
+			t.Fatalf("image backup: %s %s %v", done.Status, done.Error, done.Warnings)
+		}
+		e.do("GET", "/api/v1/snapshots/"+done.SnapshotID+"/ls", nil, &ls)
+		if len(ls) != 1 || ls[0].Type != tree.TypeImage || ls[0].Size != 2<<20+512 {
+			t.Fatalf("image listing: %+v", ls)
+		}
+		img := filepath.Join(t.TempDir(), "restored.raw")
+		e.do("POST", "/api/v1/restores", api.RestoreRequest{SnapshotID: done.SnapshotID, Target: img}, &rj)
+		if done := e.wait(rj.ID); done.Status != api.StatusSuccess {
+			t.Fatalf("image restore: %s %s %v", done.Status, done.Error, done.Warnings)
+		}
+		if b, _ := os.ReadFile(img); !bytes.Equal(b, rnd(9, 2<<20+512)) {
+			t.Fatal("the restored image differs from the disk")
+		}
+		e.do("DELETE", "/api/v1/policies/"+ip.ID, nil, nil)
+		e.do("DELETE", "/api/v1/snapshots/"+done.SnapshotID, nil, nil)
+	}
+
 	// Restart the server: snapshots persist and the agent reconnects.
 	stopServer()
 	if err := <-serverDone; err != nil {

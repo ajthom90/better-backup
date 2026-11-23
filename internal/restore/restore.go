@@ -54,6 +54,8 @@ type restorer struct {
 	fold  bool
 	stats Stats
 	last  time.Time
+	// imageDest is set once an image was written to the target itself.
+	imageDest bool
 }
 
 // Run performs the restore.
@@ -219,6 +221,8 @@ func (r *restorer) entry(e *tree.Entry, orig, dest string, full bool) error {
 		}
 	case tree.TypeFile:
 		return r.file(e, dest)
+	case tree.TypeImage:
+		return r.image(e)
 	case tree.TypeSymlink:
 		if _, err := os.Lstat(dest); err == nil {
 			if r.opts.Overwrite == OverwriteNever {

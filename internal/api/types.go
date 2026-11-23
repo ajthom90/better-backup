@@ -67,11 +67,14 @@ type Retention struct {
 }
 
 type Policy struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	AgentID   string    `json:"agent_id"`
-	Paths     []string  `json:"paths"`
-	Excludes  []string  `json:"excludes,omitempty"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	AgentID  string   `json:"agent_id"`
+	Paths    []string `json:"paths"`
+	Excludes []string `json:"excludes,omitempty"`
+	// Volumes are backed up as block-level images: drive letters such as
+	// "C:" on Windows, or block devices such as /dev/vg0/data elsewhere.
+	Volumes   []string  `json:"volumes,omitempty"`
 	Schedule  Schedule  `json:"schedule"`
 	Retention Retention `json:"retention"`
 	// NoSnapshot backs up the live file system instead of a volume
@@ -85,6 +88,7 @@ type Policy struct {
 type BackupSpec struct {
 	Paths      []string     `json:"paths"`
 	Excludes   []string     `json:"excludes,omitempty"`
+	Volumes    []string     `json:"volumes,omitempty"`
 	NoSnapshot bool         `json:"no_snapshot,omitempty"`
 	Parent     []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
 }
