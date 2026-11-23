@@ -12,7 +12,7 @@ import (
 // contents back through a second, read-only open.
 func TestCreateWriteRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "disk.vhdx")
-	const size = 64 << 20
+	const size = 256 << 20 // eight 32 MiB blocks, of which two are written
 	d, err := Create(path, size)
 	if err != nil {
 		t.Fatal(err)
