@@ -116,7 +116,7 @@ async function refresh() {
     agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, a.version, pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen)]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
   table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
-    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, p.paths.join(", "),
+    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)")).join(", "),
       (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
       keeps(p.retention),
       el("div", { className: "acts" },
@@ -147,8 +147,9 @@ function policyDialog(p) {
   const name = el("input", { value: p ? p.name : "", placeholder: "For example: File server documents" });
   const agent = el("select", null, ...active.map(a => el("option", { value: a.id, textContent: a.name + " (" + a.os + ")" })));
   if (p) agent.value = p.agent_id;
-  const paths = el("textarea", { rows: 3, value: p ? p.paths.join("\n") : "", placeholder: "One folder or file per line, for example D:\\Shares or /home" });
+  const paths = el("textarea", { rows: 3, value: p ? (p.paths || []).join("\n") : "", placeholder: "One folder or file per line, for example D:\\Shares or /home" });
   const excludes = el("textarea", { rows: 2, value: p && p.excludes ? p.excludes.join("\n") : "", placeholder: "One pattern per line, for example *.tmp or node_modules" });
+  const volumes = el("textarea", { rows: 2, value: p && p.volumes ? p.volumes.join("\n") : "", placeholder: "One per line, for example C: on Windows or /dev/vg0/data on Linux" });
   const kind = el("select", null, el("option", { value: "daily", textContent: "Every day at a set time" }),
     el("option", { value: "interval", textContent: "Repeating, every so often" }), el("option", { value: "manual", textContent: "Only when started by hand" }));
   const at = el("input", { type: "time", value: p && p.schedule.daily_at ? p.schedule.daily_at : "02:00" });
@@ -169,7 +170,7 @@ function policyDialog(p) {
   save.onclick = async () => {
     const retention = {};
     for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
-    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value),
+    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value),
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
     try {
@@ -193,6 +194,8 @@ function policyDialog(p) {
     el("label", { textContent: "Machine to back up" }), agent,
     el("label", { textContent: "Folders and files to back up" }), paths,
     el("label", { textContent: "Leave out (optional)" }), excludes,
+    el("label", { textContent: "Whole volumes to back up as images (optional)" }), volumes,
+    el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS." }),
     el("label", { textContent: "Schedule" }), el("div", { className: "two" }, kind, el("div", null, at, every)),
     el("div", { className: "hint", textContent: "Times are in the server's time zone." }),
     el("label", { textContent: "Snapshots to keep" }), grid,

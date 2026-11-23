@@ -16,6 +16,10 @@ const (
 	TypeFile    = "file"
 	TypeDir     = "dir"
 	TypeSymlink = "symlink"
+	// TypeImage is a block-level copy of a volume or disk. Its content
+	// lists one chunk per BlockSize bytes; the zero id stands for a block
+	// that was unallocated and holds nothing worth keeping.
+	TypeImage = "image"
 
 	// pageSize is the target size of one page of directory entries.
 	pageSize = 1 << 20
@@ -46,6 +50,13 @@ type Entry struct {
 	// of raw 32-byte ids.
 	Content      []keys.ID `json:"content,omitempty"`
 	ContentIndex []keys.ID `json:"content_index,omitempty"`
+
+	// BlockSize is the size of each block of an image.
+	BlockSize int64 `json:"block_size,omitempty"`
+	// HolesZero says the holes of an image were blocks of zeros, as in a
+	// virtual disk, and must read as zeros after a restore. Without it
+	// holes were free space whose contents do not matter.
+	HolesZero bool `json:"holes_zero,omitempty"`
 
 	// Subtree lists the pages holding a directory's entries.
 	Subtree []keys.ID `json:"subtree,omitempty"`
@@ -232,13 +243,19 @@ func Mark(get Getter, entries []Entry, seen map[keys.ID]struct{}, mark func(keys
 			}
 		}
 		switch e.Type {
-		case TypeFile:
+		case TypeFile, TypeImage:
 			for _, ix := range e.ContentIndex {
 				if err := mark(ix); err != nil {
 					return err
 				}
 			}
-			if err := EachContent(get, e, mark); err != nil {
+			err := EachContent(get, e, func(id keys.ID) error {
+				if id == (keys.ID{}) {
+					return nil // an image hole
+				}
+				return mark(id)
+			})
+			if err != nil {
 				return err
 			}
 		case TypeDir:

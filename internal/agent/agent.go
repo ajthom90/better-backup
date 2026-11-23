@@ -397,12 +397,27 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		// On Windows, read from a VSS snapshot so open and locked files
 		// are backed up in a consistent state. If the snapshot cannot be
 		// made, back up the live files and say so.
-		if runtime.GOOS == "windows" && !j.Backup.NoSnapshot {
-			set, skipped, serr := vss.Create(j.Backup.Paths, 10*time.Minute)
+		// Volume images are always read from a snapshot: an image of a
+		// volume that is changing would not be a usable file system.
+		var snapPaths []string
+		var set *vss.Set
+		if runtime.GOOS == "windows" {
+			if !j.Backup.NoSnapshot {
+				snapPaths = append(snapPaths, j.Backup.Paths...)
+			}
+			for _, v := range j.Backup.Volumes {
+				snapPaths = append(snapPaths, strings.TrimRight(v, `\`)+`\`)
+			}
+		}
+		if len(snapPaths) > 0 {
+			var skipped []string
+			var serr error
+			set, skipped, serr = vss.Create(snapPaths, 10*time.Minute)
 			for _, s := range skipped {
 				warn("no snapshot for one volume, backing up its live files: " + s)
 			}
 			if serr != nil {
+				set = nil
 				warn("could not create a VSS snapshot, backing up live files (files in use may be skipped): " + serr.Error())
 			} else {
 				log.Info("VSS snapshot created", "volumes", set.Volumes())
@@ -414,7 +429,27 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 				}
 			}
 		}
+		for _, v := range j.Backup.Volumes {
+			name, readPath := v, v
+			if runtime.GOOS == "windows" {
+				name = strings.ToUpper(strings.TrimRight(v, `\`))
+				readPath = strings.TrimRight(set.Path(name+`\`), `\`)
+				if set == nil || strings.EqualFold(readPath, name) {
+					warn("volume " + name + " was not backed up: it has no VSS snapshot")
+					continue
+				}
+			}
+			src, oerr := backup.OpenImage(name, readPath)
+			if oerr != nil {
+				warn("volume " + name + " was not backed up: " + oerr.Error())
+				continue
+			}
+			opts.Images = append(opts.Images, src)
+		}
 		req.Sources, stats, err = backup.Run(jctx, a.c, opts)
+		for _, src := range opts.Images {
+			src.Close() // a no-op for images the backup already closed
+		}
 		release()
 		req.Stats = &stats
 	case j.Type == api.JobRestore && j.Restore != nil:

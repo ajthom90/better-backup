@@ -22,6 +22,10 @@ backup until it has run beside your current one for a while.
   volume, so files that are open or locked are backed up, and VSS-aware
   applications flush their data first. NTFS owners, permissions and
   alternate data streams are backed up and restored.
+- **Volume images**: back up a whole volume block by block (`C:`, or a block
+  device on Linux) and restore it over a volume, onto another disk, or into
+  an image file. Windows volumes are read from a VSS snapshot and free space
+  on NTFS is skipped.
 - **Agents for Windows, macOS and Linux**, enrolled with a one-time token and
   authenticated with per-agent TLS certificates. Agents dial out to the
   server, so only the server needs an open port.
@@ -118,6 +122,20 @@ backups and restores. Sign in with the admin token
 from `admin.json` in the data directory. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
 
+### Whole volumes
+
+```sh
+bb policy add --name fileserver-d --agent fileserver --volume D: --daily-at 01:00
+bb restore SNAPSHOT --wait                      # back over D:
+bb restore SNAPSHOT --target E: --wait          # onto another volume
+bb restore SNAPSHOT --target /srv/d.img --agent linux-box --wait
+```
+
+Restoring over a volume replaces everything on it. The volume must not be in
+use: Windows refuses to lock a volume with open files, and the system volume
+cannot be restored from the running system (recovery media comes in Phase 6).
+The target must be at least as large as the original volume.
+
 ### Email alerts
 
 Set them up under "Email alerts" in the web UI, or from the command line:
@@ -166,7 +184,7 @@ bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
 | --- | --- |
 | 1. Foundation (this release) | Server, file agent, dedup store, restore in place, Docker and native services |
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
-| 3. Hyper-V and images | Host-level VM backup with Resilient Change Tracking, VM restore in place or as a copy, volume image backup |
+| 3. Hyper-V and images (in progress) | Done: volume image backup and restore. To do: host-level VM backup with Resilient Change Tracking, VM restore in place or as a copy |
 | 4. System state and AD | System state through VSS writers, domain controller backup, DSRM-assisted authoritative and non-authoritative restore |
 | 5. Scale and offsite | S3-compatible backends, replication, Proxmox and KVM providers, Postgres option, user roles |
 | 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |

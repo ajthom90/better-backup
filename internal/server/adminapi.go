@@ -132,8 +132,8 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("a policy needs a name")
 		return
 	}
-	if len(p.Paths) == 0 {
-		bad("a policy needs at least one path")
+	if len(p.Paths) == 0 && len(p.Volumes) == 0 {
+		bad("a policy needs at least one path or volume")
 		return
 	}
 	if a, err := s.agent(p.AgentID); err != nil || a == nil || a.Revoked {
@@ -194,7 +194,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, NoSnapshot: p.NoSnapshot}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, NoSnapshot: p.NoSnapshot}}
 	return j, s.enqueue(j)
 }
 
