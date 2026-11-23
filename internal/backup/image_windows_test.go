@@ -57,8 +57,16 @@ func newVolume(t *testing.T, sizeMB int) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if out, err := exec.Command("diskpart", "/s", detach).CombinedOutput(); err != nil {
+		out, err := exec.Command("diskpart", "/s", detach).CombinedOutput()
+		if err != nil && !strings.Contains(string(out), "already detached") {
 			t.Errorf("detaching %s: %v\n%s", vhd, err, out)
+		}
+		// The disk service lets go of the file a moment after detaching.
+		for i := 0; i < 20; i++ {
+			if err := os.Remove(vhd); err == nil || os.IsNotExist(err) {
+				break
+			}
+			time.Sleep(time.Second)
 		}
 	})
 	return letter + ":"
