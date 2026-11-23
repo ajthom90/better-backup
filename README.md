@@ -54,6 +54,10 @@ docker run -d --name better-backup -p 8443:8443 \
   ghcr.io/ajthom90/better-backup:latest
 ```
 
+Images are published to GitHub's registry: `:latest` and `:vX.Y.Z` for releases,
+and `:edge` for the newest commit on `main`. Until the first release exists, use
+`:edge`. The agent image is `ghcr.io/ajthom90/better-backup-agent`.
+
 Or natively (Linux, macOS, Windows), from a release archive:
 
 ```sh
