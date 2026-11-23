@@ -149,6 +149,36 @@ use: Windows refuses to lock a volume with open files, and the system volume
 cannot be restored from the running system (recovery media comes in Phase 6).
 The target must be at least as large as the original volume.
 
+### Hyper-V virtual machines
+
+Install the agent on the Hyper-V host and name the machines to protect:
+
+```sh
+bb policy add --name vms --agent hyperv01 --vm web01 --vm sql01 --daily-at 23:00
+bb policy add --name all-vms --agent hyperv01 --vm '*' --daily-at 23:00
+bb restore SNAPSHOT --path web01 --target D:\Restored --name web01-restored --wait
+bb restore SNAPSHOT --path 'web01\disk-scsi-0-0.vhdx' --target D:\Restored\disk.vhdx --wait
+```
+
+The web UI does the same: list the machines under "Hyper-V virtual machines" when you
+add a policy, and give the new machine a name in the restore dialog.
+
+Each machine is backed up while it runs. The agent takes a checkpoint (a
+production checkpoint if the machine is set to use them, so applications in
+the guest are flushed), images every virtual disk as it was at that moment,
+and removes the checkpoint. Empty parts of a disk are not stored.
+
+A restore builds a new machine, switched off, with its disks under the target
+folder and the same generation, processors, memory, disk positions, network
+adapters and secure boot setting. Single disks can be restored on any agent.
+
+Backup and restore have been run on a real Hyper-V host, but the automated
+tests cover only the disk imaging underneath, because the test machines have
+no Hyper-V. Known gaps: every backup reads the disks in full
+(change tracking comes next), a machine cannot yet be restored over the
+original, and pass-through disks, shared disks, virtual TPMs and other device
+settings are not carried over.
+
 ### Windows system state
 
 ```sh
@@ -254,7 +284,7 @@ Then use the two commands above, or start a new server with
 | --- | --- |
 | 1. Foundation (this release) | Server, file agent, dedup store, restore in place, Docker and native services |
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
-| 3. Hyper-V and images (in progress) | Done: volume image backup and restore. To do: host-level VM backup with Resilient Change Tracking, VM restore in place or as a copy |
+| 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy. To do: Resilient Change Tracking, VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. To do: restore in place, DSRM-assisted authoritative and non-authoritative restore |
 | 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. To do: Proxmox and KVM providers, Postgres option, user roles |
 | 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |

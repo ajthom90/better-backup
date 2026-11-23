@@ -132,8 +132,8 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("a policy needs a name")
 		return
 	}
-	if len(p.Paths) == 0 && len(p.Volumes) == 0 && !p.SystemState {
-		bad("a policy needs at least one path or volume, or the system state")
+	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 && !p.SystemState {
+		bad("a policy needs at least one path, volume or virtual machine, or the system state")
 		return
 	}
 	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.SystemState && a.OS != "windows" {
@@ -198,7 +198,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, SystemState: p.SystemState, NoSnapshot: p.NoSnapshot}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, SystemState: p.SystemState, NoSnapshot: p.NoSnapshot}}
 	return j, s.enqueue(j)
 }
 
@@ -349,7 +349,7 @@ func listPath(get tree.Getter, sn *tree.Snapshot, path string) ([]tree.Entry, er
 		cur := src
 		if rest != "" {
 			for _, name := range strings.Split(rest, sep) {
-				if cur.Type != tree.TypeDir {
+				if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM {
 					return nil, fmt.Errorf("%s is not a directory in this snapshot", path)
 				}
 				var next *tree.Entry
@@ -374,7 +374,7 @@ func listPath(get tree.Getter, sn *tree.Snapshot, path string) ([]tree.Entry, er
 				cur = next
 			}
 		}
-		if cur.Type != tree.TypeDir {
+		if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM {
 			return []tree.Entry{*cur}, nil
 		}
 		var all []tree.Entry
@@ -423,7 +423,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	j := &api.Job{Type: api.JobRestore, AgentID: a.ID, SnapshotID: sn.ID, Restore: &api.RestoreSpec{
-		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite}}
+		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName}}
 	if err := s.enqueue(j); err != nil {
 		s.internal(w, err)
 		return

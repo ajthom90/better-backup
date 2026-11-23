@@ -31,7 +31,7 @@ const (
 // On NTFS the allocation bitmap is read so free space is skipped. Other
 // file systems are copied in full.
 func OpenImage(name, readPath string) (ImageSource, error) {
-	if ext := strings.ToLower(filepath.Ext(readPath)); ext == ".vhdx" || ext == ".vhd" {
+	if ext := strings.ToLower(filepath.Ext(readPath)); ext == ".vhdx" || ext == ".vhd" || ext == ".avhdx" || ext == ".avhd" {
 		d, err := vhd.Open(readPath, true)
 		if err != nil {
 			return ImageSource{}, err

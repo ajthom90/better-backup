@@ -108,3 +108,70 @@ func TestImage(t *testing.T) {
 	}
 	check(file, old)
 }
+
+// TestVM backs up a virtual machine made of a configuration and two
+// disks, lists it, and restores one disk out of it.
+func TestVM(t *testing.T) {
+	ctx := context.Background()
+	rdir := t.TempDir()
+	if err := repo.Init(rdir, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	r, err := repo.Open(rdir, []byte("pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	const mib = 1 << 20
+	sys := append(rnd(41, mib), make([]byte, 2*mib)...) // one block of data, two of zeros
+	data := rnd(42, 2*mib)
+	opened, closed := 0, 0
+	disk := func(name string, b []byte) backup.ImageSource {
+		return backup.ImageSource{Name: name, Size: int64(len(b)), R: bytes.NewReader(b), SkipZero: true, Close: func() { closed++ }}
+	}
+	vm := backup.VMSource{Name: "web01", Open: func(v *backup.VMSource) error {
+		opened++
+		v.ConfigName, v.Config = "vm.json", []byte(`{"name":"web01","generation":2}`)
+		v.Disks = []backup.ImageSource{disk("disk-scsi-0-0.vhdx", sys), disk("disk-scsi-0-1.vhdx", data)}
+		v.Close = func() { closed++ }
+		return nil
+	}}
+	broken := backup.VMSource{Name: "gone", Open: func(*backup.VMSource) error { return os.ErrNotExist }}
+	var warnings []string
+	src, stats, err := backup.Run(ctx, &store{r}, backup.Options{IDKey: r.Keys().ID, VMs: []backup.VMSource{vm, broken},
+		Warn: func(m string) { warnings = append(warnings, m) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(src) != 1 || src[0].Type != tree.TypeVM || src[0].Name != "web01" || opened != 1 || closed != 3 {
+		t.Fatalf("sources %+v, opened %d, closed %d", src, opened, closed)
+	}
+	if len(warnings) != 1 || stats.Files != 1 || stats.BytesUploaded > 3*mib+1024 {
+		t.Fatalf("warnings %v, stats %+v", warnings, stats)
+	}
+	children, err := tree.ReadPage(r.Get, src[0].Subtree[0])
+	if err != nil || len(children) != 3 || children[0].Name != "vm.json" || !children[1].HolesZero {
+		t.Fatalf("machine contents: %+v %v", children, err)
+	}
+	if err := tree.Mark(r.Get, src, map[keys.ID]struct{}{}, func(id keys.ID) error { _, err := r.Get(id); return err }); err != nil {
+		t.Fatal(err)
+	}
+
+	// One disk, picked by path, restores to a file anywhere.
+	sep := "/"
+	if runtime.GOOS == "windows" {
+		sep = `\`
+	}
+	out := filepath.Join(t.TempDir(), "system.img")
+	rs, err := restore.Run(ctx, r.Get, restore.Options{Sources: src, SourceOS: runtime.GOOS, Target: out, Include: []string{"web01" + sep + "disk-scsi-0-0.vhdx"}})
+	if err != nil || rs.Files != 1 {
+		t.Fatalf("disk restore: %+v %v", rs, err)
+	}
+	if got, _ := os.ReadFile(out); !bytes.Equal(got, sys) {
+		t.Fatal("the restored disk differs from the original")
+	}
+	// The whole machine needs a target folder, and a Hyper-V host.
+	if _, err := restore.Run(ctx, r.Get, restore.Options{Sources: src, SourceOS: runtime.GOOS}); err == nil {
+		t.Fatal("a machine was restored without a target folder")
+	}
+}

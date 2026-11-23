@@ -35,6 +35,7 @@ Usage:
   bb policies                            list backup policies
   bb policy add --name NAME --agent AGENT [--path PATH ...]
         [--volume VOLUME ...]  (block-level image: C: or /dev/vg0/data)
+        [--vm NAME ...]        (Hyper-V virtual machine; '*' for all on the host)
         [--system-state]       (Windows: registry, boot and system files,
                                 Active Directory and SYSVOL on a domain controller)
         [--exclude PATTERN ...] [--every 24h | --daily-at 02:00]
@@ -49,8 +50,10 @@ Usage:
   bb snapshot rm SNAPSHOT                forget a snapshot
   bb ls SNAPSHOT [PATH]                  browse a snapshot
   bb restore SNAPSHOT [--path PATH ...] [--target DIR] [--agent AGENT]
-        [--overwrite if-changed|always|never] [--wait]
-                                         without --target, restores in place
+        [--overwrite if-changed|always|never] [--name NEW-VM-NAME] [--wait]
+                                         without --target, restores in place;
+                                         a virtual machine is restored as a new
+                                         machine with its files under --target
   bb gc [--wait]                         reclaim space from forgotten snapshots
   bb verify [--wait]                     read and check every stored chunk
   bb alerts                              show the email alert settings
@@ -126,6 +129,7 @@ var (
 	fS3VHost = fs.Bool("s3-virtual-host", false, "")
 	fTo      cli.Multi
 	fVols    cli.Multi
+	fVMs     cli.Multi
 	fPaths   cli.Multi
 	fExcl    cli.Multi
 	fKeep    api.Retention
@@ -276,6 +280,7 @@ func main() {
 	fs.Var(&fExcl, "exclude", "")
 	fs.Var(&fTo, "to", "")
 	fs.Var(&fVols, "volume", "")
+	fs.Var(&fVMs, "vm", "")
 	fs.IntVar(&fKeep.KeepLast, "keep-last", 0, "")
 	fs.IntVar(&fKeep.KeepDaily, "keep-daily", 0, "")
 	fs.IntVar(&fKeep.KeepWeekly, "keep-weekly", 0, "")
@@ -368,7 +373,7 @@ func main() {
 			if len(keep) == 0 {
 				keep = []string{"all"}
 			}
-			what := append(append([]string{}, p.Paths...), p.Volumes...)
+			what := append(append(append([]string{}, p.Paths...), p.Volumes...), p.VMs...)
 			if p.SystemState {
 				what = append(what, "system state")
 			}
@@ -377,11 +382,11 @@ func main() {
 	case "policy":
 		switch sub {
 		case "add":
-			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols) == 0 && !*fSysSt {
-				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path or --volume, or --system-state"))
+			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols)+len(fVMs) == 0 && !*fSysSt {
+				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state"))
 			}
 			var p api.Policy
-			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, SystemState: *fSysSt,
+			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, SystemState: *fSysSt,
 				Schedule: api.Schedule{Interval: *fEvery, DailyAt: *fDaily}, Retention: fKeep, NoSnapshot: *fNoSnap, Enabled: true}, &p)
 			fmt.Printf("created policy %s (%s)\n", p.Name, p.ID)
 		case "run":
@@ -444,7 +449,7 @@ func main() {
 		}
 	case "restore":
 		need(pos, 2, "bb restore SNAPSHOT")
-		req := api.RestoreRequest{SnapshotID: pos[1], Include: fPaths, Target: *fTarget, Overwrite: *fOver}
+		req := api.RestoreRequest{SnapshotID: pos[1], Include: fPaths, Target: *fTarget, Overwrite: *fOver, VMName: *fName}
 		if *fAgent != "" {
 			req.AgentID = agentID(*fAgent)
 		}

@@ -20,6 +20,9 @@ const (
 	// lists one chunk per BlockSize bytes; the zero id stands for a block
 	// that was unallocated and holds nothing worth keeping.
 	TypeImage = "image"
+	// TypeVM is a virtual machine. Like a directory it has a subtree: a
+	// configuration file and one image per virtual disk.
+	TypeVM = "vm"
 
 	// SystemStateName is the name of the source entry that holds a
 	// Windows system state: a folder with one folder per drive ("C"),
@@ -264,7 +267,7 @@ func Mark(get Getter, entries []Entry, seen map[keys.ID]struct{}, mark func(keys
 			if err != nil {
 				return err
 			}
-		case TypeDir:
+		case TypeDir, TypeVM:
 			for _, p := range e.Subtree {
 				if _, ok := seen[p]; ok {
 					continue

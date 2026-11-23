@@ -35,7 +35,7 @@ input,select,textarea { font:inherit; padding:7px 9px; border:1px solid var(--li
 #login { max-width:420px; margin:12vh auto; padding:22px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
 #login p { color:var(--muted); }
 #err { color:var(--bad); min-height:1.4em; }
-dialog { border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--ink); max-width:min(560px,92vw); padding:20px; }
+dialog { border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--ink); max-width:min(560px,92vw); max-height:92vh; overflow-y:auto; padding:20px; }
 dialog::backdrop { background:rgba(0,0,0,.45); }
 dialog label { display:block; margin:12px 0 4px; font-weight:600; }
 dialog label.check { font-weight:400; display:flex; gap:8px; align-items:center; }
@@ -124,7 +124,7 @@ async function refresh() {
       a.revoked ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
   table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
-    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), p.system_state ? ["system state"] : []).join(", "),
+    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : []).join(", "),
       (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
       keeps(p.retention),
       el("div", { className: "acts" },
@@ -159,6 +159,7 @@ function policyDialog(p) {
   const paths = el("textarea", { rows: 3, value: p ? (p.paths || []).join("\n") : "", placeholder: "One folder or file per line, for example D:\\Shares or /home" });
   const excludes = el("textarea", { rows: 2, value: p && p.excludes ? p.excludes.join("\n") : "", placeholder: "One pattern per line, for example *.tmp or node_modules" });
   const volumes = el("textarea", { rows: 2, value: p && p.volumes ? p.volumes.join("\n") : "", placeholder: "One per line, for example C: on Windows or /dev/vg0/data on Linux" });
+  const vms = el("textarea", { rows: 2, value: p && p.vms ? p.vms.join("\n") : "", placeholder: "One name per line, or * for every machine on the host" });
   const kind = el("select", null, el("option", { value: "daily", textContent: "Every day at a set time" }),
     el("option", { value: "interval", textContent: "Repeating, every so often" }), el("option", { value: "manual", textContent: "Only when started by hand" }));
   const at = el("input", { type: "time", value: p && p.schedule.daily_at ? p.schedule.daily_at : "02:00" });
@@ -180,7 +181,7 @@ function policyDialog(p) {
   save.onclick = async () => {
     const retention = {};
     for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
-    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), system_state: sysState.checked,
+    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), system_state: sysState.checked,
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
     try {
@@ -206,6 +207,8 @@ function policyDialog(p) {
     el("label", { textContent: "Leave out (optional)" }), excludes,
     el("label", { textContent: "Whole volumes to back up as images (optional)" }), volumes,
     el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS." }),
+    el("label", { textContent: "Hyper-V virtual machines (optional)" }), vms,
+    el("div", { className: "hint", textContent: "Choose the agent on the Hyper-V host. Each machine is backed up while it runs, from a checkpoint." }),
     el("label", { className: "check" }, sysState, "Windows: back up the system state"),
     el("div", { className: "hint", textContent: "The registry, boot and system files, and on a domain controller the Active Directory database and SYSVOL. It can be restored to a folder; restoring it over a running system is not built yet." }),
     el("label", { textContent: "Schedule" }), el("div", { className: "two" }, kind, el("div", null, at, every)),
@@ -357,11 +360,12 @@ function restoreDialog(s, path) {
   const only = el("input", { value: path || "", placeholder: "Leave empty to restore everything in the snapshot" });
   const mode = el("select", null, el("option", { value: "if-changed", textContent: "Replace files that differ from the backup" }),
     el("option", { value: "always", textContent: "Replace every file" }), el("option", { value: "never", textContent: "Only restore missing files" }));
+  const vmName = el("input", { id: "vmName", placeholder: "Leave empty to keep its old name" });
   const err = el("div", { id: "err" });
   const go = el("button", { className: "primary", textContent: "Start restore" });
   go.onclick = async () => {
     try {
-      const j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: agent.value, target: target.value.trim(), include: only.value.trim() ? [only.value.trim()] : [], overwrite: mode.value });
+      const j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: agent.value, target: target.value.trim(), include: only.value.trim() ? [only.value.trim()] : [], overwrite: mode.value, vm_name: vmName.value.trim() });
       await refresh(); await jobDialog(j.id);
     } catch (e) { err.textContent = e.message; }
   };
@@ -372,6 +376,8 @@ function restoreDialog(s, path) {
     el("label", { textContent: "Put it in" }), target,
     el("div", { className: "hint", textContent: "A folder on the chosen machine. A disk image can also go to a volume (E:), a device, or a new file (.img, or .vhdx on Windows). Restoring onto a different machine needs a folder here." }),
     el("label", { textContent: "Existing files" }), mode,
+    el("label", { textContent: "Name for a restored virtual machine" }), vmName,
+    el("div", { className: "hint", textContent: "Only for Hyper-V machines. A virtual machine is restored as a new machine, switched off, with its disks in the folder above, which must be on a Hyper-V host." }),
     err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
 }
 

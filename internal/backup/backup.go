@@ -33,6 +33,8 @@ type Options struct {
 	Excludes []string
 	// Images are volumes or disks to copy block by block.
 	Images []ImageSource
+	// VMs are virtual machines: a configuration and disk images each.
+	VMs []VMSource
 	// SystemState, if set, backs up the files a Windows system state
 	// consists of.
 	SystemState *SystemState
@@ -91,7 +93,7 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 	if a.opts.MapPath == nil {
 		a.opts.MapPath = func(p string) string { return p }
 	}
-	if len(opts.Paths) == 0 && len(opts.Images) == 0 && opts.SystemState == nil {
+	if len(opts.Paths) == 0 && len(opts.Images) == 0 && len(opts.VMs) == 0 && opts.SystemState == nil {
 		return nil, a.stats, errors.New("no paths to back up")
 	}
 	parents := map[string]*tree.Entry{}
@@ -128,6 +130,15 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 	}
 	for i := range opts.Images {
 		e, err := a.image(&opts.Images[i], parents[opts.Images[i].Name])
+		if err != nil {
+			return nil, a.stats, err
+		}
+		if e != nil {
+			sources = append(sources, *e)
+		}
+	}
+	for i := range opts.VMs {
+		e, err := a.vm(&opts.VMs[i])
 		if err != nil {
 			return nil, a.stats, err
 		}

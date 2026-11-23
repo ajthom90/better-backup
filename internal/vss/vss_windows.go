@@ -88,6 +88,11 @@ func call(obj unsafe.Pointer, slot int, args ...uintptr) uintptr {
 // inProgressError is VSS_E_SNAPSHOT_SET_IN_PROGRESS: retry later.
 type inProgressError struct{ error }
 
+// providerError is VSS_E_UNEXPECTED_PROVIDER_ERROR. The provider gives
+// it for lasting faults, but also when several snapshots are made at
+// once, so it is worth a few more tries.
+type providerError struct{ error }
+
 func check(hr uintptr, what string) error {
 	if int32(hr) >= 0 {
 		return nil
@@ -96,10 +101,12 @@ func check(hr uintptr, what string) error {
 	if code == 0x80042316 {
 		return inProgressError{fmt.Errorf("VSS %s failed (0x80042316): another snapshot is already being created", what)}
 	}
+	if code == 0x8004230F {
+		return providerError{fmt.Errorf("VSS %s failed (0x8004230F): the shadow copy provider had an unexpected error", what)}
+	}
 	msg := map[uint32]string{
 		0x80070005: "access denied: the agent must run as an administrator or as a service",
 		0x8004230C: "the volume does not support snapshots",
-		0x8004230F: "the shadow copy provider had an unexpected error",
 		0x8004231F: "not enough disk space for the shadow copy storage",
 		0x80042308: "the volume was not found",
 	}[code]
@@ -224,10 +231,14 @@ func Create(paths []string, timeout time.Duration) (set *Set, skipped []string, 
 		var bc unsafe.Pointer
 		var skip []string
 		var err error
-		for {
+		for tries := 0; ; {
 			bc, skip, err = s.create(volumes, deadline)
 			var busy inProgressError
-			if !errors.As(err, &busy) || time.Now().Add(10*time.Second).After(deadline) {
+			var prov providerError
+			if errors.As(err, &prov) {
+				tries++
+			}
+			if !errors.As(err, &busy) && (!errors.As(err, &prov) || tries > 3) || time.Now().Add(10*time.Second).After(deadline) {
 				break
 			}
 			time.Sleep(2*time.Second + time.Duration(rand.Int63n(int64(3*time.Second))))
