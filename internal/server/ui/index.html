@@ -29,7 +29,7 @@ td.wrap { white-space:normal; word-break:break-all; }
 button { font:inherit; padding:5px 11px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
 button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
 button:hover { filter:brightness(0.95); }
-input,select { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); width:100%; }
+input,select,textarea { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); width:100%; }
 .pill { font-size:12px; font-weight:600; }
 .success,.online { color:var(--good); } .warning,.queued,.running { color:var(--warn); } .failed,.revoked { color:var(--bad); } .offline { color:var(--muted); }
 #login { max-width:420px; margin:12vh auto; padding:22px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
@@ -38,6 +38,15 @@ input,select { font:inherit; padding:7px 9px; border:1px solid var(--line); bord
 dialog { border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--ink); max-width:min(560px,92vw); padding:20px; }
 dialog::backdrop { background:rgba(0,0,0,.45); }
 dialog label { display:block; margin:12px 0 4px; font-weight:600; }
+dialog label.check { font-weight:400; display:flex; gap:8px; align-items:center; }
+dialog label.check input { width:auto; }
+textarea { resize:vertical; min-height:64px; }
+.grid { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; }
+.grid small { color:var(--muted); display:block; }
+.two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.hint { color:var(--muted); font-size:12px; margin-top:4px; }
+td .acts { display:flex; gap:6px; }
+button.danger { color:var(--bad); }
 dialog .row { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
 pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:10px; border-radius:6px; }
 </style>
@@ -50,11 +59,11 @@ pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:
   <div id="err"></div><button class="primary">Sign in</button></form>
 </div>
 <div id="app" hidden>
-<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="logout">Sign out</button></header>
+<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="alerts">Email alerts</button><button id="logout">Sign out</button></header>
 <main>
   <section><div class="stats" id="stats"></div></section>
   <section><h2><span>Agents</span><button id="newToken">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
-  <section><h2><span>Backup policies</span></h2><div class="scroll" id="policies"></div></section>
+  <section><h2><span>Backup policies</span><button id="newPolicy">New policy</button></h2><div class="scroll" id="policies"></div></section>
   <section><h2><span>Recent jobs</span></h2><div class="scroll" id="jobs"></div></section>
   <section><h2><span>Snapshots</span></h2><div class="scroll" id="snapshots"></div></section>
 </main>
@@ -65,6 +74,7 @@ pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:
 const $ = id => document.getElementById(id);
 let token = sessionStorage.getItem("bb-token") || "";
 let agentNames = {};
+let agentList = [];
 
 async function call(method, path, body) {
   const r = await fetch(path, { method, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
@@ -97,6 +107,7 @@ async function refresh() {
     call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
     call("GET", "/api/v1/jobs?limit=15"), call("GET", "/api/v1/snapshots")]);
   $("version").textContent = "version " + st.version;
+  agentList = agents;
   agentNames = Object.fromEntries(agents.map(a => [a.id, a.name]));
   const stat = (v, label) => el("div", { className: "stat" }, el("b", { textContent: v }), el("small", { textContent: label }));
   $("stats").replaceChildren(stat(st.agents, "agents"), stat(st.snapshots, "snapshots"), stat(size(st.stored_bytes), "used on disk"),
@@ -104,11 +115,14 @@ async function refresh() {
   table("agents", ["Name", "Host", "System", "Version", "State", "Last seen"],
     agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, a.version, pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen)]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
-  table("policies", ["Name", "Agent", "Paths", "Schedule", ""],
+  table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
     policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, p.paths.join(", "),
-      p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual",
-      button("Back up now", async () => { await call("POST", "/api/v1/policies/" + p.id + "/run"); await refresh(); })]),
-    "No policies yet. Create one with: bb policy add --name NAME --agent AGENT --path PATH --daily-at 02:00");
+      (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
+      keeps(p.retention),
+      el("div", { className: "acts" },
+        button("Back up now", async () => { await call("POST", "/api/v1/policies/" + p.id + "/run"); await refresh(); }),
+        button("Edit", async () => policyDialog(p)))]),
+    "No policies yet. Choose “New policy” to say what to back up and when.");
   table("jobs", ["Started", "Type", "Agent", "Status", "Detail"],
     jobs.map(j => [when(j.created), j.type, agentNames[j.agent_id] || "server", pill(j.status),
       j.error || (j.warnings ? j.warnings.length + " warnings" : "") || (j.snapshot_id ? "snapshot " + j.snapshot_id : "")]),
@@ -118,6 +132,121 @@ async function refresh() {
       button("Restore", async () => restoreDialog(s))]),
     "No snapshots yet.");
 }
+
+function keeps(r) {
+  const parts = [["keep_last", "last"], ["keep_daily", "daily"], ["keep_weekly", "weekly"], ["keep_monthly", "monthly"], ["keep_yearly", "yearly"]]
+    .filter(([k]) => r && r[k]).map(([k, label]) => r[k] + " " + label);
+  return parts.length ? parts.join(", ") : "everything";
+}
+const lines = v => v.split("\n").map(x => x.trim()).filter(Boolean);
+
+// policyDialog creates a policy, or edits p when one is given.
+function policyDialog(p) {
+  const active = agentList.filter(a => !a.revoked || (p && a.id === p.agent_id));
+  if (!active.length) { notice("Add an agent first", "A policy backs up one machine, so enroll an agent before creating a policy."); return; }
+  const name = el("input", { value: p ? p.name : "", placeholder: "For example: File server documents" });
+  const agent = el("select", null, ...active.map(a => el("option", { value: a.id, textContent: a.name + " (" + a.os + ")" })));
+  if (p) agent.value = p.agent_id;
+  const paths = el("textarea", { rows: 3, value: p ? p.paths.join("\n") : "", placeholder: "One folder or file per line, for example D:\\Shares or /home" });
+  const excludes = el("textarea", { rows: 2, value: p && p.excludes ? p.excludes.join("\n") : "", placeholder: "One pattern per line, for example *.tmp or node_modules" });
+  const kind = el("select", null, el("option", { value: "daily", textContent: "Every day at a set time" }),
+    el("option", { value: "interval", textContent: "Repeating, every so often" }), el("option", { value: "manual", textContent: "Only when started by hand" }));
+  const at = el("input", { type: "time", value: p && p.schedule.daily_at ? p.schedule.daily_at : "02:00" });
+  const every = el("input", { value: p && p.schedule.interval ? p.schedule.interval : "6h", placeholder: "Such as 30m, 6h or 24h" });
+  kind.value = !p ? "daily" : p.schedule.interval ? "interval" : p.schedule.daily_at ? "daily" : "manual";
+  const show = () => { at.hidden = kind.value !== "daily"; every.hidden = kind.value !== "interval"; };
+  kind.onchange = show; show();
+  const r = (p && p.retention) || (p ? {} : { keep_daily: 14, keep_weekly: 8, keep_monthly: 12 });
+  const keep = {};
+  const grid = el("div", { className: "grid" }, ...[["keep_last", "Most recent"], ["keep_daily", "Daily"], ["keep_weekly", "Weekly"], ["keep_monthly", "Monthly"], ["keep_yearly", "Yearly"]].map(([k, label]) => {
+    keep[k] = el("input", { type: "number", min: 0, value: r[k] || "", placeholder: "0" });
+    return el("div", null, keep[k], el("small", { textContent: label }));
+  }));
+  const enabled = el("input", { type: "checkbox", checked: p ? p.enabled : true });
+  const noSnap = el("input", { type: "checkbox", checked: p ? !!p.no_snapshot : false });
+  const err = el("div", { id: "err" });
+  const save = el("button", { className: "primary", textContent: p ? "Save changes" : "Create policy" });
+  save.onclick = async () => {
+    const retention = {};
+    for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
+    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value),
+      schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
+      retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
+    try {
+      await call(p ? "PUT" : "POST", "/api/v1/policies" + (p ? "/" + p.id : ""), body);
+      $("dlg").close(); await refresh();
+    } catch (e) { err.textContent = e.message; }
+  };
+  const buttons = el("div", { className: "row" });
+  if (p) {
+    const del = el("button", { className: "danger", textContent: "Delete policy", style: "margin-right:auto" });
+    let armed = false;
+    del.onclick = async () => {
+      if (!armed) { armed = true; del.textContent = "Click again to delete"; err.textContent = "Deleting a policy stops its backups. Snapshots already taken are kept."; return; }
+      try { await call("DELETE", "/api/v1/policies/" + p.id); $("dlg").close(); await refresh(); } catch (e) { err.textContent = e.message; }
+    };
+    buttons.append(del);
+  }
+  buttons.append(el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), save);
+  $("dlgBody").replaceChildren(el("h3", { textContent: p ? "Edit policy" : "New backup policy" }),
+    el("label", { textContent: "Name" }), name,
+    el("label", { textContent: "Machine to back up" }), agent,
+    el("label", { textContent: "Folders and files to back up" }), paths,
+    el("label", { textContent: "Leave out (optional)" }), excludes,
+    el("label", { textContent: "Schedule" }), el("div", { className: "two" }, kind, el("div", null, at, every)),
+    el("div", { className: "hint", textContent: "Times are in the server's time zone." }),
+    el("label", { textContent: "Snapshots to keep" }), grid,
+    el("div", { className: "hint", textContent: "Leave every box empty to keep all snapshots." }),
+    el("label", { className: "check" }, enabled, "Run on schedule"),
+    el("label", { className: "check" }, noSnap, "Windows: read live files instead of a VSS snapshot"),
+    err, buttons);
+  $("dlg").showModal();
+}
+$("newPolicy").onclick = () => policyDialog(null);
+
+async function alertsDialog() {
+  const a = await call("GET", "/api/v1/alerts");
+  const enabled = el("input", { type: "checkbox", checked: a.enabled });
+  const host = el("input", { value: a.host || "", placeholder: "smtp.example.com" });
+  const port = el("input", { type: "number", min: 1, max: 65535, value: a.port || "", placeholder: "Usual port" });
+  const sec = el("select", null, el("option", { value: "starttls", textContent: "STARTTLS (usually port 587)" }),
+    el("option", { value: "tls", textContent: "TLS (usually port 465)" }), el("option", { value: "none", textContent: "No encryption (port 25)" }));
+  sec.value = a.security || "starttls";
+  const user = el("input", { value: a.username || "", placeholder: "Leave empty if the server needs no sign-in", autocomplete: "off" });
+  const pass = el("input", { type: "password", placeholder: a.password_set ? "Saved. Type to replace it." : "", autocomplete: "new-password" });
+  const from = el("input", { value: a.from || "", placeholder: "backups@example.com" });
+  const to = el("textarea", { rows: 2, value: (a.to || []).join("\n"), placeholder: "One address per line" });
+  const warn = el("input", { type: "checkbox", checked: !!a.on_warning });
+  const msg = el("div", { id: "err" });
+  const body = () => ({ enabled: enabled.checked, host: host.value.trim(), port: parseInt(port.value, 10) || 0, security: sec.value, username: user.value.trim(),
+    password: pass.value, password_set: !pass.value && !!a.password_set && !!user.value.trim(), from: from.value.trim(), to: lines(to.value), on_warning: warn.checked });
+  const say = (text, good) => { msg.textContent = text; msg.style.color = good ? "var(--good)" : ""; };
+  const save = el("button", { className: "primary", textContent: "Save" });
+  save.onclick = async () => { try { await call("PUT", "/api/v1/alerts", body()); $("dlg").close(); } catch (e) { say(e.message); } };
+  const test = el("button", { textContent: "Save and send a test", style: "margin-right:auto" });
+  test.onclick = async () => {
+    say("Sending…", true);
+    try {
+      const saved = await call("PUT", "/api/v1/alerts", body());
+      a.password_set = saved.password_set; pass.value = ""; if (saved.password_set) pass.placeholder = "Saved. Type to replace it.";
+      port.value = saved.port;
+      await call("POST", "/api/v1/alerts/test");
+      say("Test message sent. Check the inbox.", true);
+    } catch (e) { say(e.message); }
+  };
+  $("dlgBody").replaceChildren(el("h3", { textContent: "Email alerts" }),
+    el("div", { className: "hint", textContent: "Sends an email when a backup, restore or repository check fails, and when a scheduled backup is missed, for example because a machine is switched off." }),
+    el("label", { className: "check" }, enabled, "Send email alerts"),
+    el("label", { textContent: "Mail server (SMTP)" }), el("div", { className: "two" }, host, port),
+    el("label", { textContent: "Connection security" }), sec,
+    el("label", { textContent: "Sign in as" }), el("div", { className: "two" }, user, pass),
+    el("label", { textContent: "From address" }), from,
+    el("label", { textContent: "Send alerts to" }), to,
+    el("label", { className: "check" }, warn, "Also email when a backup finishes with warnings, such as skipped files"),
+    msg, el("div", { className: "row" }, test, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
+  $("dlg").showModal();
+}
+$("alerts").onclick = () => alertsDialog().catch(e => notice("Something went wrong", e.message));
 
 function restoreDialog(s) {
   const target = el("input", { placeholder: "Leave empty to restore in place, over the original files" });

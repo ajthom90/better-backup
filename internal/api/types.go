@@ -74,14 +74,19 @@ type Policy struct {
 	Excludes  []string  `json:"excludes,omitempty"`
 	Schedule  Schedule  `json:"schedule"`
 	Retention Retention `json:"retention"`
-	Enabled   bool      `json:"enabled"`
-	Created   time.Time `json:"created"`
+	// NoSnapshot backs up the live file system instead of a volume
+	// snapshot. It only matters on Windows, where snapshots are the
+	// default.
+	NoSnapshot bool      `json:"no_snapshot,omitempty"`
+	Enabled    bool      `json:"enabled"`
+	Created    time.Time `json:"created"`
 }
 
 type BackupSpec struct {
-	Paths    []string     `json:"paths"`
-	Excludes []string     `json:"excludes,omitempty"`
-	Parent   []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
+	Paths      []string     `json:"paths"`
+	Excludes   []string     `json:"excludes,omitempty"`
+	NoSnapshot bool         `json:"no_snapshot,omitempty"`
+	Parent     []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
 }
 
 type RestoreSpec struct {
@@ -163,3 +168,23 @@ type Error struct {
 
 // MaxWarnings caps the warning messages kept per job.
 const MaxWarnings = 200
+
+// AlertSettings configures email alerts for failed and missed backups.
+type AlertSettings struct {
+	Enabled bool   `json:"enabled"`
+	Host    string `json:"host"`
+	Port    int    `json:"port,omitempty"` // default: 587 for starttls, 465 for tls, 25 for none
+	// Security is "starttls" (the default), "tls" (TLS from the first
+	// byte, usually port 465) or "none".
+	Security string `json:"security,omitempty"`
+	Username string `json:"username,omitempty"`
+	// Password is never returned by the server. When saving, leave it
+	// empty and set PasswordSet to keep the stored password.
+	Password    string   `json:"password,omitempty"`
+	PasswordSet bool     `json:"password_set,omitempty"`
+	From        string   `json:"from"`
+	To          []string `json:"to"`
+	// OnWarning also sends mail for backups that finish with warnings,
+	// such as skipped files.
+	OnWarning bool `json:"on_warning,omitempty"`
+}
