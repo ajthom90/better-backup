@@ -87,6 +87,10 @@ func Run(ctx context.Context, get tree.Getter, opts Options) (Stats, error) {
 			continue
 		}
 		matched = true
+		if e.Name == tree.SystemStateName && e.Type == tree.TypeDir && opts.Target == "" {
+			r.warn("the system state was not restored: it cannot be restored over a running system yet. Restore it to a folder instead")
+			continue
+		}
 		if err := r.entry(e, e.Name, r.dest(e.Name), m == matchFull); err != nil {
 			return r.stats, err
 		}

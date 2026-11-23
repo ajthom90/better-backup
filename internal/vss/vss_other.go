@@ -22,3 +22,6 @@ func (s *Set) Close() error                                  { return nil }
 
 // EnablePrivileges does nothing outside Windows.
 func EnablePrivileges() []string { return nil }
+
+// Writers lists the VSS writers; there are none outside Windows.
+func Writers(time.Duration) ([]Writer, error) { return nil, ErrUnsupported }

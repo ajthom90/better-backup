@@ -33,6 +33,9 @@ type Options struct {
 	Excludes []string
 	// Images are volumes or disks to copy block by block.
 	Images []ImageSource
+	// SystemState, if set, backs up the files a Windows system state
+	// consists of.
+	SystemState *SystemState
 	// Parent holds the sources of the previous snapshot. Files whose size
 	// and modification time match it are not read again.
 	Parent []tree.Entry
@@ -43,6 +46,14 @@ type Options struct {
 	MapPath  func(string) string
 	Progress func(tree.Stats)
 	Warn     func(string)
+}
+
+// SystemState names the files that make up a system state: everything
+// under Roots that Match accepts. Match is asked about folders too, and
+// a folder it rejects is not entered.
+type SystemState struct {
+	Roots []string // drive roots, `C:\`
+	Match func(path string, dir bool) bool
 }
 
 const (
@@ -68,6 +79,9 @@ type archiver struct {
 	batchLen int
 	known    map[keys.ID]struct{}
 
+	// only, while set, limits the walk to what it accepts.
+	only func(path string, dir bool) bool
+
 	lastProgress time.Time
 }
 
@@ -77,7 +91,7 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 	if a.opts.MapPath == nil {
 		a.opts.MapPath = func(p string) string { return p }
 	}
-	if len(opts.Paths) == 0 && len(opts.Images) == 0 {
+	if len(opts.Paths) == 0 && len(opts.Images) == 0 && opts.SystemState == nil {
 		return nil, a.stats, errors.New("no paths to back up")
 	}
 	parents := map[string]*tree.Entry{}
@@ -96,6 +110,15 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 			continue
 		}
 		e, err := a.node(abs, abs, fi, parents[abs])
+		if err != nil {
+			return nil, a.stats, err
+		}
+		if e != nil {
+			sources = append(sources, *e)
+		}
+	}
+	if opts.SystemState != nil {
+		e, err := a.systemState(opts.SystemState, parents[tree.SystemStateName])
 		if err != nil {
 			return nil, a.stats, err
 		}
@@ -366,6 +389,63 @@ func (a *archiver) streams(path string, e *tree.Entry) error {
 	return nil
 }
 
+// systemState archives the selected files of each drive under one
+// entry, a folder per drive.
+func (a *archiver) systemState(src *SystemState, parent *tree.Entry) (*tree.Entry, error) {
+	prev := map[string]*tree.Entry{}
+	if parent != nil && parent.Type == tree.TypeDir {
+		for _, p := range parent.Subtree {
+			es, err := tree.ReadPage(a.get, p)
+			if err != nil {
+				prev = map[string]*tree.Entry{}
+				break
+			}
+			for i := range es {
+				prev[es[i].Name] = &es[i]
+			}
+		}
+	}
+	a.only = src.Match
+	defer func() { a.only = nil }()
+	pw := tree.NewPageWriter(a.put)
+	before := a.stats.Files
+	for _, root := range src.Roots {
+		name := strings.TrimRight(filepath.VolumeName(root), ":")
+		if name == "" {
+			name = filepath.Base(root)
+		}
+		if name == "" || name == "." || strings.ContainsAny(name, `:\/`) {
+			a.warn("system state: skipped %s, which is not a drive", root)
+			continue
+		}
+		fi, err := os.Lstat(a.opts.MapPath(root))
+		if err != nil {
+			a.warn("system state: %v", err)
+			continue
+		}
+		e, err := a.node(root, name, fi, prev[name])
+		if err != nil {
+			return nil, err
+		}
+		if e == nil {
+			continue
+		}
+		if err := pw.Add(e); err != nil {
+			return nil, err
+		}
+	}
+	if a.stats.Files == before {
+		a.warn("system state: none of its files could be read")
+		return nil, nil
+	}
+	pages, err := pw.Finish()
+	if err != nil {
+		return nil, err
+	}
+	a.stats.Dirs++
+	return &tree.Entry{Name: tree.SystemStateName, Type: tree.TypeDir, Mode: 0o755, ModTime: time.Now().UnixNano(), Subtree: pages}, nil
+}
+
 func (a *archiver) dir(path string, parent *tree.Entry) ([]keys.ID, error) {
 	prev := map[string]*tree.Entry{}
 	if parent != nil && parent.Type == tree.TypeDir {
@@ -393,6 +473,9 @@ func (a *archiver) dir(path string, parent *tree.Entry) ([]keys.ID, error) {
 	for _, d := range items {
 		child := filepath.Join(path, d.Name())
 		if a.excluded(child) {
+			continue
+		}
+		if a.only != nil && !a.only(child, d.IsDir()) {
 			continue
 		}
 		fi, err := d.Info()

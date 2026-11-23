@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,6 +125,15 @@ func TestEndToEnd(t *testing.T) {
 	e.do("GET", "/api/v1/agents", nil, &agents)
 	if len(agents) != 1 || agents[0].OS != runtime.GOOS {
 		t.Fatalf("agents: %+v", agents)
+	}
+
+	// The system state exists only on Windows; other machines are refused
+	// when the policy is saved, not when the backup runs.
+	if runtime.GOOS != "windows" {
+		err := admin.Do("POST", "/api/v1/policies", api.Policy{Name: "state", AgentID: agents[0].ID, SystemState: true}, nil)
+		if err == nil || !strings.Contains(err.Error(), "Windows") {
+			t.Fatalf("system state policy on %s: %v", runtime.GOOS, err)
+		}
 	}
 
 	src := filepath.Join(t.TempDir(), "docs")

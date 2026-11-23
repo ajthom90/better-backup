@@ -409,6 +409,21 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 				snapPaths = append(snapPaths, strings.TrimRight(v, `\`)+`\`)
 			}
 		}
+		if j.Backup.SystemState {
+			// The system's VSS writers say which files make up its
+			// state; they are open and locked, so they need the snapshot.
+			sel, names, ad, serr := systemState()
+			if serr != nil {
+				err = fmt.Errorf("reading the system state file lists: %w", serr)
+				break
+			}
+			log.Info("system state", "writers", names, "drives", sel.Roots())
+			if ad {
+				log.Info("this machine is a domain controller: the Active Directory database and SYSVOL are included")
+			}
+			opts.SystemState = &backup.SystemState{Roots: sel.Roots(), Match: sel.Match}
+			snapPaths = append(snapPaths, sel.Roots()...)
+		}
 		if len(snapPaths) > 0 {
 			var skipped []string
 			var serr error
@@ -418,6 +433,10 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 			}
 			if serr != nil {
 				set = nil
+				if opts.SystemState != nil {
+					warn("the system state was not backed up: it needs a VSS snapshot, and that failed")
+					opts.SystemState = nil
+				}
 				warn("could not create a VSS snapshot, backing up live files (files in use may be skipped): " + serr.Error())
 			} else {
 				log.Info("VSS snapshot created", "volumes", set.Volumes())
@@ -484,4 +503,24 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 	} else {
 		log.Info("job finished", "warnings", len(warnings))
 	}
+}
+
+// systemState asks the VSS writers which files make up this machine's
+// system state. ad is true on a domain controller.
+func systemState() (sel *vss.Selection, names []string, ad bool, err error) {
+	if runtime.GOOS != "windows" {
+		return nil, nil, false, errors.New("the system state can only be backed up on Windows")
+	}
+	writers, err := vss.Writers(5 * time.Minute)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	files, excludes, names := vss.SystemState(writers)
+	if len(files) == 0 {
+		return nil, nil, false, errors.New("no VSS writer reported system state files")
+	}
+	for _, w := range writers {
+		ad = ad || (w.IsActiveDirectory() && len(w.Components) > 0)
+	}
+	return vss.NewSelection(files, excludes), names, ad, nil
 }

@@ -74,9 +74,13 @@ type Policy struct {
 	Excludes []string `json:"excludes,omitempty"`
 	// Volumes are backed up as block-level images: drive letters such as
 	// "C:" on Windows, or block devices such as /dev/vg0/data elsewhere.
-	Volumes   []string  `json:"volumes,omitempty"`
-	Schedule  Schedule  `json:"schedule"`
-	Retention Retention `json:"retention"`
+	Volumes []string `json:"volumes,omitempty"`
+	// SystemState backs up what Windows needs to bring a machine's
+	// identity back: the registry, boot and system files, and on a domain
+	// controller the Active Directory database and SYSVOL.
+	SystemState bool      `json:"system_state,omitempty"`
+	Schedule    Schedule  `json:"schedule"`
+	Retention   Retention `json:"retention"`
 	// NoSnapshot backs up the live file system instead of a volume
 	// snapshot. It only matters on Windows, where snapshots are the
 	// default.
@@ -86,11 +90,12 @@ type Policy struct {
 }
 
 type BackupSpec struct {
-	Paths      []string     `json:"paths"`
-	Excludes   []string     `json:"excludes,omitempty"`
-	Volumes    []string     `json:"volumes,omitempty"`
-	NoSnapshot bool         `json:"no_snapshot,omitempty"`
-	Parent     []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
+	Paths       []string     `json:"paths"`
+	Excludes    []string     `json:"excludes,omitempty"`
+	Volumes     []string     `json:"volumes,omitempty"`
+	SystemState bool         `json:"system_state,omitempty"`
+	NoSnapshot  bool         `json:"no_snapshot,omitempty"`
+	Parent      []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
 }
 
 type RestoreSpec struct {

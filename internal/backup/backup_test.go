@@ -188,3 +188,81 @@ func TestBackupRestore(t *testing.T) {
 		t.Fatalf("restore after gc: %+v %v", rs, err)
 	}
 }
+
+// TestSystemState backs up only the files a selection accepts, under one
+// "System state" entry, and restores them to a folder.
+func TestSystemState(t *testing.T) {
+	ctx := context.Background()
+	rdir := t.TempDir()
+	if err := repo.Init(rdir, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	r, err := repo.Open(rdir, []byte("pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	st := &store{r: r}
+
+	root := filepath.Join(t.TempDir(), "drive")
+	write(t, filepath.Join(root, "Windows", "config", "SYSTEM"), []byte("hive"))
+	write(t, filepath.Join(root, "Windows", "config", "other"), []byte("not wanted"))
+	write(t, filepath.Join(root, "Windows", "NTDS", "ntds.dit"), rnd(3, 2<<20))
+	write(t, filepath.Join(root, "Users", "a", "doc.txt"), []byte("not system state"))
+	match := func(p string, dir bool) bool {
+		rel, _ := filepath.Rel(root, p)
+		switch filepath.ToSlash(rel) {
+		case "Windows", "Windows/config", "Windows/NTDS", "Windows/config/SYSTEM", "Windows/NTDS/ntds.dit":
+			return true
+		}
+		return false
+	}
+	opts := backup.Options{SystemState: &backup.SystemState{Roots: []string{root}, Match: match}, IDKey: r.Keys().ID}
+	s1, stats, err := backup.Run(ctx, st, opts)
+	if err != nil || stats.Files != 2 || stats.Warnings != 0 {
+		t.Fatalf("backup: %+v %v", stats, err)
+	}
+	if len(s1) != 1 || s1[0].Name != tree.SystemStateName || s1[0].Type != tree.TypeDir {
+		t.Fatalf("sources: %+v", s1)
+	}
+
+	// Unchanged files are not read again.
+	opts.Parent = s1
+	_, stats, err = backup.Run(ctx, st, opts)
+	if err != nil || stats.Files != 2 || stats.FilesChanged != 0 || stats.BytesRead != 0 {
+		t.Fatalf("second backup: %+v %v", stats, err)
+	}
+
+	get := func(id keys.ID) ([]byte, error) { return r.Get(id) }
+	out := t.TempDir()
+	rs, err := restore.Run(ctx, get, restore.Options{Sources: s1, SourceOS: runtime.GOOS, Target: out})
+	if err != nil || rs.Warnings != 0 || rs.Files != 2 {
+		t.Fatalf("restore: %+v %v", rs, err)
+	}
+	drive := "drive"
+	if v := filepath.VolumeName(root); v != "" {
+		drive = v[:1] // a root on Windows is filed under its drive letter
+	}
+	base := filepath.Join(out, tree.SystemStateName, drive, "Windows")
+	if b, _ := os.ReadFile(filepath.Join(base, "config", "SYSTEM")); string(b) != "hive" {
+		t.Fatalf("restored hive = %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(base, "config", "other")); err == nil {
+		t.Fatal("a file outside the selection was backed up")
+	}
+	if _, err := os.Stat(filepath.Join(out, tree.SystemStateName, drive, "Users")); err == nil {
+		t.Fatal("a folder outside the selection was backed up")
+	}
+
+	// In place it is refused with a warning, and nothing is written.
+	rs, err = restore.Run(ctx, get, restore.Options{Sources: s1, SourceOS: runtime.GOOS})
+	if err != nil || rs.Warnings != 1 || rs.Files != 0 {
+		t.Fatalf("in-place restore: %+v %v", rs, err)
+	}
+
+	// With nothing readable the backup fails instead of saving an empty state.
+	opts = backup.Options{SystemState: &backup.SystemState{Roots: []string{root}, Match: func(string, bool) bool { return false }}, IDKey: r.Keys().ID}
+	if _, _, err := backup.Run(ctx, st, opts); err == nil {
+		t.Fatal("an empty system state was accepted")
+	}
+}
