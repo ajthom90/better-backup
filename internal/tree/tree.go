@@ -53,6 +53,10 @@ type Entry struct {
 
 	// BlockSize is the size of each block of an image.
 	BlockSize int64 `json:"block_size,omitempty"`
+	// HolesZero says the holes of an image were blocks of zeros, as in a
+	// virtual disk, and must read as zeros after a restore. Without it
+	// holes were free space whose contents do not matter.
+	HolesZero bool `json:"holes_zero,omitempty"`
 
 	// Subtree lists the pages holding a directory's entries.
 	Subtree []keys.ID `json:"subtree,omitempty"`

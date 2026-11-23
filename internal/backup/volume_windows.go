@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/ajthom90/better-backup/internal/vhd"
 )
 
 const (
@@ -21,9 +25,19 @@ const (
 // snapshot; readPath is the device to read, normally the volume's shadow
 // copy (\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopyN) or \\.\X:.
 //
+// A path ending in .vhdx or .vhd is opened as a virtual disk and its
+// contents are imaged, not the file that holds them.
+//
 // On NTFS the allocation bitmap is read so free space is skipped. Other
 // file systems are copied in full.
 func OpenImage(name, readPath string) (ImageSource, error) {
+	if ext := strings.ToLower(filepath.Ext(readPath)); ext == ".vhdx" || ext == ".vhd" {
+		d, err := vhd.Open(readPath, true)
+		if err != nil {
+			return ImageSource{}, err
+		}
+		return ImageSource{Name: name, Size: d.Size(), R: d, SkipZero: true, Close: func() { d.Close() }}, nil
+	}
 	p, err := windows.UTF16PtrFromString(readPath)
 	if err != nil {
 		return ImageSource{}, err

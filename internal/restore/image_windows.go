@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/ajthom90/better-backup/internal/vhd"
 )
 
 const (
@@ -29,8 +32,17 @@ func isDevice(path string) bool {
 // openImageTarget opens a volume, or creates a file, to receive an
 // image. A volume is locked and dismounted first, which fails while any
 // program has files open on it.
-func openImageTarget(path string, size int64) (io.WriterAt, func() error, error) {
+func openImageTarget(path string, size int64) (w io.WriterAt, fresh bool, done func() error, err error) {
 	if !isDevice(path) {
+		if strings.EqualFold(filepath.Ext(path), ".vhdx") {
+			// A new virtual disk holding the image, ready to attach to
+			// a virtual machine.
+			d, err := vhd.Create(path, size)
+			if err != nil {
+				return nil, false, nil, err
+			}
+			return d, true, d.Close, nil
+		}
 		return createImageFile(path, size)
 	}
 	dev := strings.TrimRight(path, `\`)
@@ -39,23 +51,23 @@ func openImageTarget(path string, size int64) (io.WriterAt, func() error, error)
 	}
 	p, err := windows.UTF16PtrFromString(dev)
 	if err != nil {
-		return nil, nil, err
+		return nil, false, nil, err
 	}
 	h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 		nil, windows.OPEN_EXISTING, 0, 0)
 	if err != nil {
-		return nil, nil, fmt.Errorf("opening %s: %w", dev, err)
+		return nil, false, nil, fmt.Errorf("opening %s: %w", dev, err)
 	}
 	f := os.NewFile(uintptr(h), dev)
 	var n uint32
 	var have int64
 	if err := windows.DeviceIoControl(h, ioctlDiskGetLengthInfo, nil, 0, (*byte)(unsafe.Pointer(&have)), 8, &n, nil); err != nil {
 		f.Close()
-		return nil, nil, fmt.Errorf("reading the size of %s: %w", dev, err)
+		return nil, false, nil, fmt.Errorf("reading the size of %s: %w", dev, err)
 	}
 	if have < size {
 		f.Close()
-		return nil, nil, fmt.Errorf("%s holds %d bytes and the image needs %d", dev, have, size)
+		return nil, false, nil, fmt.Errorf("%s holds %d bytes and the image needs %d", dev, have, size)
 	}
 	// Other programs (search indexing, antivirus) often hold a volume for
 	// a moment, so try for a few seconds before giving up.
@@ -66,11 +78,11 @@ func openImageTarget(path string, size int64) (io.WriterAt, func() error, error)
 	}
 	if err != nil {
 		f.Close()
-		return nil, nil, fmt.Errorf("%s is in use and cannot be locked (%w); close the programs using it, or for a system volume restore from recovery media", dev, err)
+		return nil, false, nil, fmt.Errorf("%s is in use and cannot be locked (%w); close the programs using it, or for a system volume restore from recovery media", dev, err)
 	}
 	if err := windows.DeviceIoControl(h, fsctlDismountVolume, nil, 0, nil, 0, &n, nil); err != nil {
 		f.Close()
-		return nil, nil, fmt.Errorf("dismounting %s: %w", dev, err)
+		return nil, false, nil, fmt.Errorf("dismounting %s: %w", dev, err)
 	}
 	v := &volumeWriter{w: f}
 	// Write through the disk under the volume where there is exactly
@@ -101,9 +113,9 @@ func openImageTarget(path string, size int64) (io.WriterAt, func() error, error)
 		if disk != nil {
 			disk.Close()
 		}
-		return nil, nil, fmt.Errorf("writing to %s: %w", dev, err)
+		return nil, false, nil, fmt.Errorf("writing to %s: %w", dev, err)
 	}
-	return v, func() error {
+	return v, false, func() error {
 		err := v.finish()
 		if disk != nil {
 			if cerr := disk.Close(); err == nil {

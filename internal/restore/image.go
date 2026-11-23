@@ -35,11 +35,12 @@ func (r *restorer) image(e *tree.Entry) error {
 		}
 		r.imageDest = true
 	}
-	w, done, err := openImageTarget(dest, e.Size)
+	w, fresh, done, err := openImageTarget(dest, e.Size)
 	if err != nil {
 		return fmt.Errorf("image %s: %w", e.Name, err)
 	}
 	off := int64(0)
+	var zeros []byte
 	err = tree.EachContent(r.get, e, func(id keys.ID) error {
 		if err := r.ctx.Err(); err != nil {
 			return err
@@ -48,7 +49,19 @@ func (r *restorer) image(e *tree.Entry) error {
 		if n <= 0 {
 			return fmt.Errorf("image %s lists more blocks than its size", e.Name)
 		}
-		if id != (keys.ID{}) { // holes were unallocated space: nothing to write
+		if id == (keys.ID{}) {
+			// A hole. A new file or virtual disk already reads as zeros
+			// there; an existing device must be cleared if the zeros
+			// are part of the image.
+			if e.HolesZero && !fresh {
+				if zeros == nil {
+					zeros = make([]byte, e.BlockSize)
+				}
+				if _, err := w.WriteAt(zeros[:n], off); err != nil {
+					return err
+				}
+			}
+		} else {
 			data, err := r.get(id)
 			if err != nil {
 				return err
@@ -79,14 +92,14 @@ func (r *restorer) image(e *tree.Entry) error {
 }
 
 // createImageFile makes a sparse file of the image's size.
-func createImageFile(path string, size int64) (io.WriterAt, func() error, error) {
+func createImageFile(path string, size int64) (io.WriterAt, bool, func() error, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		return nil, nil, err
+		return nil, false, nil, err
 	}
 	if err := f.Truncate(size); err != nil {
 		f.Close()
-		return nil, nil, err
+		return nil, false, nil, err
 	}
-	return f, f.Close, nil
+	return f, true, f.Close, nil
 }

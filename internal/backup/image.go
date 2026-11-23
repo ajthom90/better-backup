@@ -25,6 +25,9 @@ type ImageSource struct {
 	// Used lists the allocated ranges in ascending order. Blocks outside
 	// them are not read or stored. Nil means everything is in use.
 	Used []Extent
+	// SkipZero records blocks of zeros as holes instead of storing them.
+	// It suits virtual disks, where unwritten parts read as zeros.
+	SkipZero bool
 	// Close, if set, is called when the image has been read.
 	Close func()
 }
@@ -35,7 +38,7 @@ func (a *archiver) image(src *ImageSource, parent *tree.Entry) (*tree.Entry, err
 	if src.Close != nil {
 		defer src.Close()
 	}
-	e := &tree.Entry{Name: src.Name, Type: tree.TypeImage, Size: src.Size, BlockSize: ImageBlock, ModTime: time.Now().UnixNano()}
+	e := &tree.Entry{Name: src.Name, Type: tree.TypeImage, Size: src.Size, BlockSize: ImageBlock, HolesZero: src.SkipZero, ModTime: time.Now().UnixNano()}
 	ids := make([]keys.ID, 0, (src.Size+ImageBlock-1)/ImageBlock)
 	buf := make([]byte, ImageBlock)
 	used := src.Used
@@ -60,12 +63,17 @@ func (a *archiver) image(src *ImageSource, parent *tree.Entry) (*tree.Entry, err
 			a.warn("%s: reading at offset %d: %v; this image was not backed up", src.Name, off, err)
 			return nil, nil
 		}
+		a.stats.BytesRead += n
+		if src.SkipZero && allZero(buf[:n]) {
+			ids = append(ids, keys.ID{})
+			a.progress()
+			continue
+		}
 		id, err := a.put(buf[:n])
 		if err != nil {
 			return nil, err
 		}
 		ids = append(ids, id)
-		a.stats.BytesRead += n
 		a.progress()
 	}
 	if err := tree.SetContent(e, ids, a.put); err != nil {
@@ -77,4 +85,19 @@ func (a *archiver) image(src *ImageSource, parent *tree.Entry) (*tree.Entry, err
 		a.stats.FilesChanged++
 	}
 	return e, nil
+}
+
+func allZero(b []byte) bool {
+	for len(b) >= 8 {
+		if b[0]|b[1]|b[2]|b[3]|b[4]|b[5]|b[6]|b[7] != 0 {
+			return false
+		}
+		b = b[8:]
+	}
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }

@@ -18,22 +18,22 @@ func isDevice(path string) bool {
 
 // openImageTarget opens a block device, or creates a file, to receive an
 // image.
-func openImageTarget(path string, size int64) (io.WriterAt, func() error, error) {
+func openImageTarget(path string, size int64) (w io.WriterAt, fresh bool, done func() error, err error) {
 	if !isDevice(path) {
 		return createImageFile(path, size)
 	}
 	if mounted(path) {
-		return nil, nil, fmt.Errorf("%s is mounted; unmount it before restoring an image over it", path)
+		return nil, false, nil, fmt.Errorf("%s is mounted; unmount it before restoring an image over it", path)
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, false, nil, err
 	}
 	if have, err := f.Seek(0, io.SeekEnd); err != nil || have < size {
 		f.Close()
-		return nil, nil, fmt.Errorf("%s holds %d bytes and the image needs %d", path, have, size)
+		return nil, false, nil, fmt.Errorf("%s holds %d bytes and the image needs %d", path, have, size)
 	}
-	return f, func() error {
+	return f, false, func() error {
 		err := f.Sync()
 		if cerr := f.Close(); err == nil {
 			err = cerr
