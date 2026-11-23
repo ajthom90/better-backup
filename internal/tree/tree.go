@@ -49,6 +49,18 @@ type Entry struct {
 
 	// Subtree lists the pages holding a directory's entries.
 	Subtree []keys.ID `json:"subtree,omitempty"`
+
+	// Streams are the NTFS alternate data streams of a file or directory.
+	Streams []Stream `json:"streams,omitempty"`
+}
+
+// Stream is one named NTFS alternate data stream. Its data is stored
+// like a file's.
+type Stream struct {
+	Name         string    `json:"name"`
+	Size         int64     `json:"size"`
+	Content      []keys.ID `json:"content,omitempty"`
+	ContentIndex []keys.ID `json:"content_index,omitempty"`
 }
 
 // Stats summarizes a backup.
@@ -146,13 +158,11 @@ func ReadPage(get Getter, id keys.ID) ([]Entry, error) {
 	return es, nil
 }
 
-// SetContent records a file's chunk list on e, moving long lists into
-// index chunks.
-func SetContent(e *Entry, ids []keys.ID, put Putter) error {
-	e.Content, e.ContentIndex = nil, nil
+// PackIDs prepares a chunk list for storage: short lists stay inline,
+// long ones move into index chunks.
+func PackIDs(ids []keys.ID, put Putter) (content, index []keys.ID, err error) {
 	if len(ids) <= inlineContent {
-		e.Content = ids
-		return nil
+		return ids, nil, nil
 	}
 	for len(ids) > 0 {
 		n := min(len(ids), idsPerIndex)
@@ -162,22 +172,22 @@ func SetContent(e *Entry, ids []keys.ID, put Putter) error {
 		}
 		id, err := put(raw)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
-		e.ContentIndex = append(e.ContentIndex, id)
+		index = append(index, id)
 		ids = ids[n:]
 	}
-	return nil
+	return nil, index, nil
 }
 
-// EachContent calls fn for every data chunk of a file, in order.
-func EachContent(get Getter, e *Entry, fn func(keys.ID) error) error {
-	for _, id := range e.Content {
+// EachID calls fn for every data chunk of a packed chunk list, in order.
+func EachID(get Getter, content, index []keys.ID, fn func(keys.ID) error) error {
+	for _, id := range content {
 		if err := fn(id); err != nil {
 			return err
 		}
 	}
-	for _, ix := range e.ContentIndex {
+	for _, ix := range index {
 		raw, err := get(ix)
 		if err != nil {
 			return err
@@ -194,12 +204,33 @@ func EachContent(get Getter, e *Entry, fn func(keys.ID) error) error {
 	return nil
 }
 
+// SetContent records a file's chunk list on e.
+func SetContent(e *Entry, ids []keys.ID, put Putter) (err error) {
+	e.Content, e.ContentIndex, err = PackIDs(ids, put)
+	return err
+}
+
+// EachContent calls fn for every data chunk of a file, in order.
+func EachContent(get Getter, e *Entry, fn func(keys.ID) error) error {
+	return EachID(get, e.Content, e.ContentIndex, fn)
+}
+
 // Mark reports every chunk reachable from the entries: directory pages,
 // content indexes and data chunks. Pages already in seen are skipped, so
 // subtrees shared between snapshots are walked once.
 func Mark(get Getter, entries []Entry, seen map[keys.ID]struct{}, mark func(keys.ID) error) error {
 	for i := range entries {
 		e := &entries[i]
+		for _, st := range e.Streams {
+			for _, ix := range st.ContentIndex {
+				if err := mark(ix); err != nil {
+					return err
+				}
+			}
+			if err := EachID(get, st.Content, st.ContentIndex, mark); err != nil {
+				return err
+			}
+		}
 		switch e.Type {
 		case TypeFile:
 			for _, ix := range e.ContentIndex {

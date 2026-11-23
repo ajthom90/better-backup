@@ -206,6 +206,12 @@ func (r *restorer) entry(e *tree.Entry, orig, dest string, full bool) error {
 			}
 		}
 		if full || created {
+			if err := r.streams(dest, e); err != nil {
+				if cerr := r.ctx.Err(); cerr != nil {
+					return cerr
+				}
+				r.warn("%s: restoring alternate data streams: %v", dest, err)
+			}
 			r.applyMeta(dest, e)
 		}
 		if full {
@@ -279,6 +285,13 @@ func (r *restorer) file(e *tree.Entry, dest string) error {
 		err = fmt.Errorf("restored %d bytes but the backup recorded %d", n, e.Size)
 	}
 	if err == nil {
+		// Streams go on the temp file: they travel with it on rename.
+		if err = r.streams(tmp.Name(), e); err != nil && r.ctx.Err() == nil {
+			r.warn("%s: restoring alternate data streams: %v", dest, err)
+			err = nil
+		}
+	}
+	if err == nil {
 		r.applyMeta(tmp.Name(), e)
 		if err = os.Rename(tmp.Name(), dest); err != nil {
 			// Windows refuses to replace a read-only file.
@@ -311,4 +324,40 @@ func (r *restorer) applyMeta(path string, e *tree.Entry) {
 	// Last: restored permissions may be tighter than what the steps
 	// above need.
 	r.platformMeta(path, e)
+}
+
+// streams writes an entry's NTFS alternate data streams onto path. They
+// only exist on Windows; elsewhere they are left out of the restore.
+func (r *restorer) streams(path string, e *tree.Entry) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	for _, st := range e.Streams {
+		if st.Name == "" || strings.ContainsAny(st.Name, `/\:`) {
+			r.warn("%s: skipped a stream with an unsafe name %q", path, st.Name)
+			continue
+		}
+		f, err := os.OpenFile(path+":"+st.Name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		err = tree.EachID(r.get, st.Content, st.ContentIndex, func(id keys.ID) error {
+			if err := r.ctx.Err(); err != nil {
+				return err
+			}
+			data, err := r.get(id)
+			if err != nil {
+				return err
+			}
+			_, err = f.Write(data)
+			return err
+		})
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

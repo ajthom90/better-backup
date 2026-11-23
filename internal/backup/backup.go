@@ -262,12 +262,14 @@ func (a *archiver) node(path, name string, fi fs.FileInfo, parent *tree.Entry) (
 		}
 		a.stats.Dirs++
 		e.Subtree = pages
-		return e, nil
+		return e, a.streams(path, e)
 	case fi.Mode().IsRegular():
 		e.Type = tree.TypeFile
 		a.stats.Files++
 		if parent != nil && parent.Type == tree.TypeFile && parent.Size == fi.Size() && parent.ModTime == e.ModTime {
-			e.Size, e.Content, e.ContentIndex = parent.Size, parent.Content, parent.ContentIndex
+			// Writing to a stream also updates the file's modification
+			// time, so unchanged files have unchanged streams.
+			e.Size, e.Content, e.ContentIndex, e.Streams = parent.Size, parent.Content, parent.ContentIndex, parent.Streams
 			a.stats.Bytes += e.Size
 			a.progress()
 			return e, nil
@@ -280,44 +282,77 @@ func (a *archiver) node(path, name string, fi fs.FileInfo, parent *tree.Entry) (
 		a.stats.FilesChanged++
 		a.stats.Bytes += e.Size
 		a.progress()
-		return e, nil
+		return e, a.streams(path, e)
 	}
 	return nil, nil // sockets, devices, pipes
 }
 
 func (a *archiver) file(path string, e *tree.Entry) (bool, error) {
+	ids, size, ok, err := a.chunks(path)
+	if err != nil || !ok {
+		return false, err
+	}
+	e.Size = size
+	return true, tree.SetContent(e, ids, a.put)
+}
+
+// chunks reads path (a file, or a file's named stream) and queues its
+// chunks. ok is false when it could not be read; that is a warning, not
+// an error.
+func (a *archiver) chunks(path string) (ids []keys.ID, size int64, ok bool, err error) {
 	f, err := os.Open(a.opts.MapPath(path))
 	if err != nil {
 		a.warn("%v", err)
-		return false, nil
+		return nil, 0, false, nil
 	}
 	defer f.Close()
-	var ids []keys.ID
-	var size int64
 	c := chunker.New(f)
 	for {
 		chunk, err := c.Next()
 		if err == io.EOF {
-			break
+			return ids, size, true, nil
 		}
 		if err != nil {
 			a.warn("read %s: %v", path, err)
-			return false, nil
+			return nil, 0, false, nil
 		}
 		id, err := a.put(chunk)
 		if err != nil {
-			return false, err
+			return nil, 0, false, err
 		}
 		ids = append(ids, id)
 		size += int64(len(chunk))
 		a.stats.BytesRead += int64(len(chunk))
 		a.progress()
 		if err := a.ctx.Err(); err != nil {
-			return false, err
+			return nil, 0, false, err
 		}
 	}
-	e.Size = size
-	return true, tree.SetContent(e, ids, a.put)
+}
+
+// streams backs up the NTFS alternate data streams of a file or
+// directory. It does nothing on other systems.
+func (a *archiver) streams(path string, e *tree.Entry) error {
+	names, err := listStreams(a.opts.MapPath(path))
+	if err != nil {
+		a.warn("%s: listing alternate data streams: %v", path, err)
+		return nil
+	}
+	for _, name := range names {
+		ids, size, ok, err := a.chunks(path + ":" + name)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		st := tree.Stream{Name: name, Size: size}
+		if st.Content, st.ContentIndex, err = tree.PackIDs(ids, a.put); err != nil {
+			return err
+		}
+		e.Streams = append(e.Streams, st)
+	}
+	return nil
 }
 
 func (a *archiver) dir(path string, parent *tree.Entry) ([]keys.ID, error) {

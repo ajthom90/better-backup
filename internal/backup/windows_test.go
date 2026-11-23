@@ -55,6 +55,13 @@ func TestWindowsSnapshotAndPermissions(t *testing.T) {
 		"*S-1-5-32-545:(R)", "*S-1-5-18:(F)", "*S-1-5-32-544:(F)").CombinedOutput(); err != nil {
 		t.Fatalf("icacls: %v\n%s", err, out)
 	}
+	// Alternate data streams on a file and on a folder.
+	if err := os.WriteFile(filepath.Join(src, "plain.txt")+":Zone.Identifier", []byte("[ZoneTransfer]\r\nZoneId=3\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src+":folder-note", []byte("stream on a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	want := dacl(t, secret)
 	if !strings.HasPrefix(want, "D:P") {
 		t.Fatalf("test setup: expected a protected DACL, got %s", want)
@@ -107,6 +114,15 @@ func TestWindowsSnapshotAndPermissions(t *testing.T) {
 	restored := filepath.Join(out, filepath.VolumeName(src)[:1], src[len(filepath.VolumeName(src)):])
 	if b, _ := os.ReadFile(filepath.Join(restored, "locked.db")); string(b) != "locked content" {
 		t.Fatalf("locked file restored as %q", b)
+	}
+	if b, err := os.ReadFile(filepath.Join(restored, "plain.txt") + ":Zone.Identifier"); string(b) != "[ZoneTransfer]\r\nZoneId=3\r\n" {
+		t.Fatalf("file stream restored as %q (%v)", b, err)
+	}
+	if b, err := os.ReadFile(restored + ":folder-note"); string(b) != "stream on a directory" {
+		t.Fatalf("directory stream restored as %q (%v)", b, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(restored, "plain.txt")); string(b) != "inherits from its folder" {
+		t.Fatalf("main content changed by stream restore: %q", b)
 	}
 	if got := dacl(t, filepath.Join(restored, "secret.txt")); got != want {
 		t.Fatalf("permissions differ after restore:\n got %s\nwant %s", got, want)

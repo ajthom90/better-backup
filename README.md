@@ -132,8 +132,7 @@ bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
   skips the ones in use, and finishes with warnings.
 - VSS backups are "copy" backups: application logs (SQL Server, Exchange) are
   not truncated. Application-aware backup comes in Phase 6.
-- Not yet preserved: NTFS alternate data streams, audit entries (SACLs) and
-  EFS encryption, Unix extended attributes and ACLs, hard links (each link is
+- Not yet preserved: NTFS audit entries (SACLs) and EFS encryption, Unix extended attributes and ACLs, hard links (each link is
   restored as its own file).
 - Policies are created with the CLI; the web UI can run and restore them.
 - No MSI or `.pkg` installers yet; `service install` does the same job.
@@ -146,7 +145,7 @@ bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
 | Phase | Scope |
 | --- | --- |
 | 1. Foundation (this release) | Server, file agent, dedup store, restore in place, Docker and native services |
-| 2. Windows VSS (in progress) | Done: VSS snapshots, NTFS owners and permissions. To do: alternate data streams, fuller web UI, email alerts |
+| 2. Windows VSS (in progress) | Done: VSS snapshots, NTFS owners, permissions and alternate data streams. To do: fuller web UI, email alerts |
 | 3. Hyper-V and images | Host-level VM backup with Resilient Change Tracking, VM restore in place or as a copy, volume image backup |
 | 4. System state and AD | System state through VSS writers, domain controller backup, DSRM-assisted authoritative and non-authoritative restore |
 | 5. Scale and offsite | S3-compatible backends, replication, Proxmox and KVM providers, Postgres option, user roles |

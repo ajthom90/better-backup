@@ -16,3 +16,6 @@ func fillMeta(e *tree.Entry, _ string, fi fs.FileInfo) error {
 	}
 	return nil
 }
+
+// listStreams returns nothing: alternate data streams are an NTFS feature.
+func listStreams(string) ([]string, error) { return nil, nil }
