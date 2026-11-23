@@ -1,0 +1,22 @@
+# better-backup server.
+#
+#   docker compose up -d
+#   docker compose exec server bb token create     # then enroll agents
+#
+# Everything lives under ./data: the repository (./data/repo), the server
+# database, and repo.key. Back up repo.key separately: without it the
+# repository cannot be read.
+services:
+  server:
+    image: ghcr.io/ajthom90/better-backup:latest
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      # Names or IPs agents and browsers use to reach this server.
+      BB_TLS_NAMES: "backup.example.com"
+    volumes:
+      - ./data:/data
+      # To keep the repository on bigger storage, mount it here:
+      # - /mnt/backup-disk:/data/repo

@@ -1,0 +1,425 @@
+// Package agent implements the better-backup agent: it enrolls with a
+// server, waits for backup and restore jobs, and runs them.
+package agent
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/klauspost/compress/zstd"
+
+	"github.com/ajthom90/better-backup/internal/api"
+	"github.com/ajthom90/better-backup/internal/backup"
+	"github.com/ajthom90/better-backup/internal/keys"
+	"github.com/ajthom90/better-backup/internal/restore"
+	"github.com/ajthom90/better-backup/internal/tree"
+)
+
+// Version is set at build time.
+var Version = "dev"
+
+// Config is the agent's saved identity, written by Enroll.
+type Config struct {
+	Server  string `json:"server"`
+	AgentID string `json:"agent_id"`
+	Name    string `json:"name"`
+	IDKey   []byte `json:"id_key"`
+}
+
+func loadConfig(dir string) (*Config, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "agent.json"))
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("this agent is not enrolled (no agent.json in %s); run: bb-agent enroll", dir)
+	}
+	if err != nil {
+		return nil, err
+	}
+	c := new(Config)
+	if err := json.Unmarshal(b, c); err != nil {
+		return nil, err
+	}
+	if len(c.IDKey) != 32 {
+		return nil, errors.New("agent.json is damaged; enroll this agent again")
+	}
+	return c, nil
+}
+
+// Enrolled reports whether dir holds an agent identity.
+func Enrolled(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, "agent.json"))
+	return err == nil
+}
+
+// Enroll registers this machine with a server. The fingerprint pins the
+// server's certificate authority; the token authorizes the enrollment.
+func Enroll(dir, serverURL, token, fingerprint, name string) (*Config, error) {
+	serverURL = strings.TrimRight(serverURL, "/")
+	if u, err := url.Parse(serverURL); err != nil || u.Scheme != "https" || u.Host == "" {
+		return nil, fmt.Errorf("server must be an https URL such as https://backup.example.com:8443, got %q", serverURL)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	caPEM, err := api.FetchCA(serverURL, fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	host, _ := os.Hostname()
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: host}}, key)
+	if err != nil {
+		return nil, err
+	}
+	req := api.EnrollRequest{Token: token, Name: name, Hostname: host, OS: runtime.GOOS, Arch: runtime.GOARCH, Version: Version,
+		CSR: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))}
+	tlsCfg, err := api.PinnedTLS(caPEM, nil)
+	if err != nil {
+		return nil, err
+	}
+	hc := &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsCfg}}
+	body, _ := json.Marshal(req)
+	resp, err := hc.Post(serverURL+"/agent/v1/enroll", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, httpError(resp)
+	}
+	var er api.EnrollResponse
+	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
+		return nil, err
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	cfg := &Config{Server: serverURL, AgentID: er.AgentID, Name: name, IDKey: er.IDKey}
+	cfgJSON, _ := json.MarshalIndent(cfg, "", "  ")
+	files := []struct {
+		name string
+		data []byte
+	}{
+		{"ca.pem", caPEM},
+		{"agent.key", pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})},
+		{"agent.crt", []byte(er.Cert)},
+		{"agent.json", cfgJSON}, // last: its presence marks the agent as enrolled
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(dir, f.name), f.data, 0o600); err != nil {
+			return nil, err
+		}
+	}
+	return cfg, nil
+}
+
+func httpError(resp *http.Response) error {
+	var e api.Error
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if json.Unmarshal(b, &e) == nil && e.Error != "" {
+		return fmt.Errorf("server: %s", e.Error)
+	}
+	return fmt.Errorf("server returned %s", resp.Status)
+}
+
+// client talks to the server with the agent's certificate.
+type client struct {
+	base string
+	http *http.Client
+	enc  *zstd.Encoder
+	dec  *zstd.Decoder
+}
+
+func newClient(dir string, cfg *Config) (*client, error) {
+	caPEM, err := os.ReadFile(filepath.Join(dir, "ca.pem"))
+	if err != nil {
+		return nil, err
+	}
+	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "agent.crt"), filepath.Join(dir, "agent.key"))
+	if err != nil {
+		return nil, err
+	}
+	tlsCfg, err := api.PinnedTLS(caPEM, &cert)
+	if err != nil {
+		return nil, err
+	}
+	c := &client{base: cfg.Server, http: &http.Client{Transport: &http.Transport{
+		TLSClientConfig: tlsCfg, ForceAttemptHTTP2: true, MaxIdleConnsPerHost: 8, IdleConnTimeout: 90 * time.Second}}}
+	c.enc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
+	c.dec, _ = zstd.NewReader(nil, zstd.WithDecoderMaxMemory(64<<20))
+	return c, nil
+}
+
+// permanent marks errors that retrying cannot fix.
+type permanent struct{ error }
+
+// do sends a request, retrying network failures and server errors.
+func (c *client) do(ctx context.Context, method, path string, body []byte, ctype string) ([]byte, int, error) {
+	var last error
+	for attempt := 0; attempt < 6; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, 0, ctx.Err()
+			case <-time.After(time.Duration(1<<attempt) * 500 * time.Millisecond):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
+		if err != nil {
+			return nil, 0, err
+		}
+		if ctype != "" {
+			req.Header.Set("Content-Type", ctype)
+		}
+		resp, err := c.http.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, 0, ctx.Err()
+			}
+			last = err
+			continue
+		}
+		data, rerr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		switch {
+		case rerr != nil:
+			last = rerr
+		case resp.StatusCode >= 500:
+			resp.Body = io.NopCloser(bytes.NewReader(data))
+			last = httpError(resp)
+		case resp.StatusCode >= 400:
+			resp.Body = io.NopCloser(bytes.NewReader(data))
+			return nil, resp.StatusCode, permanent{httpError(resp)}
+		default:
+			return data, resp.StatusCode, nil
+		}
+	}
+	return nil, 0, last
+}
+
+func (c *client) json(ctx context.Context, method, path string, in, out any) error {
+	var body []byte
+	if in != nil {
+		body, _ = json.Marshal(in)
+	}
+	data, _, err := c.do(ctx, method, path, body, "application/json")
+	if err != nil || out == nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+func (c *client) Missing(ctx context.Context, ids []keys.ID) ([]keys.ID, error) {
+	var out struct {
+		Missing []keys.ID `json:"missing"`
+	}
+	err := c.json(ctx, "POST", "/agent/v1/chunks/missing", map[string][]keys.ID{"ids": ids}, &out)
+	return out.Missing, err
+}
+
+func (c *client) Put(ctx context.Context, id keys.ID, data []byte) error {
+	_, _, err := c.do(ctx, "PUT", "/agent/v1/chunks/"+id.String(), c.enc.EncodeAll(data, nil), "application/zstd")
+	return err
+}
+
+func (c *client) Get(ctx context.Context, id keys.ID) ([]byte, error) {
+	data, _, err := c.do(ctx, "GET", "/agent/v1/chunks/"+id.String(), nil, "")
+	if err != nil {
+		return nil, err
+	}
+	return c.dec.DecodeAll(data, nil)
+}
+
+// Agent runs jobs for one enrolled machine.
+type Agent struct {
+	cfg *Config
+	c   *client
+	log *slog.Logger
+}
+
+// New loads the agent identity saved in dir.
+func New(dir string, log *slog.Logger) (*Agent, error) {
+	cfg, err := loadConfig(dir)
+	if err != nil {
+		return nil, err
+	}
+	c, err := newClient(dir, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Agent{cfg: cfg, c: c, log: log}, nil
+}
+
+// Run polls for jobs until ctx is cancelled.
+func (a *Agent) Run(ctx context.Context) error {
+	a.log.Info("better-backup agent started", "server", a.cfg.Server, "agent", a.cfg.AgentID, "version", Version)
+	backoff := time.Second
+	for ctx.Err() == nil {
+		data, code, err := a.c.pollOnce(ctx, "/agent/v1/jobs/next?wait=25&version="+url.QueryEscape(Version))
+		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			var p permanent
+			if errors.As(err, &p) && code == http.StatusUnauthorized {
+				a.log.Error("the server rejected this agent; it may have been revoked", "err", err)
+				backoff = time.Minute
+			} else {
+				a.log.Warn("cannot reach the server; will retry", "err", err, "in", backoff)
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, time.Minute)
+			continue
+		}
+		backoff = time.Second
+		if code == http.StatusNoContent {
+			continue
+		}
+		var j api.Job
+		if err := json.Unmarshal(data, &j); err != nil {
+			a.log.Error("could not decode job", "err", err)
+			continue
+		}
+		a.runJob(ctx, &j)
+	}
+	return nil
+}
+
+// pollOnce is a single long poll, without the retry loop of do: the
+// caller has its own backoff.
+func (c *client) pollOnce(ctx context.Context, path string) ([]byte, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", c.base+path, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, resp.StatusCode, permanent{httpError(resp)}
+	}
+	data, err := io.ReadAll(resp.Body)
+	return data, resp.StatusCode, err
+}
+
+func (a *Agent) runJob(ctx context.Context, j *api.Job) {
+	log := a.log.With("job", j.ID, "type", j.Type)
+	log.Info("job started")
+	var (
+		mu       sync.Mutex
+		progress any
+		warnings []string
+	)
+	warn := func(msg string) {
+		log.Warn(msg)
+		mu.Lock()
+		if len(warnings) < api.MaxWarnings {
+			warnings = append(warnings, msg)
+		}
+		mu.Unlock()
+	}
+	setProgress := func(v any) { mu.Lock(); progress = v; mu.Unlock() }
+
+	// Heartbeat: report progress every few seconds so the server knows
+	// the job is alive. If the server says the job is gone, stop work.
+	jctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-jctx.Done():
+				return
+			case <-t.C:
+				mu.Lock()
+				p := progress
+				mu.Unlock()
+				err := a.c.json(jctx, "POST", "/agent/v1/jobs/"+j.ID+"/progress", p, nil)
+				var perm permanent
+				if errors.As(err, &perm) {
+					log.Error("the server no longer tracks this job; stopping", "err", err)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	var req api.CompleteRequest
+	var err error
+	switch {
+	case j.Type == api.JobBackup && j.Backup != nil:
+		var stats tree.Stats
+		req.Sources, stats, err = backup.Run(jctx, a.c, backup.Options{
+			Paths: j.Backup.Paths, Excludes: j.Backup.Excludes, Parent: j.Backup.Parent, IDKey: [32]byte(a.cfg.IDKey),
+			Progress: func(s tree.Stats) { setProgress(s) }, Warn: warn})
+		req.Stats = &stats
+	case j.Type == api.JobRestore && j.Restore != nil:
+		var stats restore.Stats
+		get := func(id keys.ID) ([]byte, error) { return a.c.Get(jctx, id) }
+		stats, err = restore.Run(jctx, get, restore.Options{
+			Sources: j.Restore.Sources, SourceOS: j.Restore.SourceOS, Include: j.Restore.Include,
+			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite,
+			Progress: func(s restore.Stats) { setProgress(s) }, Warn: warn})
+		req.Restore = &stats
+	default:
+		err = fmt.Errorf("this agent version does not support %q jobs", j.Type)
+	}
+	cancel()
+	<-done
+	if err != nil {
+		req.Error = err.Error()
+		req.Sources = nil
+	}
+	req.Warnings = warnings
+	if ctx.Err() != nil {
+		// Shutting down: the server fails the job when we reconnect.
+		log.Warn("job interrupted by shutdown")
+		return
+	}
+	if cerr := a.c.json(ctx, "POST", "/agent/v1/jobs/"+j.ID+"/complete", &req, nil); cerr != nil {
+		log.Error("could not report the job result", "err", cerr)
+		return
+	}
+	if err != nil {
+		log.Error("job failed", "err", err)
+	} else {
+		log.Info("job finished", "warnings", len(warnings))
+	}
+}

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>better-backup</title>
+<style>
+:root { --bg:#f6f7f9; --card:#fff; --ink:#1c2330; --muted:#647084; --line:#dfe3ea; --accent:#1f6feb; --good:#1a7f4b; --warn:#9a6700; --bad:#c62828; }
+@media (prefers-color-scheme: dark) { :root { --bg:#12151b; --card:#1b2029; --ink:#e6e9ef; --muted:#97a1b3; --line:#2c3340; --accent:#6ea8ff; --good:#4ac38a; --warn:#e0b341; --bad:#ff7b72; } }
+* { box-sizing:border-box; }
+body { margin:0; font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+header { display:flex; align-items:center; gap:12px; padding:14px 20px; border-bottom:1px solid var(--line); background:var(--card); }
+header h1 { font-size:17px; margin:0; flex:1; }
+main { max-width:1100px; margin:0 auto; padding:20px 16px 60px; }
+section { background:var(--card); border:1px solid var(--line); border-radius:10px; margin-bottom:18px; overflow:hidden; }
+section h2 { font-size:14px; margin:0; padding:12px 16px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+section h2 span { flex:1; }
+.scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; }
+th,td { text-align:left; padding:8px 16px; border-bottom:1px solid var(--line); white-space:nowrap; }
+th { color:var(--muted); font-weight:600; font-size:12px; }
+tr:last-child td { border-bottom:0; }
+td.wrap { white-space:normal; word-break:break-all; }
+.empty { padding:16px; color:var(--muted); }
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+.stat { padding:14px 16px; border-right:1px solid var(--line); }
+.stat b { display:block; font-size:20px; }
+.stat small { color:var(--muted); }
+button { font:inherit; padding:5px 11px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+button:hover { filter:brightness(0.95); }
+input,select { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); width:100%; }
+.pill { font-size:12px; font-weight:600; }
+.success,.online { color:var(--good); } .warning,.queued,.running { color:var(--warn); } .failed,.revoked { color:var(--bad); } .offline { color:var(--muted); }
+#login { max-width:420px; margin:12vh auto; padding:22px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
+#login p { color:var(--muted); }
+#err { color:var(--bad); min-height:1.4em; }
+dialog { border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--ink); max-width:min(560px,92vw); padding:20px; }
+dialog::backdrop { background:rgba(0,0,0,.45); }
+dialog label { display:block; margin:12px 0 4px; font-weight:600; }
+dialog .row { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:10px; border-radius:6px; }
+</style>
+</head>
+<body>
+<div id="login" hidden>
+  <h1>better-backup</h1>
+  <p>Enter the admin token. It is in <code>admin.json</code> in the server's data directory.</p>
+  <form id="loginForm"><input id="token" type="password" placeholder="Admin token" autocomplete="current-password" required>
+  <div id="err"></div><button class="primary">Sign in</button></form>
+</div>
+<div id="app" hidden>
+<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="logout">Sign out</button></header>
+<main>
+  <section><div class="stats" id="stats"></div></section>
+  <section><h2><span>Agents</span><button id="newToken">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
+  <section><h2><span>Backup policies</span></h2><div class="scroll" id="policies"></div></section>
+  <section><h2><span>Recent jobs</span></h2><div class="scroll" id="jobs"></div></section>
+  <section><h2><span>Snapshots</span></h2><div class="scroll" id="snapshots"></div></section>
+</main>
+</div>
+<dialog id="dlg"><div id="dlgBody"></div></dialog>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let token = sessionStorage.getItem("bb-token") || "";
+let agentNames = {};
+
+async function call(method, path, body) {
+  const r = await fetch(path, { method, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401) { signOut(); throw new Error("Invalid admin token"); }
+  const text = await r.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!r.ok) throw new Error((data && data.error) || r.statusText);
+  return data;
+}
+function size(n) { const u = ["B","KiB","MiB","GiB","TiB","PiB"]; let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return (i ? n.toFixed(1) : n) + " " + u[i]; }
+function when(t) { return t && !t.startsWith("0001") ? new Date(t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "never"; }
+// el builds DOM nodes with textContent only, so server data is never parsed as HTML.
+function el(tag, props, ...kids) { const e = Object.assign(document.createElement(tag), props || {}); for (const k of kids) e.append(k); return e; }
+function table(target, heads, rows, empty) {
+  const box = $(target); box.replaceChildren();
+  if (!rows.length) { box.append(el("div", { className: "empty", textContent: empty })); return; }
+  const t = el("table", null, el("tr", null, ...heads.map(h => el("th", { textContent: h }))));
+  for (const row of rows) t.append(el("tr", null, ...row.map(c => c instanceof Node ? el("td", null, c) : el("td", { textContent: c == null ? "" : String(c) }))));
+  box.append(t);
+}
+function pill(s) { return el("span", { className: "pill " + s, textContent: s }); }
+function button(label, fn) { const b = el("button", { textContent: label }); b.onclick = () => fn().catch(e => notice("Something went wrong", e.message)); return b; }
+function notice(title, text) {
+  $("dlgBody").replaceChildren(el("h3", { textContent: title }), el("pre", { textContent: text }), el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
+  $("dlg").showModal();
+}
+
+async function refresh() {
+  const [st, agents, policies, jobs, snaps] = await Promise.all([
+    call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
+    call("GET", "/api/v1/jobs?limit=15"), call("GET", "/api/v1/snapshots")]);
+  $("version").textContent = "version " + st.version;
+  agentNames = Object.fromEntries(agents.map(a => [a.id, a.name]));
+  const stat = (v, label) => el("div", { className: "stat" }, el("b", { textContent: v }), el("small", { textContent: label }));
+  $("stats").replaceChildren(stat(st.agents, "agents"), stat(st.snapshots, "snapshots"), stat(size(st.stored_bytes), "used on disk"),
+    stat(size(st.raw_bytes), "unique data before compression"), stat(st.running_jobs, "jobs running"));
+  table("agents", ["Name", "Host", "System", "Version", "State", "Last seen"],
+    agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, a.version, pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen)]),
+    "No agents yet. Choose “Add an agent” to enroll the first machine.");
+  table("policies", ["Name", "Agent", "Paths", "Schedule", ""],
+    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, p.paths.join(", "),
+      p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual",
+      button("Back up now", async () => { await call("POST", "/api/v1/policies/" + p.id + "/run"); await refresh(); })]),
+    "No policies yet. Create one with: bb policy add --name NAME --agent AGENT --path PATH --daily-at 02:00");
+  table("jobs", ["Started", "Type", "Agent", "Status", "Detail"],
+    jobs.map(j => [when(j.created), j.type, agentNames[j.agent_id] || "server", pill(j.status),
+      j.error || (j.warnings ? j.warnings.length + " warnings" : "") || (j.snapshot_id ? "snapshot " + j.snapshot_id : "")]),
+    "No jobs have run yet.");
+  table("snapshots", ["Time", "Host", "Paths", "Files", "Size", "New data", ""],
+    snaps.slice(0, 50).map(s => [when(s.time), s.hostname, s.sources.map(x => x.name).join(", "), s.stats.files, size(s.stats.bytes), size(s.stats.bytes_uploaded),
+      button("Restore", async () => restoreDialog(s))]),
+    "No snapshots yet.");
+}
+
+function restoreDialog(s) {
+  const target = el("input", { placeholder: "Leave empty to restore in place, over the original files" });
+  const path = el("input", { placeholder: "Leave empty to restore everything in the snapshot" });
+  const mode = el("select", null, el("option", { value: "if-changed", textContent: "Replace files that differ from the backup" }),
+    el("option", { value: "always", textContent: "Replace every file" }), el("option", { value: "never", textContent: "Only restore missing files" }));
+  const go = el("button", { className: "primary", textContent: "Start restore" });
+  go.onclick = async () => {
+    try {
+      await call("POST", "/api/v1/restores", { snapshot_id: s.id, target: target.value.trim(), include: path.value.trim() ? [path.value.trim()] : [], overwrite: mode.value });
+      $("dlg").close(); await refresh();
+    } catch (e) { notice("Restore not started", e.message); }
+  };
+  $("dlgBody").replaceChildren(el("h3", { textContent: "Restore " + s.hostname + ", " + when(s.time) }),
+    el("label", { textContent: "Restore to folder on " + (agentNames[s.agent_id] || s.hostname) }), target,
+    el("label", { textContent: "Only this file or folder (original path)" }), path,
+    el("label", { textContent: "Existing files" }), mode,
+    el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
+  $("dlg").showModal();
+}
+
+$("newToken").onclick = async () => {
+  try {
+    const t = await call("POST", "/api/v1/enroll-tokens", { ttl: "24h", uses: 1 });
+    notice("Add an agent", "Install bb-agent on the machine, then run this there within 24 hours:\n\nbb-agent enroll --server " + location.origin + " --token " + t.token + " --fingerprint " + t.fingerprint + "\n\nThen start it with: bb-agent service install && bb-agent service start");
+  } catch (e) { notice("Could not create a token", e.message); }
+};
+function signOut() { token = ""; sessionStorage.removeItem("bb-token"); $("app").hidden = true; $("login").hidden = false; }
+$("logout").onclick = signOut;
+$("loginForm").onsubmit = async ev => {
+  ev.preventDefault(); token = $("token").value.trim(); $("err").textContent = "";
+  try { await call("GET", "/api/v1/status"); sessionStorage.setItem("bb-token", token); start(); } catch (e) { $("err").textContent = e.message; }
+};
+let timer;
+function start() {
+  $("login").hidden = true; $("app").hidden = false;
+  refresh().catch(() => {});
+  clearInterval(timer); timer = setInterval(() => { if (token && !$("dlg").open) refresh().catch(() => {}); }, 5000);
+}
+if (token) start(); else $("login").hidden = false;
+</script>
+</body>
+</html>
