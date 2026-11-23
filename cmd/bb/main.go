@@ -33,6 +33,7 @@ Usage:
   bb policies                            list backup policies
   bb policy add --name NAME --agent AGENT --path PATH [--path ...]
         [--exclude PATTERN ...] [--every 24h | --daily-at 02:00]
+        [--no-snapshot]  (Windows: read live files instead of a VSS snapshot)
         [--keep-last N] [--keep-daily N] [--keep-weekly N]
         [--keep-monthly N] [--keep-yearly N]
   bb policy run POLICY [--wait]          back up now
@@ -87,6 +88,7 @@ var (
 	fTarget  = fs.String("target", "", "")
 	fOver    = fs.String("overwrite", "", "")
 	fWait    = fs.Bool("wait", false, "")
+	fNoSnap  = fs.Bool("no-snapshot", false, "")
 	fPaths   cli.Multi
 	fExcl    cli.Multi
 	fKeep    api.Retention
@@ -337,7 +339,7 @@ func main() {
 			}
 			var p api.Policy
 			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl,
-				Schedule: api.Schedule{Interval: *fEvery, DailyAt: *fDaily}, Retention: fKeep, Enabled: true}, &p)
+				Schedule: api.Schedule{Interval: *fEvery, DailyAt: *fDaily}, Retention: fKeep, NoSnapshot: *fNoSnap, Enabled: true}, &p)
 			fmt.Printf("created policy %s (%s)\n", p.Name, p.ID)
 		case "run":
 			need(pos, 3, "bb policy run POLICY")

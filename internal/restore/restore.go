@@ -304,9 +304,11 @@ func (r *restorer) applyMeta(path string, e *tree.Entry) {
 	if err := os.Chmod(path, tree.FileMode(e.Mode)); err != nil {
 		r.warn("%v", err)
 	}
-	r.platformMeta(path, e)
 	mt := time.Unix(0, e.ModTime)
 	if err := os.Chtimes(path, mt, mt); err != nil {
 		r.warn("%v", err)
 	}
+	// Last: restored permissions may be tighter than what the steps
+	// above need.
+	r.platformMeta(path, e)
 }

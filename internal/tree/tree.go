@@ -28,14 +28,17 @@ const (
 
 // Entry describes one file-system object.
 type Entry struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	Mode       uint32 `json:"mode"` // Unix permission and special bits
-	Size       int64  `json:"size,omitempty"`
-	ModTime    int64  `json:"mtime"` // Unix nanoseconds
-	UID        uint32 `json:"uid,omitempty"`
-	GID        uint32 `json:"gid,omitempty"`
-	WinAttrs   uint32 `json:"win_attrs,omitempty"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Mode     uint32 `json:"mode"` // Unix permission and special bits
+	Size     int64  `json:"size,omitempty"`
+	ModTime  int64  `json:"mtime"` // Unix nanoseconds
+	UID      uint32 `json:"uid,omitempty"`
+	GID      uint32 `json:"gid,omitempty"`
+	WinAttrs uint32 `json:"win_attrs,omitempty"`
+	// WinSD is the Windows security descriptor (owner, group and DACL)
+	// in self-relative binary form.
+	WinSD      []byte `json:"win_sd,omitempty"`
 	LinkTarget string `json:"link_target,omitempty"`
 
 	// Content lists a file's chunks in order. Files with more than

@@ -33,6 +33,7 @@ import (
 	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/restore"
 	"github.com/ajthom90/better-backup/internal/tree"
+	"github.com/ajthom90/better-backup/internal/vss"
 )
 
 // Version is set at build time.
@@ -273,6 +274,9 @@ func New(dir string, log *slog.Logger) (*Agent, error) {
 	if log == nil {
 		log = slog.Default()
 	}
+	if missing := vss.EnablePrivileges(); len(missing) > 0 {
+		log.Warn("could not enable some backup privileges; files this account cannot open will be skipped", "missing", missing)
+	}
 	return &Agent{cfg: cfg, c: c, log: log}, nil
 }
 
@@ -386,9 +390,32 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 	switch {
 	case j.Type == api.JobBackup && j.Backup != nil:
 		var stats tree.Stats
-		req.Sources, stats, err = backup.Run(jctx, a.c, backup.Options{
+		release := func() {}
+		opts := backup.Options{
 			Paths: j.Backup.Paths, Excludes: j.Backup.Excludes, Parent: j.Backup.Parent, IDKey: [32]byte(a.cfg.IDKey),
-			Progress: func(s tree.Stats) { setProgress(s) }, Warn: warn})
+			Progress: func(s tree.Stats) { setProgress(s) }, Warn: warn}
+		// On Windows, read from a VSS snapshot so open and locked files
+		// are backed up in a consistent state. If the snapshot cannot be
+		// made, back up the live files and say so.
+		if runtime.GOOS == "windows" && !j.Backup.NoSnapshot {
+			set, skipped, serr := vss.Create(j.Backup.Paths, 10*time.Minute)
+			for _, s := range skipped {
+				warn("no snapshot for one volume, backing up its live files: " + s)
+			}
+			if serr != nil {
+				warn("could not create a VSS snapshot, backing up live files (files in use may be skipped): " + serr.Error())
+			} else {
+				log.Info("VSS snapshot created", "volumes", set.Volumes())
+				opts.MapPath = set.Path
+				release = func() {
+					if cerr := set.Close(); cerr != nil {
+						log.Warn("releasing the VSS snapshot", "err", cerr)
+					}
+				}
+			}
+		}
+		req.Sources, stats, err = backup.Run(jctx, a.c, opts)
+		release()
 		req.Stats = &stats
 	case j.Type == api.JobRestore && j.Restore != nil:
 		var stats restore.Stats

@@ -32,6 +32,7 @@ better-backup has three programs:
 | `internal/server` | Server: jobs, scheduling, retention, HTTP APIs, private CA, web UI |
 | `internal/agent` | Agent: enrollment, job loop |
 | `internal/api` | Wire types and the pinned-TLS client configuration |
+| `internal/vss` | Windows Volume Shadow Copy requester and backup privileges |
 | `internal/svc` | Windows service, systemd and launchd integration |
 
 Data sources other than files (volume images, Hyper-V and other hypervisors,
@@ -110,3 +111,23 @@ files whose size and modification time are unchanged. While a job runs the
 agent reports progress every ten seconds; a job with no report for five
 minutes is failed. A finished backup is committed as a snapshot only after its
 chunks are flushed to disk, and then the policy's retention rules are applied.
+
+## Windows snapshots
+
+On Windows a backup job first asks VSS for a snapshot of every volume that
+holds a backed-up path (`internal/vss`). The agent is a VSS requester: it
+gathers writer metadata, so VSS-aware applications flush and freeze, creates
+the snapshot set, and reads files from the shadow copy device
+(`\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopyN\...`) while recording the
+original paths. When the backup ends it reports completion to the writers and
+releases the snapshot. The backup type is "copy", so application logs are left
+alone.
+
+If a volume cannot be snapshotted (a network share, or the agent is not
+elevated), the job continues on the live files and records a warning.
+
+Each entry also stores the file's security descriptor (owner, group and DACL).
+On restore the DACL is applied first and the owner second, because setting
+another account as owner needs the restore privilege. A file that inherited
+its permissions inherits again from the folder it is restored into; a file
+with inheritance blocked keeps its exact permissions.

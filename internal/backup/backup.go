@@ -33,8 +33,12 @@ type Options struct {
 	Excludes []string
 	// Parent holds the sources of the previous snapshot. Files whose size
 	// and modification time match it are not read again.
-	Parent   []tree.Entry
-	IDKey    [32]byte
+	Parent []tree.Entry
+	IDKey  [32]byte
+	// MapPath, if set, turns a path into the path to read it from. It is
+	// how a backup reads from a volume snapshot while recording the
+	// original paths.
+	MapPath  func(string) string
 	Progress func(tree.Stats)
 	Warn     func(string)
 }
@@ -68,6 +72,9 @@ type archiver struct {
 // Run backs up opts.Paths and returns the snapshot's source entries.
 func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Stats, error) {
 	a := &archiver{ctx: ctx, store: store, opts: opts, inBatch: map[keys.ID]struct{}{}, known: map[keys.ID]struct{}{}}
+	if a.opts.MapPath == nil {
+		a.opts.MapPath = func(p string) string { return p }
+	}
 	if len(opts.Paths) == 0 {
 		return nil, a.stats, errors.New("no paths to back up")
 	}
@@ -81,7 +88,7 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 		if err != nil {
 			return nil, a.stats, err
 		}
-		fi, err := os.Lstat(abs)
+		fi, err := os.Lstat(a.opts.MapPath(abs))
 		if err != nil {
 			a.warn("%v", err)
 			continue
@@ -226,7 +233,8 @@ func (a *archiver) excluded(path string) bool {
 	return false
 }
 
-// node archives one file-system object. It returns nil for objects that
+// node archives one file-system object. path is its real location; all
+// reads go through MapPath. It returns nil for objects that
 // are skipped. Only store errors are returned; unreadable files become
 // warnings so one bad file does not fail the backup.
 func (a *archiver) node(path, name string, fi fs.FileInfo, parent *tree.Entry) (*tree.Entry, error) {
@@ -234,10 +242,12 @@ func (a *archiver) node(path, name string, fi fs.FileInfo, parent *tree.Entry) (
 		return nil, err
 	}
 	e := &tree.Entry{Name: name, ModTime: fi.ModTime().UnixNano()}
-	fillMeta(e, fi)
+	if err := fillMeta(e, a.opts.MapPath(path), fi); err != nil {
+		a.warn("%s: reading permissions: %v", path, err)
+	}
 	switch {
 	case fi.Mode()&fs.ModeSymlink != 0:
-		target, err := os.Readlink(path)
+		target, err := os.Readlink(a.opts.MapPath(path))
 		if err != nil {
 			a.warn("%v", err)
 			return nil, nil
@@ -276,7 +286,7 @@ func (a *archiver) node(path, name string, fi fs.FileInfo, parent *tree.Entry) (
 }
 
 func (a *archiver) file(path string, e *tree.Entry) (bool, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(a.opts.MapPath(path))
 	if err != nil {
 		a.warn("%v", err)
 		return false, nil
@@ -326,7 +336,7 @@ func (a *archiver) dir(path string, parent *tree.Entry) ([]keys.ID, error) {
 			}
 		}
 	}
-	items, err := os.ReadDir(path)
+	items, err := os.ReadDir(a.opts.MapPath(path))
 	if err != nil {
 		a.warn("%v", err)
 		if len(items) == 0 {
