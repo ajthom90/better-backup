@@ -46,6 +46,12 @@ textarea { resize:vertical; min-height:64px; }
 .two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
 .hint { color:var(--muted); font-size:12px; margin-top:4px; }
 td .acts { display:flex; gap:6px; }
+dialog.wide { max-width:min(860px,94vw); width:860px; }
+.crumbs { display:flex; flex-wrap:wrap; gap:4px; align-items:center; margin:10px 0; }
+.crumbs button, button.link { border:0; background:none; color:var(--accent); padding:2px 4px; }
+.list { border:1px solid var(--line); border-radius:8px; max-height:50vh; overflow:auto; }
+dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:12px 0; }
+dt { color:var(--muted); } dd { margin:0; word-break:break-word; }
 button.danger { color:var(--bad); }
 dialog .row { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
 pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:10px; border-radius:6px; }
@@ -61,10 +67,10 @@ pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:
 <div id="app" hidden>
 <header><h1>better-backup</h1><span id="version" class="offline"></span><button id="alerts">Email alerts</button><button id="logout">Sign out</button></header>
 <main>
-  <section><div class="stats" id="stats"></div></section>
+  <section><h2><span>Repository</span><button id="runVerify">Verify all data</button><button id="runGC">Reclaim space</button></h2><div class="stats" id="stats"></div></section>
   <section><h2><span>Agents</span><button id="newToken">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
   <section><h2><span>Backup policies</span><button id="newPolicy">New policy</button></h2><div class="scroll" id="policies"></div></section>
-  <section><h2><span>Recent jobs</span></h2><div class="scroll" id="jobs"></div></section>
+  <section><h2><span>Recent jobs</span><button id="moreJobs">Show more</button></h2><div class="scroll" id="jobs"></div></section>
   <section><h2><span>Snapshots</span></h2><div class="scroll" id="snapshots"></div></section>
 </main>
 </div>
@@ -75,6 +81,7 @@ const $ = id => document.getElementById(id);
 let token = sessionStorage.getItem("bb-token") || "";
 let agentNames = {};
 let agentList = [];
+let jobLimit = 15;
 
 async function call(method, path, body) {
   const r = await fetch(path, { method, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
@@ -98,22 +105,22 @@ function table(target, heads, rows, empty) {
 function pill(s) { return el("span", { className: "pill " + s, textContent: s }); }
 function button(label, fn) { const b = el("button", { textContent: label }); b.onclick = () => fn().catch(e => notice("Something went wrong", e.message)); return b; }
 function notice(title, text) {
-  $("dlgBody").replaceChildren(el("h3", { textContent: title }), el("pre", { textContent: text }), el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
-  $("dlg").showModal();
+  openDialog(false, el("h3", { textContent: title }), el("pre", { textContent: text }), el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
 }
 
 async function refresh() {
   const [st, agents, policies, jobs, snaps] = await Promise.all([
     call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
-    call("GET", "/api/v1/jobs?limit=15"), call("GET", "/api/v1/snapshots")]);
+    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots")]);
   $("version").textContent = "version " + st.version;
   agentList = agents;
   agentNames = Object.fromEntries(agents.map(a => [a.id, a.name]));
   const stat = (v, label) => el("div", { className: "stat" }, el("b", { textContent: v }), el("small", { textContent: label }));
   $("stats").replaceChildren(stat(st.agents, "agents"), stat(st.snapshots, "snapshots"), stat(size(st.stored_bytes), "used on disk"),
     stat(size(st.raw_bytes), "unique data before compression"), stat(st.running_jobs, "jobs running"));
-  table("agents", ["Name", "Host", "System", "Version", "State", "Last seen"],
-    agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, a.version, pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen)]),
+  table("agents", ["Name", "Host", "System", "Version", "State", "Last seen", ""],
+    agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, a.version, pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen),
+      a.revoked ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
   table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
     policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)")).join(", "),
@@ -123,13 +130,14 @@ async function refresh() {
         button("Back up now", async () => { await call("POST", "/api/v1/policies/" + p.id + "/run"); await refresh(); }),
         button("Edit", async () => policyDialog(p)))]),
     "No policies yet. Choose “New policy” to say what to back up and when.");
-  table("jobs", ["Started", "Type", "Agent", "Status", "Detail"],
+  table("jobs", ["Started", "Type", "Agent", "Status", "Detail", ""],
     jobs.map(j => [when(j.created), j.type, agentNames[j.agent_id] || "server", pill(j.status),
-      j.error || (j.warnings ? j.warnings.length + " warnings" : "") || (j.snapshot_id ? "snapshot " + j.snapshot_id : "")]),
+      j.error || (j.warnings ? j.warnings.length + " warnings" : "") || (j.snapshot_id ? "snapshot " + j.snapshot_id : ""),
+      button("Details", async () => jobDialog(j.id))]),
     "No jobs have run yet.");
   table("snapshots", ["Time", "Host", "Paths", "Files", "Size", "New data", ""],
     snaps.slice(0, 50).map(s => [when(s.time), s.hostname, s.sources.map(x => x.name).join(", "), s.stats.files, size(s.stats.bytes), size(s.stats.bytes_uploaded),
-      button("Restore", async () => restoreDialog(s))]),
+      el("div", { className: "acts" }, button("Browse", async () => browseDialog(s, "")), button("Restore", async () => restoreDialog(s, "")))]),
     "No snapshots yet.");
 }
 
@@ -203,7 +211,7 @@ function policyDialog(p) {
     el("label", { className: "check" }, enabled, "Run on schedule"),
     el("label", { className: "check" }, noSnap, "Windows: read live files instead of a VSS snapshot"),
     err, buttons);
-  $("dlg").showModal();
+  $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
 }
 $("newPolicy").onclick = () => policyDialog(null);
 
@@ -247,29 +255,115 @@ async function alertsDialog() {
     el("label", { textContent: "Send alerts to" }), to,
     el("label", { className: "check" }, warn, "Also email when a backup finishes with warnings, such as skipped files"),
     msg, el("div", { className: "row" }, test, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
-  $("dlg").showModal();
+  $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
 }
 $("alerts").onclick = () => alertsDialog().catch(e => notice("Something went wrong", e.message));
 
-function restoreDialog(s) {
-  const target = el("input", { placeholder: "Leave empty to restore in place, over the original files" });
-  const path = el("input", { placeholder: "Leave empty to restore everything in the snapshot" });
+// confirmButton asks for a second click before doing something that
+// cannot be undone.
+function confirmButton(label, sure, fn) {
+  const b = el("button", { className: "danger", textContent: label });
+  let armed = false;
+  b.onclick = () => {
+    if (!armed) { armed = true; b.textContent = sure; setTimeout(() => { armed = false; b.textContent = label; }, 5000); return; }
+    fn().catch(e => notice("Something went wrong", e.message));
+  };
+  return b;
+}
+function openDialog(wide, ...kids) { $("dlg").className = wide ? "wide" : ""; $("dlgBody").replaceChildren(...kids); if (!$("dlg").open) $("dlg").showModal(); }
+const sepOf = s => s.os === "windows" ? "\\" : "/";
+const joinPath = (s, dir, name) => !dir ? name : dir.endsWith(sepOf(s)) ? dir + name : dir + sepOf(s) + name;
+const kinds = { dir: "Folder", file: "File", symlink: "Link", image: "Disk image", vm: "Virtual machine" };
+
+// restoreDialog starts a restore of a whole snapshot, or of one path.
+function restoreDialog(s, path) {
+  const agents = agentList.filter(a => !a.revoked);
+  const agent = el("select", null, ...agents.map(a => el("option", { value: a.id, textContent: a.name + " (" + a.os + ")" + (a.id === s.agent_id ? ", the original machine" : "") })));
+  if (agents.some(a => a.id === s.agent_id)) agent.value = s.agent_id;
+  const target = el("input", { placeholder: "Leave empty to restore in place, over the originals" });
+  const only = el("input", { value: path || "", placeholder: "Leave empty to restore everything in the snapshot" });
   const mode = el("select", null, el("option", { value: "if-changed", textContent: "Replace files that differ from the backup" }),
     el("option", { value: "always", textContent: "Replace every file" }), el("option", { value: "never", textContent: "Only restore missing files" }));
+  const err = el("div", { id: "err" });
   const go = el("button", { className: "primary", textContent: "Start restore" });
   go.onclick = async () => {
     try {
-      await call("POST", "/api/v1/restores", { snapshot_id: s.id, target: target.value.trim(), include: path.value.trim() ? [path.value.trim()] : [], overwrite: mode.value });
-      $("dlg").close(); await refresh();
-    } catch (e) { notice("Restore not started", e.message); }
+      const j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: agent.value, target: target.value.trim(), include: only.value.trim() ? [only.value.trim()] : [], overwrite: mode.value });
+      await refresh(); await jobDialog(j.id);
+    } catch (e) { err.textContent = e.message; }
   };
-  $("dlgBody").replaceChildren(el("h3", { textContent: "Restore " + s.hostname + ", " + when(s.time) }),
-    el("label", { textContent: "Restore to folder on " + (agentNames[s.agent_id] || s.hostname) }), target,
-    el("label", { textContent: "Only this file or folder (original path)" }), path,
+  openDialog(false, el("h3", { textContent: "Restore from " + s.hostname + ", " + when(s.time) }),
+    el("label", { textContent: "Restore onto" }), agent,
+    el("label", { textContent: "Only this file, folder or disk" }), only,
+    el("div", { className: "hint", textContent: "The original path. Use Browse on a snapshot to pick one." }),
+    el("label", { textContent: "Put it in" }), target,
+    el("div", { className: "hint", textContent: "A folder on the chosen machine. A disk image can also go to a volume (E:), a device, or a new file (.img, or .vhdx on Windows). Restoring onto a different machine needs a folder here." }),
     el("label", { textContent: "Existing files" }), mode,
-    el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
-  $("dlg").showModal();
+    err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
 }
+
+// browseDialog shows what a snapshot holds at a path.
+async function browseDialog(s, path, trail) {
+  trail = trail || [];
+  const items = await call("GET", "/api/v1/snapshots/" + s.id + "/ls?path=" + encodeURIComponent(path));
+  const crumbs = el("div", { className: "crumbs" }, el("button", { textContent: "Snapshot", onclick: () => browseDialog(s, "", []).catch(e => notice("Something went wrong", e.message)) }));
+  trail.forEach((t, i) => crumbs.append("›", el("button", { textContent: t.label, onclick: () => browseDialog(s, t.path, trail.slice(0, i + 1)).catch(e => notice("Something went wrong", e.message)) })));
+  const t = el("table", null, el("tr", null, ...["Name", "Kind", "Size", "Changed", ""].map(h => el("th", { textContent: h }))));
+  items.sort((a, b) => (a.type === "dir" ? 0 : 1) - (b.type === "dir" ? 0 : 1) || a.name.localeCompare(b.name));
+  for (const it of items) {
+    const full = joinPath(s, path, it.name);
+    const open = it.type === "dir" || it.type === "vm";
+    const name = open ? el("button", { className: "link", textContent: it.name, onclick: () => browseDialog(s, full, trail.concat({ label: it.name, path: full })).catch(e => notice("Something went wrong", e.message)) }) : it.name;
+    t.append(el("tr", null, el("td", { className: "wrap" }, name), el("td", { textContent: kinds[it.type] || it.type }),
+      el("td", { textContent: open ? "" : size(it.size) }), el("td", { textContent: when(it.mtime) }),
+      el("td", null, button("Restore", async () => restoreDialog(s, full)))));
+  }
+  const body = items.length ? el("div", { className: "list" }, t) : el("div", { className: "empty", textContent: "This folder is empty." });
+  const row = el("div", { className: "row" },
+    Object.assign(confirmButton("Forget this snapshot", "Click again to delete this snapshot", async () => { await call("DELETE", "/api/v1/snapshots/" + s.id); $("dlg").close(); await refresh(); }), { style: "margin-right:auto" }),
+    el("button", { textContent: "Close", onclick: () => $("dlg").close() }));
+  if (path) row.append(el("button", { className: "primary", textContent: "Restore this folder", onclick: () => restoreDialog(s, path) }));
+  else row.append(el("button", { className: "primary", textContent: "Restore everything", onclick: () => restoreDialog(s, "") }));
+  openDialog(true, el("h3", { textContent: s.hostname + ", " + when(s.time) }), crumbs, body, row);
+}
+
+const labels = { files: "Files", dirs: "Folders", bytes: "Size", files_changed: "Files changed", bytes_read: "Data read", bytes_uploaded: "New data stored",
+  chunks_new: "New chunks", warnings: "Warnings", skipped: "Already up to date", packs_removed: "Pack files removed", packs_rewritten: "Pack files rewritten",
+  bytes_freed: "Space freed", chunks_removed: "Chunks removed", chunks: "Chunks checked", packs: "Pack files checked", errors: "Errors" };
+function facts(dl, obj) {
+  for (const k in obj || {}) {
+    const v = obj[k];
+    if (v == null || typeof v === "object" && !Array.isArray(v)) continue;
+    const text = Array.isArray(v) ? v.join("\n") : /bytes/.test(k) ? size(v) : String(v);
+    if (text === "") continue;
+    dl.append(el("dt", { textContent: labels[k] || k.replace(/_/g, " ") }), el("dd", { textContent: text }));
+  }
+}
+// jobDialog shows one job and follows it while it runs.
+let jobTimer;
+async function jobDialog(id) {
+  clearTimeout(jobTimer);
+  const j = await call("GET", "/api/v1/jobs/" + id);
+  const dl = el("dl");
+  const add = (k, v) => { if (v) dl.append(el("dt", { textContent: k }), el("dd", null, v)); };
+  add("Status", pill(j.status));
+  add("Machine", agentNames[j.agent_id] || (j.agent_id ? j.agent_id : "the server"));
+  add("Queued", when(j.created)); add("Started", j.started ? when(j.started) : ""); add("Finished", j.finished ? when(j.finished) : "");
+  add("Snapshot", j.snapshot_id || "");
+  if (j.restore) { add("Restored to", j.restore.target || "the original location"); add("Only", (j.restore.include || []).join(", ")); }
+  add("Error", j.error || "");
+  facts(dl, j.result || j.progress);
+  const kids = [el("h3", { textContent: j.type.charAt(0).toUpperCase() + j.type.slice(1) + " job" }), dl];
+  if (j.warnings && j.warnings.length) kids.push(el("label", { textContent: "Warnings (" + j.warnings.length + ")" }), el("pre", { textContent: j.warnings.join("\n"), style: "max-height:30vh;overflow:auto" }));
+  kids.push(el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => { clearTimeout(jobTimer); $("dlg").close(); } })));
+  openDialog(true, ...kids);
+  if (j.status === "queued" || j.status === "running") jobTimer = setTimeout(() => { if ($("dlg").open) jobDialog(id).catch(() => {}); }, 2000);
+}
+$("dlg").addEventListener("close", () => clearTimeout(jobTimer));
+for (const [id, kind] of [["runGC", "gc"], ["runVerify", "verify"]]) {
+  $(id).onclick = async () => { try { const j = await call("POST", "/api/v1/repo/" + kind); await refresh(); await jobDialog(j.id); } catch (e) { notice("Something went wrong", e.message); } };
+}
+$("moreJobs").onclick = () => { jobLimit = jobLimit === 15 ? 100 : 15; $("moreJobs").textContent = jobLimit === 15 ? "Show more" : "Show fewer"; refresh().catch(() => {}); };
 
 $("newToken").onclick = async () => {
   try {
