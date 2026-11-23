@@ -9,6 +9,7 @@ package vss
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"runtime"
 	"sort"
 	"strings"
@@ -79,16 +80,21 @@ func call(obj unsafe.Pointer, slot int, args ...uintptr) uintptr {
 	return r
 }
 
+// inProgressError is VSS_E_SNAPSHOT_SET_IN_PROGRESS: retry later.
+type inProgressError struct{ error }
+
 func check(hr uintptr, what string) error {
 	if int32(hr) >= 0 {
 		return nil
 	}
 	code := uint32(hr)
+	if code == 0x80042316 {
+		return inProgressError{fmt.Errorf("VSS %s failed (0x80042316): another snapshot is already being created", what)}
+	}
 	msg := map[uint32]string{
 		0x80070005: "access denied: the agent must run as an administrator or as a service",
 		0x8004230C: "the volume does not support snapshots",
 		0x8004230F: "the shadow copy provider had an unexpected error",
-		0x80042316: "another snapshot is already being created",
 		0x8004231F: "not enough disk space for the shadow copy storage",
 		0x80042308: "the volume was not found",
 	}[code]
@@ -205,7 +211,20 @@ func Create(paths []string, timeout time.Duration) (set *Set, skipped []string, 
 			ready <- check(hr, "security setup")
 			return
 		}
-		bc, skip, err := s.create(volumes, time.Now().Add(timeout))
+		// Windows allows one snapshot set to be created at a time,
+		// system-wide. If another backup tool is making one, wait for it.
+		deadline := time.Now().Add(timeout)
+		var bc unsafe.Pointer
+		var skip []string
+		var err error
+		for {
+			bc, skip, err = s.create(volumes, deadline)
+			var busy inProgressError
+			if !errors.As(err, &busy) || time.Now().Add(10*time.Second).After(deadline) {
+				break
+			}
+			time.Sleep(2*time.Second + time.Duration(rand.Int63n(int64(3*time.Second))))
+		}
 		skipped = append(skipped, skip...)
 		ready <- err
 		if err != nil {
