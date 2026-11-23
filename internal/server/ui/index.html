@@ -65,7 +65,7 @@ pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:
   <div id="err"></div><button class="primary">Sign in</button></form>
 </div>
 <div id="app" hidden>
-<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="alerts">Email alerts</button><button id="logout">Sign out</button></header>
+<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="offsite">Offsite copy</button><button id="alerts">Email alerts</button><button id="logout">Sign out</button></header>
 <main>
   <section><h2><span>Repository</span><button id="runVerify">Verify all data</button><button id="runGC">Reclaim space</button></h2><div class="stats" id="stats"></div></section>
   <section><h2><span>Agents</span><button id="newToken">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
@@ -109,15 +109,16 @@ function notice(title, text) {
 }
 
 async function refresh() {
-  const [st, agents, policies, jobs, snaps] = await Promise.all([
+  const [st, agents, policies, jobs, snaps, off] = await Promise.all([
     call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
-    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots")]);
+    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite")]);
   $("version").textContent = "version " + st.version;
   agentList = agents;
   agentNames = Object.fromEntries(agents.map(a => [a.id, a.name]));
   const stat = (v, label) => el("div", { className: "stat" }, el("b", { textContent: v }), el("small", { textContent: label }));
   $("stats").replaceChildren(stat(st.agents, "agents"), stat(st.snapshots, "snapshots"), stat(size(st.stored_bytes), "used on disk"),
-    stat(size(st.raw_bytes), "unique data before compression"), stat(st.running_jobs, "jobs running"));
+    stat(size(st.raw_bytes), "unique data before compression"), stat(st.running_jobs, "jobs running"),
+    stat(offsiteSummary(off), "offsite copy"));
   table("agents", ["Name", "Host", "System", "Version", "State", "Last seen", ""],
     agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, a.version, pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen),
       a.revoked ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
@@ -263,6 +264,75 @@ async function alertsDialog() {
     msg, el("div", { className: "row" }, test, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
   $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
 }
+// offsiteSummary says in a few words how the second copy is doing.
+function offsiteSummary(o) {
+  if (!o.kind) return "not set up";
+  const j = o.last_job;
+  if (j && (j.status === "running" || j.status === "queued")) return "copying now";
+  if (j && j.status === "failed") return "last run failed";
+  if (!o.enabled) return "paused";
+  return o.last_success ? when(o.last_success) : "not copied yet";
+}
+async function offsiteDialog() {
+  const o = await call("GET", "/api/v1/offsite");
+  const enabled = el("input", { type: "checkbox", checked: o.kind ? o.enabled : true });
+  const kind = el("select", { id: "offKind" }, el("option", { value: "s3", textContent: "S3-compatible storage (Amazon S3, Backblaze B2, Wasabi, MinIO)" }),
+    el("option", { value: "folder", textContent: "A folder on another disk or network share" }));
+  kind.value = o.kind || "s3";
+  const folder = el("input", { id: "offFolder", value: o.folder || "", placeholder: "For example /mnt/offsite/better-backup or E:\\better-backup" });
+  const endpoint = el("input", { id: "offEndpoint", value: o.endpoint || "", placeholder: "https://s3.us-west-2.amazonaws.com" });
+  const region = el("input", { value: o.region || "", placeholder: "us-east-1" });
+  const bucket = el("input", { id: "offBucket", value: o.bucket || "", placeholder: "Bucket name" });
+  const prefix = el("input", { value: o.prefix || "", placeholder: "Folder in the bucket (optional)" });
+  const access = el("input", { id: "offAccess", value: o.access_key || "", placeholder: "Access key", autocomplete: "off" });
+  const secret = el("input", { id: "offSecret", type: "password", placeholder: o.secret_key_set ? "Saved. Type to replace it." : "Secret key", autocomplete: "new-password" });
+  const vhost = el("input", { type: "checkbox", checked: !!o.virtual_host });
+  const at = el("input", { type: "time", value: o.kind ? (o.daily_at || "") : "03:00" });
+  const s3Box = el("div", null,
+    el("label", { textContent: "Service address and region" }), el("div", { className: "two" }, endpoint, region),
+    el("label", { textContent: "Bucket" }), el("div", { className: "two" }, bucket, prefix),
+    el("label", { textContent: "Access key and secret key" }), el("div", { className: "two" }, access, secret),
+    el("label", { className: "check" }, vhost, "Address the bucket as bucket.host (rarely needed)"));
+  const folderBox = el("div", null, el("label", { textContent: "Folder on the server" }), folder,
+    el("div", { className: "hint", textContent: "The folder must already exist. If the disk or share is not connected, the copy fails instead of writing somewhere else." }));
+  const show = () => { s3Box.hidden = kind.value !== "s3"; folderBox.hidden = kind.value !== "folder"; };
+  kind.onchange = show; show();
+  const msg = el("div", { id: "err" });
+  const say = (text, good) => { msg.textContent = text; msg.style.color = good ? "var(--good)" : ""; };
+  const body = () => ({ enabled: enabled.checked, kind: kind.value, folder: folder.value.trim(), endpoint: endpoint.value.trim(), region: region.value.trim(),
+    bucket: bucket.value.trim(), prefix: prefix.value.trim(), access_key: access.value.trim(), secret_key: secret.value,
+    secret_key_set: !secret.value && !!o.secret_key_set, virtual_host: vhost.checked, daily_at: at.value });
+  const saved = s => { o.secret_key_set = s.secret_key_set; secret.value = ""; if (s.secret_key_set) secret.placeholder = "Saved. Type to replace it."; };
+  const save = el("button", { className: "primary", textContent: "Save" });
+  save.onclick = async () => { try { await call("PUT", "/api/v1/offsite", body()); $("dlg").close(); await refresh(); } catch (e) { say(e.message); } };
+  const test = el("button", { textContent: "Save and test", style: "margin-right:auto" });
+  test.onclick = async () => {
+    say("Testing…", true);
+    try {
+      saved(await call("PUT", "/api/v1/offsite", body()));
+      const t = await call("POST", "/api/v1/offsite/test");
+      say("It works: the location can be read and written. It holds " + t.objects + " files (" + size(t.bytes) + ").", true);
+    } catch (e) { say(e.message); }
+  };
+  const run = el("button", { textContent: "Save and copy now" });
+  run.onclick = async () => {
+    try { saved(await call("PUT", "/api/v1/offsite", body())); const j = await call("POST", "/api/v1/offsite/run"); await refresh(); await jobDialog(j.id); } catch (e) { say(e.message); }
+  };
+  const state = el("dl");
+  if (o.kind) {
+    state.append(el("dt", { textContent: "Last complete copy" }), el("dd", { textContent: o.last_success ? when(o.last_success) : "never" }));
+    if (o.last_job && o.last_job.status === "failed") state.append(el("dt", { textContent: "Last run failed" }), el("dd", { textContent: when(o.last_job.created) + ": " + o.last_job.error }));
+  }
+  openDialog(false, el("h3", { textContent: "Offsite copy" }),
+    el("div", { className: "hint", textContent: "Keeps a second copy of every backup somewhere else, so a fire, theft or dead disk does not take the backups with it. The copy is encrypted like the original. To use it you need the repository key (repo.key), so keep that key somewhere other than this server." }),
+    state,
+    el("label", { className: "check" }, enabled, "Keep the offsite copy up to date"),
+    el("label", { textContent: "Where to keep it" }), kind, s3Box, folderBox,
+    el("label", { textContent: "Update it every day at" }), at,
+    el("div", { className: "hint", textContent: "In the server's time zone. Clear the time to copy only when you press “Save and copy now”. The first copy sends everything and can take long; later ones send only what is new." }),
+    msg, el("div", { className: "row" }, test, run, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
+}
+$("offsite").onclick = () => offsiteDialog().catch(e => notice("Something went wrong", e.message));
 $("alerts").onclick = () => alertsDialog().catch(e => notice("Something went wrong", e.message));
 
 // confirmButton asks for a second click before doing something that
@@ -338,7 +408,8 @@ async function browseDialog(s, path, trail) {
 
 const labels = { files: "Files", dirs: "Folders", bytes: "Size", files_changed: "Files changed", bytes_read: "Data read", bytes_uploaded: "New data stored",
   chunks_new: "New chunks", warnings: "Warnings", skipped: "Already up to date", packs_removed: "Pack files removed", packs_rewritten: "Pack files rewritten",
-  bytes_freed: "Space freed", chunks_removed: "Chunks removed", chunks: "Chunks checked", packs: "Pack files checked", errors: "Errors" };
+  bytes_freed: "Space freed", chunks_removed: "Chunks removed", chunks: "Chunks checked", packs: "Pack files checked", errors: "Errors",
+  uploaded: "Files copied", uploaded_bytes: "Data copied", deleted: "Files removed from the copy", objects: "Files in the copy" };
 function facts(dl, obj) {
   for (const k in obj || {}) {
     const v = obj[k];
@@ -362,7 +433,8 @@ async function jobDialog(id) {
   if (j.restore) { add("Restored to", j.restore.target || "the original location"); add("Only", (j.restore.include || []).join(", ")); }
   add("Error", j.error || "");
   facts(dl, j.result || j.progress);
-  const kids = [el("h3", { textContent: j.type.charAt(0).toUpperCase() + j.type.slice(1) + " job" }), dl];
+  const title = { offsite: "Offsite copy", gc: "Reclaim space", verify: "Verify all data" }[j.type] || j.type.charAt(0).toUpperCase() + j.type.slice(1) + " job";
+  const kids = [el("h3", { textContent: title }), dl];
   if (j.warnings && j.warnings.length) kids.push(el("label", { textContent: "Warnings (" + j.warnings.length + ")" }), el("pre", { textContent: j.warnings.join("\n"), style: "max-height:30vh;overflow:auto" }));
   kids.push(el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => { clearTimeout(jobTimer); $("dlg").close(); } })));
   openDialog(true, ...kids);

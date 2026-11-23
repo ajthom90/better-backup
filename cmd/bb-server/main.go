@@ -13,9 +13,11 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/ajthom90/better-backup/internal/cli"
 	"github.com/ajthom90/better-backup/internal/keys"
+	"github.com/ajthom90/better-backup/internal/offsite"
 	"github.com/ajthom90/better-backup/internal/paths"
 	"github.com/ajthom90/better-backup/internal/repo"
 	"github.com/ajthom90/better-backup/internal/restore"
@@ -32,6 +34,8 @@ Usage:
   bb-server snapshots [flags]        list snapshots straight from the repository
   bb-server restore [flags]          restore straight from the repository, without
                                      a running server or agent (disaster recovery)
+  bb-server fetch [flags]            download an offsite copy of a repository into
+                                     --repo DIR, ready for snapshots and restore
   bb-server version
 
 Flags for serve and service install:
@@ -46,6 +50,13 @@ Flags for restore:
   --target DIR     directory to restore into (required)
   --path PATH      restore only this original path; repeatable
 
+Flags for fetch:
+  --from-folder DIR     the copy is in this folder
+  --s3-endpoint URL     or the copy is in S3-compatible storage:
+  --s3-bucket NAME        with --s3-region, --s3-prefix and --s3-virtual-host as
+                          they were set on the server; the keys are read from
+                          $BB_S3_ACCESS_KEY and $BB_S3_SECRET_KEY
+
 The repository passphrase is read from $BB_REPO_PASSPHRASE, or from the key
 file DATA/repo.key that the server creates on first start.
 `
@@ -55,6 +66,8 @@ type options struct {
 	names              cli.Multi
 	snapshot, target   string
 	include            cli.Multi
+	fromFolder         string
+	s3                 offsite.S3Config
 }
 
 func parse(args []string) (*options, []string) {
@@ -68,6 +81,12 @@ func parse(args []string) (*options, []string) {
 	fs.StringVar(&o.snapshot, "snapshot", "", "")
 	fs.StringVar(&o.target, "target", "", "")
 	fs.Var(&o.include, "path", "")
+	fs.StringVar(&o.fromFolder, "from-folder", "", "")
+	fs.StringVar(&o.s3.Endpoint, "s3-endpoint", "", "")
+	fs.StringVar(&o.s3.Bucket, "s3-bucket", "", "")
+	fs.StringVar(&o.s3.Region, "s3-region", "", "")
+	fs.StringVar(&o.s3.Prefix, "s3-prefix", "", "")
+	fs.BoolVar(&o.s3.VirtualHost, "s3-virtual-host", false, "")
 	pos := cli.Parse(fs, args)
 	if v := os.Getenv("BB_TLS_NAMES"); v != "" {
 		o.names = append(o.names, strings.Split(v, ",")...)
@@ -115,6 +134,8 @@ func main() {
 		err = offline(o, false)
 	case "restore":
 		err = offline(o, true)
+	case "fetch":
+		err = fetch(o)
 	case "version":
 		fmt.Println("bb-server", server.Version, runtime.GOOS+"/"+runtime.GOARCH)
 	default:
@@ -189,5 +210,42 @@ func offline(o *options, doRestore bool) error {
 	if st.Warnings > 0 {
 		os.Exit(1)
 	}
+	return nil
+}
+
+// fetch downloads an offsite copy into the repository directory, so the
+// snapshots and restore commands can read it.
+func fetch(o *options) error {
+	var t offsite.Target
+	var err error
+	switch {
+	case o.fromFolder != "" && o.s3.Endpoint != "":
+		return errors.New("give --from-folder or --s3-endpoint, not both")
+	case o.fromFolder != "":
+		t, err = offsite.NewDir(o.fromFolder)
+	case o.s3.Endpoint != "":
+		o.s3.AccessKey, o.s3.SecretKey = os.Getenv("BB_S3_ACCESS_KEY"), os.Getenv("BB_S3_SECRET_KEY")
+		t, err = offsite.NewS3(o.s3)
+	default:
+		return errors.New("fetch needs --from-folder DIR, or --s3-endpoint URL and --s3-bucket NAME")
+	}
+	if err != nil {
+		return err
+	}
+	if repo.Exists(o.repo) {
+		return fmt.Errorf("%s already holds a repository; choose an empty folder with --repo", o.repo)
+	}
+	fmt.Printf("downloading the copy in %s to %s\n", t, o.repo)
+	last := time.Now()
+	err = offsite.Fetch(context.Background(), t, o.repo, func(done, total int64) {
+		if time.Since(last) > 5*time.Second {
+			last = time.Now()
+			fmt.Printf("  %s of %s\n", cli.Size(done), cli.Size(total))
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("%w\nRun the same command again to continue where it stopped.", err)
+	}
+	fmt.Printf("done. List what it holds with: bb-server snapshots --repo %s --data FOLDER-WITH-repo.key\n", o.repo)
 	return nil
 }

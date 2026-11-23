@@ -16,6 +16,7 @@ const (
 	JobRestore = "restore"
 	JobGC      = "gc"
 	JobVerify  = "verify"
+	JobOffsite = "offsite"
 
 	StatusQueued  = "queued"
 	StatusRunning = "running"
@@ -203,4 +204,45 @@ type AlertSettings struct {
 	// OnWarning also sends mail for backups that finish with warnings,
 	// such as skipped files.
 	OnWarning bool `json:"on_warning,omitempty"`
+}
+
+// OffsiteSettings configures the second copy of the repository: a folder
+// on another disk or share, or a bucket in S3-compatible storage.
+type OffsiteSettings struct {
+	Enabled bool `json:"enabled"`
+	// Kind is "folder" or "s3".
+	Kind   string `json:"kind"`
+	Folder string `json:"folder,omitempty"`
+
+	Endpoint    string `json:"endpoint,omitempty"`
+	Region      string `json:"region,omitempty"`
+	Bucket      string `json:"bucket,omitempty"`
+	Prefix      string `json:"prefix,omitempty"`
+	AccessKey   string `json:"access_key,omitempty"`
+	VirtualHost bool   `json:"virtual_host,omitempty"`
+	// SecretKey is never returned by the server. When saving, leave it
+	// empty and set SecretKeySet to keep the stored key.
+	SecretKey    string `json:"secret_key,omitempty"`
+	SecretKeySet bool   `json:"secret_key_set,omitempty"`
+
+	// DailyAt is when the copy is brought up to date each day, "HH:MM"
+	// in the server's time zone. Empty: only when started by hand.
+	DailyAt string `json:"daily_at,omitempty"`
+	// Saved is when the settings were last changed.
+	Saved time.Time `json:"saved,omitempty"`
+}
+
+// OffsiteStatus is the settings plus how the copy is doing.
+type OffsiteStatus struct {
+	OffsiteSettings
+	// LastSuccess is when the copy was last brought fully up to date.
+	LastSuccess *time.Time `json:"last_success,omitempty"`
+	// LastJob is the most recent copy job, whatever its outcome.
+	LastJob *Job `json:"last_job,omitempty"`
+}
+
+// OffsiteTest is the answer to a connection test.
+type OffsiteTest struct {
+	Objects int   `json:"objects"`
+	Bytes   int64 `json:"bytes"`
 }

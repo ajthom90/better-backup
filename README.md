@@ -40,6 +40,9 @@ backup until it has run beside your current one for a while.
 - **Encryption at rest** (AES-256-GCM) and zstd compression.
 - **Repository maintenance**: garbage collection, and a full verify that reads
   and checks every stored chunk.
+- **Offsite copy**: a second copy of every backup in S3-compatible storage
+  (Amazon S3, Backblaze B2, Wasabi, MinIO) or on another disk or share,
+  brought up to date every day. It is encrypted like the original.
 - **Disaster recovery**: `bb-server restore` reads a repository directly and
   needs only the repository folder and its key.
 - **Runs in Docker or natively** as a systemd unit, launchd daemon or Windows
@@ -210,6 +213,33 @@ policy). Add `--on-warning` to also hear about backups that finish with
 warnings, such as skipped files. The SMTP password is kept in the server's
 database in the data directory, so protect that directory like `repo.key`.
 
+### Offsite copy
+
+Set it up under "Offsite copy" in the web UI, or from the command line:
+
+```sh
+export BB_S3_SECRET_KEY='...'
+bb offsite set --s3-endpoint https://s3.us-west-004.backblazeb2.com \
+    --s3-bucket my-backups --s3-access-key 004abc... --daily-at 03:00
+bb offsite test
+bb offsite run --wait      # the first copy sends everything
+```
+
+For a second disk or a mounted share use `bb offsite set --folder /mnt/offsite`
+instead. The folder must exist: if the disk is not connected the copy fails,
+and you get an email if alerts are on, rather than filling the wrong disk.
+
+Each run sends the pack files and snapshots the copy lacks and removes the
+ones that were forgotten and reclaimed, so the copy matches the repository. It
+runs alongside backups. If most of the repository has disappeared, which
+looks like a dead disk rather than a clean-up, nothing is removed from the
+copy.
+
+The copy is as unreadable without `repo.key` as the repository is, and the key
+is not part of it. **Keep `repo.key` somewhere other than the server**, or
+the offsite copy cannot be used after the server is gone. The S3 secret key is
+kept in the server's database, like the SMTP password.
+
 ### If the server is lost
 
 All you need is the repository folder and `repo.key`:
@@ -219,6 +249,18 @@ bb-server snapshots --repo /mnt/backup-disk/repo --data /folder/holding/repo.key
 bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
     --snapshot SNAPSHOT --target /restore/here
 ```
+
+If the repository is gone too, download the offsite copy first:
+
+```sh
+export BB_S3_ACCESS_KEY='...' BB_S3_SECRET_KEY='...'
+bb-server fetch --repo /mnt/new-disk/repo \
+    --s3-endpoint https://s3.us-west-004.backblazeb2.com --s3-bucket my-backups
+# or: bb-server fetch --repo /mnt/new-disk/repo --from-folder /mnt/offsite
+```
+
+Then use the two commands above, or start a new server with
+`--repo /mnt/new-disk/repo` and `repo.key` in its data directory.
 
 ## Known limits
 
@@ -231,8 +273,9 @@ bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
   restored as its own file).
 - No MSI or `.pkg` installers yet; `service install` does the same job.
   `.deb` and `.rpm` packages are built on release.
-- One repository on a local disk or mounted share. S3-compatible storage and
-  replication to a second site come in Phase 5.
+- The repository itself lives on a local disk or mounted share; S3 is for the
+  offsite copy. The copy holds what the repository holds, so a snapshot
+  forgotten here is also removed there at the next run.
 
 ## Roadmap
 
@@ -242,7 +285,7 @@ bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy (untested on a real host). To do: Resilient Change Tracking, VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. To do: restore in place, DSRM-assisted authoritative and non-authoritative restore |
-| 5. Scale and offsite | S3-compatible backends, replication, Proxmox and KVM providers, Postgres option, user roles |
+| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. To do: Proxmox and KVM providers, Postgres option, user roles |
 | 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |
 
 See [docs/architecture.md](docs/architecture.md) for the design and the
