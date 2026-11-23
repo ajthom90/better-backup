@@ -96,7 +96,7 @@ func openImageTarget(path string, size int64) (io.WriterAt, func() error, error)
 	}
 	// Blank the boot sector so the old file system is not recognized
 	// while its replacement is incomplete.
-	if _, err := v.w.WriteAt(make([]byte, 4096), v.base); err != nil {
+	if _, err := v.write(make([]byte, 4096), v.base); err != nil {
 		f.Close()
 		if disk != nil {
 			disk.Close()
@@ -127,6 +127,7 @@ type volumeWriter struct {
 	w     io.WriterAt
 	base  int64
 	first []byte
+	buf   []byte
 }
 
 func (v *volumeWriter) WriteAt(p []byte, off int64) (int, error) {
@@ -134,13 +135,27 @@ func (v *volumeWriter) WriteAt(p []byte, off int64) (int, error) {
 		v.first = append([]byte(nil), p...)
 		return len(p), nil
 	}
-	return v.w.WriteAt(p, v.base+off)
+	return v.write(p, v.base+off)
+}
+
+// write copies p into sector-aligned memory first. Disk devices reject
+// buffers at odd addresses with "The parameter is incorrect", and chunks
+// from the repository can sit anywhere inside a larger buffer.
+func (v *volumeWriter) write(p []byte, off int64) (int, error) {
+	const align = 4096
+	if len(v.buf) < len(p)+align {
+		v.buf = make([]byte, len(p)+align)
+	}
+	skip := (align - int(uintptr(unsafe.Pointer(&v.buf[0]))%align)) % align
+	b := v.buf[skip : skip+len(p)]
+	copy(b, p)
+	return v.w.WriteAt(b, off)
 }
 
 func (v *volumeWriter) finish() error {
 	if v.first == nil {
 		return nil
 	}
-	_, err := v.w.WriteAt(v.first, v.base)
+	_, err := v.write(v.first, v.base)
 	return err
 }
