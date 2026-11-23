@@ -24,8 +24,21 @@ const tagPrefix = "better-backup "
 // run executes a PowerShell script. Values reach the script through
 // environment variables, never as script text.
 func run(script string, env map[string]string) ([]byte, error) {
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-")
-	cmd.Stdin = strings.NewReader("$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n" + script + "\n")
+	// The script runs from a file: PowerShell reading a script from its
+	// standard input carries on after an error and still exits with 0.
+	f, err := os.CreateTemp("", "bb-*.ps1")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(f.Name())
+	_, err = f.WriteString("$ErrorActionPreference = 'Stop'\r\n$ProgressPreference = 'SilentlyContinue'\r\n" + script + "\r\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", f.Name())
 	cmd.Env = os.Environ()
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)

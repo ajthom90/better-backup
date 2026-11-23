@@ -2,6 +2,7 @@ package hyperv
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -20,8 +21,12 @@ if ($errs.Count -gt 0) { throw (($errs | ForEach-Object { "line $($_.Extent.Star
 			t.Errorf("%s script: %q %v", name, out, err)
 		}
 	}
-	if _, err := run(parse, map[string]string{"BB_SCRIPT": "if ($x { 'broken'"}); err == nil {
-		t.Error("a broken script passed the syntax check")
+	if out, err := run(parse, map[string]string{"BB_SCRIPT": "if ($x { 'broken'"}); err == nil {
+		t.Errorf("a broken script passed the syntax check: %q", out)
+	}
+	// A script that fails must be reported with its message.
+	if _, err := run("throw 'no such machine'", nil); err == nil || !strings.Contains(err.Error(), "no such machine") {
+		t.Errorf("a failing script returned: %v", err)
 	}
 }
 
