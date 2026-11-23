@@ -54,6 +54,10 @@ docker run -d --name better-backup -p 8443:8443 \
   ghcr.io/ajthom90/better-backup:latest
 ```
 
+Images are published to GitHub's registry: `:latest` and `:vX.Y.Z` for releases,
+and `:edge` for the newest commit on `main`. Until the first release exists, use
+`:edge`. The agent image is `ghcr.io/ajthom90/better-backup-agent`.
+
 Or natively (Linux, macOS, Windows), from a release archive:
 
 ```sh
@@ -116,9 +120,11 @@ bb restore SNAPSHOT --target /tmp/restored --wait # to another folder
 bb restore SNAPSHOT --agent other-machine --target /srv/restore --wait
 ```
 
-The web UI at `https://your-server:8443/` shows agents, policies, jobs and
-snapshots, creates and edits policies, sets up email alerts, and can start
-backups and restores. Sign in with the admin token
+Everything can be done in the web UI at `https://your-server:8443/`: add and
+revoke agents, create and edit policies, start backups, browse a snapshot and
+restore a file, a folder, a disk or all of it, follow jobs and read their
+warnings, forget snapshots, verify the repository, reclaim space and set up
+email alerts. The `bb` command line does the same things for scripts. Sign in with the admin token
 from `admin.json` in the data directory. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
 
@@ -172,7 +178,6 @@ bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
   not truncated. Application-aware backup comes in Phase 6.
 - Not yet preserved: NTFS audit entries (SACLs) and EFS encryption, Unix extended attributes and ACLs, hard links (each link is
   restored as its own file).
-- The web UI cannot yet browse the files inside a snapshot; use `bb ls`.
 - No MSI or `.pkg` installers yet; `service install` does the same job.
   `.deb` and `.rpm` packages are built on release.
 - One repository on a local disk or mounted share. S3-compatible storage and
