@@ -36,6 +36,8 @@ Usage:
   bb policy add --name NAME --agent AGENT [--path PATH ...]
         [--volume VOLUME ...]  (block-level image: C: or /dev/vg0/data)
         [--vm NAME ...]        (Hyper-V virtual machine; '*' for all on the host)
+        [--vm-tracking on|check]  (read only what changed in each machine's
+                                disks; check reads all and tests the tracking)
         [--system-state]       (Windows: registry, boot and system files,
                                 Active Directory and SYSVOL on a domain controller)
         [--exclude PATTERN ...] [--every 24h | --daily-at 02:00]
@@ -114,6 +116,7 @@ var (
 	fOver    = fs.String("overwrite", "", "")
 	fWait    = fs.Bool("wait", false, "")
 	fSysSt   = fs.Bool("system-state", false, "")
+	fVMTrack = fs.String("vm-tracking", "", "")
 	fNoSnap  = fs.Bool("no-snapshot", false, "")
 	fSMTP    = fs.String("smtp", "", "")
 	fSec     = fs.String("security", "", "")
@@ -386,7 +389,7 @@ func main() {
 				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state"))
 			}
 			var p api.Policy
-			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, SystemState: *fSysSt,
+			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, VMTracking: *fVMTrack, SystemState: *fSysSt,
 				Schedule: api.Schedule{Interval: *fEvery, DailyAt: *fDaily}, Retention: fKeep, NoSnapshot: *fNoSnap, Enabled: true}, &p)
 			fmt.Printf("created policy %s (%s)\n", p.Name, p.ID)
 		case "run":

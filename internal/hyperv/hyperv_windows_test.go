@@ -15,7 +15,8 @@ $errs = $null
 if ($errs.Count -gt 0) { throw (($errs | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" }) -join '; ') }
 'ok'
 `
-	for name, script := range map[string]string{"list": listScript, "config": configScript, "checkpoint": checkpointScript, "release": releaseScript, "create": createScript} {
+	for name, script := range map[string]string{"list": listScript, "config": configScript, "checkpoint": checkpointScript, "release": releaseScript, "create": createScript,
+		"recovery": recoveryScript, "reference": referenceScript} {
 		out, err := run(parse, map[string]string{"BB_SCRIPT": script})
 		if err != nil || string(out) != "ok" {
 			t.Errorf("%s script: %q %v", name, out, err)

@@ -176,12 +176,17 @@ function policyDialog(p) {
   const enabled = el("input", { type: "checkbox", checked: p ? p.enabled : true });
   const noSnap = el("input", { type: "checkbox", checked: p ? !!p.no_snapshot : false });
   const sysState = el("input", { type: "checkbox", id: "sysState", checked: p ? !!p.system_state : false });
+  const vmTracking = el("select", { id: "vmTracking" },
+    el("option", { value: "", textContent: "Read every disk in full" }),
+    el("option", { value: "on", textContent: "Read only what changed since the last backup" }),
+    el("option", { value: "check", textContent: "Read in full and check the change tracking" }));
+  vmTracking.value = (p && p.vm_tracking) || "";
   const err = el("div", { id: "err" });
   const save = el("button", { className: "primary", textContent: p ? "Save changes" : "Create policy" });
   save.onclick = async () => {
     const retention = {};
     for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
-    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), system_state: sysState.checked,
+    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), vm_tracking: vmTracking.value, system_state: sysState.checked,
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
     try {
@@ -209,6 +214,8 @@ function policyDialog(p) {
     el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS." }),
     el("label", { textContent: "Hyper-V virtual machines (optional)" }), vms,
     el("div", { className: "hint", textContent: "Choose the agent on the Hyper-V host. Each machine is backed up while it runs, from a checkpoint." }),
+    el("label", { textContent: "How virtual machine disks are read" }), vmTracking,
+    el("div", { className: "hint", textContent: "Reading only what changed is much faster and relies on Hyper-V's change tracking. Run a few backups with the checking option first: it reads everything and warns if the tracking missed a change." }),
     el("label", { className: "check" }, sysState, "Windows: back up the system state"),
     el("div", { className: "hint", textContent: "The registry, boot and system files, and on a domain controller the Active Directory database and SYSVOL. It can be restored to a folder; restoring it over a running system is not built yet." }),
     el("label", { textContent: "Schedule" }), el("div", { className: "two" }, kind, el("div", null, at, every)),

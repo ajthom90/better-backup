@@ -136,6 +136,10 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("a policy needs at least one path, volume or virtual machine, or the system state")
 		return
 	}
+	if p.VMTracking != "" && p.VMTracking != "on" && p.VMTracking != "check" {
+		bad(`vm_tracking must be empty, "on" or "check"`)
+		return
+	}
 	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.SystemState && a.OS != "windows" {
 		bad("the system state can only be backed up on a Windows machine")
 		return
@@ -198,7 +202,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, SystemState: p.SystemState, NoSnapshot: p.NoSnapshot}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, VMTracking: p.VMTracking, SystemState: p.SystemState, NoSnapshot: p.NoSnapshot}}
 	return j, s.enqueue(j)
 }
 

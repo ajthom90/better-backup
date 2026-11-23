@@ -47,6 +47,29 @@ type Disk struct {
 	Path string `json:"path"`
 	// File is the name of the disk's image inside the snapshot.
 	File string `json:"file,omitempty"`
+	// TrackingID names the moment of this backup in the disk's change
+	// tracking. The next backup asks the disk what was written since.
+	TrackingID string `json:"tracking_id,omitempty"`
+
+	// Tracked says Changed lists everything written to the disk since
+	// the previous backup.
+	Tracked bool    `json:"-"`
+	Changed []Range `json:"-"`
+}
+
+// Range is a run of bytes of a disk's contents.
+type Range struct{ Off, Len int64 }
+
+// Options says how Prepare freezes a machine.
+type Options struct {
+	// Tracking asks Hyper-V to track changes to the machine's disks, so
+	// that the next backup can skip what did not change.
+	Tracking bool
+	// Previous is the Config of the machine's last backup, if any.
+	Previous *Config
+	// StateDir is a folder where the reference points this program made
+	// are remembered, so they can be removed when they are replaced.
+	StateDir string
 }
 
 // NIC is one network adapter.
