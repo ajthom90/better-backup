@@ -33,8 +33,10 @@ type Options struct {
 	// Target is the directory to restore under. Empty restores in place.
 	Target    string
 	Overwrite string
-	Progress  func(Stats)
-	Warn      func(string)
+	// VMName names a restored virtual machine. Default: its old name.
+	VMName   string
+	Progress func(Stats)
+	Warn     func(string)
 }
 
 // Stats summarizes a restore.
@@ -223,6 +225,8 @@ func (r *restorer) entry(e *tree.Entry, orig, dest string, full bool) error {
 		return r.file(e, dest)
 	case tree.TypeImage:
 		return r.image(e)
+	case tree.TypeVM:
+		return r.vm(e, orig, full)
 	case tree.TypeSymlink:
 		if _, err := os.Lstat(dest); err == nil {
 			if r.opts.Overwrite == OverwriteNever {

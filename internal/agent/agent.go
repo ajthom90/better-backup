@@ -30,6 +30,7 @@ import (
 
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/backup"
+	"github.com/ajthom90/better-backup/internal/hyperv"
 	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/restore"
 	"github.com/ajthom90/better-backup/internal/tree"
@@ -446,6 +447,51 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 			}
 			opts.Images = append(opts.Images, src)
 		}
+		vms := j.Backup.VMs
+		for _, v := range vms {
+			if v == "*" {
+				var lerr error
+				if vms, lerr = hyperv.List(); lerr != nil {
+					warn("could not list the virtual machines on this host: " + lerr.Error())
+				}
+				break
+			}
+		}
+		for _, name := range vms {
+			opts.VMs = append(opts.VMs, backup.VMSource{Name: name, Open: func(vm *backup.VMSource) error {
+				cp, err := hyperv.Prepare(vm.Name, "job "+j.ID)
+				if err != nil {
+					return err
+				}
+				release := func() {
+					if rerr := cp.Release(); rerr != nil {
+						warn("virtual machine " + vm.Name + ": removing the backup checkpoint failed; remove it in Hyper-V Manager: " + rerr.Error())
+					}
+				}
+				for _, w := range cp.Warnings {
+					warn(w)
+				}
+				vm.ConfigName = hyperv.ConfigFile
+				if vm.Config, err = json.Marshal(cp.Config); err != nil {
+					release()
+					return err
+				}
+				for _, d := range cp.Config.Disks {
+					src, err := backup.OpenImage(d.File, d.Path)
+					if err != nil {
+						for _, o := range vm.Disks {
+							o.Close()
+						}
+						release()
+						return fmt.Errorf("opening its disk %s: %w", d.Path, err)
+					}
+					vm.Disks = append(vm.Disks, src)
+				}
+				vm.Close = release
+				log.Info("virtual machine checkpoint created", "vm", vm.Name, "disks", len(vm.Disks))
+				return nil
+			}})
+		}
 		req.Sources, stats, err = backup.Run(jctx, a.c, opts)
 		for _, src := range opts.Images {
 			src.Close() // a no-op for images the backup already closed
@@ -457,7 +503,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		get := func(id keys.ID) ([]byte, error) { return a.c.Get(jctx, id) }
 		stats, err = restore.Run(jctx, get, restore.Options{
 			Sources: j.Restore.Sources, SourceOS: j.Restore.SourceOS, Include: j.Restore.Include,
-			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite,
+			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName,
 			Progress: func(s restore.Stats) { setProgress(s) }, Warn: warn})
 		req.Restore = &stats
 	default:

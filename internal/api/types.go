@@ -74,7 +74,10 @@ type Policy struct {
 	Excludes []string `json:"excludes,omitempty"`
 	// Volumes are backed up as block-level images: drive letters such as
 	// "C:" on Windows, or block devices such as /dev/vg0/data elsewhere.
-	Volumes   []string  `json:"volumes,omitempty"`
+	Volumes []string `json:"volumes,omitempty"`
+	// VMs are Hyper-V virtual machines to back up from their host, by
+	// name. "*" means every machine on the host.
+	VMs       []string  `json:"vms,omitempty"`
 	Schedule  Schedule  `json:"schedule"`
 	Retention Retention `json:"retention"`
 	// NoSnapshot backs up the live file system instead of a volume
@@ -89,6 +92,7 @@ type BackupSpec struct {
 	Paths      []string     `json:"paths"`
 	Excludes   []string     `json:"excludes,omitempty"`
 	Volumes    []string     `json:"volumes,omitempty"`
+	VMs        []string     `json:"vms,omitempty"`
 	NoSnapshot bool         `json:"no_snapshot,omitempty"`
 	Parent     []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
 }
@@ -100,6 +104,7 @@ type RestoreSpec struct {
 	Include    []string     `json:"include,omitempty"`
 	Target     string       `json:"target,omitempty"` // empty: restore in place
 	Overwrite  string       `json:"overwrite,omitempty"`
+	VMName     string       `json:"vm_name,omitempty"` // name for a restored virtual machine
 }
 
 type Job struct {
@@ -135,6 +140,8 @@ type RestoreRequest struct {
 	Include    []string `json:"include,omitempty"`
 	Target     string   `json:"target,omitempty"`
 	Overwrite  string   `json:"overwrite,omitempty"`
+	// VMName names a restored virtual machine. Default: its old name.
+	VMName string `json:"vm_name,omitempty"`
 }
 
 type EnrollToken struct {

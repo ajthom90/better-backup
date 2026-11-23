@@ -1,13 +1,16 @@
 package restore
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
+	"github.com/ajthom90/better-backup/internal/hyperv"
 	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/tree"
 )
@@ -35,6 +38,11 @@ func (r *restorer) image(e *tree.Entry) error {
 		}
 		r.imageDest = true
 	}
+	return r.imageTo(e, dest)
+}
+
+// imageTo writes an image to dest: a device, or a file to create.
+func (r *restorer) imageTo(e *tree.Entry, dest string) error {
 	w, fresh, done, err := openImageTarget(dest, e.Size)
 	if err != nil {
 		return fmt.Errorf("image %s: %w", e.Name, err)
@@ -102,4 +110,88 @@ func createImageFile(path string, size int64) (io.WriterAt, bool, func() error, 
 		return nil, false, nil, err
 	}
 	return f, true, f.Close, nil
+}
+
+// vm restores a virtual machine: its disks go into a folder named after
+// it under the target, and a new machine is built around them. With
+// full false only the disks picked by Include are restored, as images.
+func (r *restorer) vm(e *tree.Entry, orig string, full bool) error {
+	var children []tree.Entry
+	for _, p := range e.Subtree {
+		page, err := tree.ReadPage(r.get, p)
+		if err != nil {
+			return err
+		}
+		children = append(children, page...)
+	}
+	if !full {
+		for i := range children {
+			c := &children[i]
+			if c.Type == tree.TypeImage && r.match(r.join(orig, c.Name)) == matchFull {
+				if err := r.image(c); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if r.opts.Target == "" {
+		return fmt.Errorf("restoring the virtual machine %s needs a target folder for its files; it is restored as a new machine beside the original", e.Name)
+	}
+	name := r.opts.VMName
+	if name == "" {
+		name = e.Name
+	}
+	var cfg hyperv.Config
+	var disks []*tree.Entry
+	for i := range children {
+		c := &children[i]
+		switch {
+		case c.Type == tree.TypeImage && c.Name == filepath.Base(c.Name):
+			disks = append(disks, c)
+		case c.Type == tree.TypeFile && c.Name == hyperv.ConfigFile:
+			var raw []byte
+			err := tree.EachContent(r.get, c, func(id keys.ID) error {
+				b, err := r.get(id)
+				raw = append(raw, b...)
+				return err
+			})
+			if err == nil {
+				err = json.Unmarshal(raw, &cfg)
+			}
+			if err != nil {
+				return fmt.Errorf("virtual machine %s: reading its configuration: %w", e.Name, err)
+			}
+		}
+	}
+	if cfg.Generation == 0 {
+		return fmt.Errorf("virtual machine %s has no configuration in this snapshot", e.Name)
+	}
+	if runtime.GOOS != "windows" {
+		return fmt.Errorf("the virtual machine %s can only be rebuilt on a Hyper-V host; elsewhere restore its disks one at a time with --path", e.Name)
+	}
+	safe := strings.Map(func(c rune) rune {
+		if strings.ContainsRune(`/\:*?"<>|`, c) {
+			return '_'
+		}
+		return c
+	}, name)
+	dir := filepath.Join(r.opts.Target, safe)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	for _, d := range disks {
+		if err := r.imageTo(d, filepath.Join(dir, d.Name)); err != nil {
+			return err
+		}
+	}
+	warnings, err := hyperv.Create(cfg, dir, name)
+	for _, w := range warnings {
+		r.warn("%s: %s", name, w)
+	}
+	if err != nil {
+		return fmt.Errorf("%w (its disks were restored to %s)", err, dir)
+	}
+	r.stats.Files++
+	return nil
 }

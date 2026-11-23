@@ -101,3 +101,76 @@ func allZero(b []byte) bool {
 	}
 	return true
 }
+
+// VMSource is a virtual machine to back up: its configuration and the
+// frozen disks to image.
+type VMSource struct {
+	Name string
+	// ConfigName and Config become a small file in the snapshot.
+	ConfigName string
+	Config     []byte
+	Disks      []ImageSource
+	// Open, if set, is called just before the machine is read and fills
+	// in the fields above. Taking the checkpoint here, and not when the
+	// job starts, keeps each machine's checkpoint short-lived.
+	Open func(*VMSource) error
+	// Close, if set, is called when the machine has been read. It is
+	// where a checkpoint is released.
+	Close func()
+}
+
+// vm stores one virtual machine. If any disk cannot be read the whole
+// machine is left out: half a machine is not a backup.
+func (a *archiver) vm(src *VMSource) (*tree.Entry, error) {
+	if src.Open != nil {
+		if err := src.Open(src); err != nil {
+			a.warn("virtual machine %s was not backed up: %v", src.Name, err)
+			return nil, nil
+		}
+	}
+	if src.Close != nil {
+		defer src.Close()
+	}
+	now := time.Now().UnixNano()
+	pw := tree.NewPageWriter(a.put)
+	id, err := a.put(src.Config)
+	if err != nil {
+		return nil, err
+	}
+	cfg := &tree.Entry{Name: src.ConfigName, Type: tree.TypeFile, Mode: 0o600, Size: int64(len(src.Config)), ModTime: now, Content: []keys.ID{id}}
+	if err := pw.Add(cfg); err != nil {
+		return nil, err
+	}
+	failed := false
+	for i := range src.Disks {
+		if failed {
+			if c := src.Disks[i].Close; c != nil {
+				c()
+			}
+			continue
+		}
+		e, err := a.image(&src.Disks[i], nil)
+		if err != nil {
+			return nil, err
+		}
+		if e == nil {
+			failed = true
+			continue
+		}
+		a.stats.Files-- // the machine is counted once, below
+		if err := pw.Add(e); err != nil {
+			return nil, err
+		}
+	}
+	if failed {
+		a.warn("virtual machine %s was not backed up because one of its disks could not be read", src.Name)
+		return nil, nil
+	}
+	pages, err := pw.Finish()
+	if err != nil {
+		return nil, err
+	}
+	a.stats.Files++
+	a.stats.FilesChanged++
+	return &tree.Entry{Name: src.Name, Type: tree.TypeVM, ModTime: now, Subtree: pages}, nil
+}
