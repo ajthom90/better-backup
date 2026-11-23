@@ -287,11 +287,12 @@ function restoreDialog(s, path) {
   const only = el("input", { value: path || "", placeholder: "Leave empty to restore everything in the snapshot" });
   const mode = el("select", null, el("option", { value: "if-changed", textContent: "Replace files that differ from the backup" }),
     el("option", { value: "always", textContent: "Replace every file" }), el("option", { value: "never", textContent: "Only restore missing files" }));
+  const vmName = el("input", { id: "vmName", placeholder: "Leave empty to keep its old name" });
   const err = el("div", { id: "err" });
   const go = el("button", { className: "primary", textContent: "Start restore" });
   go.onclick = async () => {
     try {
-      const j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: agent.value, target: target.value.trim(), include: only.value.trim() ? [only.value.trim()] : [], overwrite: mode.value });
+      const j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: agent.value, target: target.value.trim(), include: only.value.trim() ? [only.value.trim()] : [], overwrite: mode.value, vm_name: vmName.value.trim() });
       await refresh(); await jobDialog(j.id);
     } catch (e) { err.textContent = e.message; }
   };
@@ -302,6 +303,8 @@ function restoreDialog(s, path) {
     el("label", { textContent: "Put it in" }), target,
     el("div", { className: "hint", textContent: "A folder on the chosen machine. A disk image can also go to a volume (E:), a device, or a new file (.img, or .vhdx on Windows). Restoring onto a different machine needs a folder here." }),
     el("label", { textContent: "Existing files" }), mode,
+    el("label", { textContent: "Name for a restored virtual machine" }), vmName,
+    el("div", { className: "hint", textContent: "Only for Hyper-V machines. A virtual machine is restored as a new machine, switched off, with its disks in the folder above, which must be on a Hyper-V host." }),
     err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
 }
 

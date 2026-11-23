@@ -153,6 +153,9 @@ bb restore SNAPSHOT --path web01 --target D:\Restored --name web01-restored --wa
 bb restore SNAPSHOT --path 'web01\disk-scsi-0-0.vhdx' --target D:\Restored\disk.vhdx --wait
 ```
 
+The web UI does the same: list the machines under "Hyper-V virtual machines" when you
+add a policy, and give the new machine a name in the restore dialog.
+
 Each machine is backed up while it runs. The agent takes a checkpoint (a
 production checkpoint if the machine is set to use them, so applications in
 the guest are flushed), images every virtual disk as it was at that moment,
