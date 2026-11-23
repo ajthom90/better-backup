@@ -127,7 +127,9 @@ func wait(async unsafe.Pointer, what string, deadline time.Time) error {
 		switch {
 		case uint32(status) == sFinished:
 			return nil
-		case uint32(status) != sPending:
+		case uint32(status) != sPending && status != 0:
+			// A status of 0 has been seen from an operation that had not
+			// finished: keep waiting, like for "pending".
 			if err := check(uintptr(uint32(status)), what); err != nil {
 				return err
 			}
