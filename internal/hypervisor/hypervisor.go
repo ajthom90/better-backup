@@ -75,6 +75,12 @@ type Target struct {
 	Place string
 	// Name is the new machine's name.
 	Name string
+	// Folder names the folder under Place that drivers which make one
+	// for a machine's files use. Empty: one named after the machine.
+	Folder string
+	// Replace says a machine called Name may exist now and will have
+	// been set aside (see Replacer) by the time Finish is called.
+	Replace bool
 	// OpenFile creates a disk image file the way a plain image restore
 	// would; drivers whose disks are ordinary files use it.
 	OpenFile func(path string, size int64) (w io.WriterAt, fresh bool, done func() error, err error)
@@ -111,6 +117,29 @@ type Restore interface {
 // Aborter is a Restore that has something to undo when the restore
 // fails before Finish.
 type Aborter interface{ Abort() }
+
+// Replacer is a Driver that can restore a machine over the one that
+// has its name. The machine that is there is not deleted: it is
+// switched off and renamed, after the disks of the backup have been
+// restored, so that a restore that fails or disappoints loses nothing.
+type Replacer interface {
+	// Find says whether a machine called name exists and, if it does,
+	// where a restored copy's files should go: what Target.Place takes.
+	Find(ctx context.Context, conn *Connection, name string) (place string, found bool, err error)
+	// SetAside switches the machine off, if it runs, and renames it.
+	SetAside(ctx context.Context, conn *Connection, name, aside string) error
+	// PutBack gives a machine that was set aside its name back. It
+	// stays switched off.
+	PutBack(ctx context.Context, conn *Connection, name, aside string) error
+}
+
+// FolderFor is the folder a machine's files go into under t.Place.
+func (t Target) FolderFor() string {
+	if t.Folder != "" {
+		return SafeName(t.Folder)
+	}
+	return SafeName(t.Name)
+}
 
 // Driver backs up and restores the machines of one kind of hypervisor.
 type Driver interface {

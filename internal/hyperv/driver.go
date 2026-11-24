@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/ajthom90/better-backup/internal/backup"
 	"github.com/ajthom90/better-backup/internal/hypervisor"
@@ -82,7 +83,7 @@ func (d driver) NewRestore(_ context.Context, config []byte, t hypervisor.Target
 	if t.Place == "" {
 		return nil, errors.New("it needs a target folder on the Hyper-V host for its files")
 	}
-	dir := filepath.Join(t.Place, hypervisor.SafeName(t.Name))
+	dir := filepath.Join(t.Place, t.FolderFor())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -102,3 +103,48 @@ func (r *restore) Disk(d hypervisor.DiskSpec) (io.WriterAt, bool, func() error, 
 }
 
 func (r *restore) Finish() ([]string, error) { return Create(r.cfg, r.dir, r.t.Name) }
+
+// Find, SetAside and PutBack make driver a hypervisor.Replacer.
+
+func (driver) Find(_ context.Context, _ *hypervisor.Connection, name string) (string, bool, error) {
+	disk, found, err := Locate(name)
+	if err != nil || !found {
+		return "", found, err
+	}
+	return placeBeside(disk), true, nil
+}
+
+func (driver) SetAside(_ context.Context, _ *hypervisor.Connection, name, aside string) error {
+	return Rename(name, aside, true)
+}
+
+func (driver) PutBack(_ context.Context, _ *hypervisor.Connection, name, aside string) error {
+	return Rename(aside, name, false)
+}
+
+// placeBeside says where a copy of a machine goes whose first disk is
+// the file disk: next to the folder that holds the disk, or in that
+// folder if it is the top of a drive. An empty disk gives "".
+func placeBeside(disk string) string {
+	if disk == "" {
+		return ""
+	}
+	dir := winDir(disk)
+	if up := winDir(dir); up != dir && len(strings.TrimRight(up, `\/`)) > 2 {
+		return up
+	}
+	return dir
+}
+
+// winDir is filepath.Dir for a Windows path, on any system.
+func winDir(p string) string {
+	p = strings.TrimRight(p, `\/`)
+	i := strings.LastIndexAny(p, `\/`)
+	if i < 0 {
+		return p
+	}
+	if i == 2 && p[1] == ':' {
+		return p[:3]
+	}
+	return p[:i]
+}

@@ -456,6 +456,25 @@ A restore builds a new machine, switched off, with its disks under the target
 folder and the same generation, processors, memory, disk positions, network
 adapters and secure boot setting. Single disks can be restored on any agent.
 
+**Over the original.** To roll a machine back, tick "Put it back over the
+original virtual machine" in the restore dialog, or use `--replace`:
+
+```sh
+bb restore SNAPSHOT --path web01 --replace --wait
+```
+
+The disks from the backup are written first, into a new folder near the
+machine's first disk (or under the target, if you give one); the job says where.
+Only then is the machine that is there shut down (turned off if it has not
+shut down after two minutes) and renamed to "web01 (replaced DATE TIME)", and
+the restored one created under its name, switched off. Nothing is deleted: if
+the restore fails the old machine gets its name back, and after a good one
+you delete the old machine and its disks yourself once you are sure. Do not
+run both, since they have the same network addresses. If no machine of that
+name exists, a new one is made, which then needs a target. This also works
+for KVM with libvirt, where it is tested against a real machine; on Hyper-V
+it has not been run yet. It is not built for Proxmox VE or VMware.
+
 Backup and restore have been run on a real Hyper-V host, but the automated
 tests cover only the disk imaging underneath, because the test machines have
 no Hyper-V.

@@ -436,3 +436,59 @@ func Create(cfg Config, dir, name string) ([]string, error) {
 	}
 	return warnings, nil
 }
+
+// locateScript prints the file of a machine's first disk, or nothing
+// if there is no such machine.
+const locateScript = `
+$vms = @(Get-VM -Name $env:BB_VM -ErrorAction SilentlyContinue)
+if ($vms.Count -gt 1) { throw "more than one virtual machine is called '$($env:BB_VM)'; rename the others first" }
+if ($vms.Count -eq 1) {
+  "found"
+  $d = Get-VMHardDiskDrive -VM $vms[0] | Where-Object { $_.Path } | Select-Object -First 1
+  if ($d) { "$($d.Path)" }
+}
+`
+
+// Locate says whether a machine called name exists, and the file of
+// its first disk.
+func Locate(name string) (disk string, found bool, err error) {
+	out, err := run(locateScript, map[string]string{"BB_VM": name})
+	if err != nil {
+		return "", false, err
+	}
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(string(out)), "\r", ""), "\n")
+	if lines[0] != "found" {
+		return "", false, nil
+	}
+	if len(lines) > 1 {
+		disk = strings.TrimSpace(lines[1])
+	}
+	return disk, true, nil
+}
+
+// renameScript renames a machine. With BB_OFF it is switched off first:
+// asked to shut down, and turned off if it does not within two minutes.
+const renameScript = `
+$vms = @(Get-VM -Name $env:BB_VM -ErrorAction SilentlyContinue)
+if ($vms.Count -ne 1) { throw "expected one virtual machine called '$($env:BB_VM)', found $($vms.Count)" }
+if (Get-VM -Name $env:BB_TO -ErrorAction SilentlyContinue) { throw "a virtual machine named '$($env:BB_TO)' already exists" }
+$vm = $vms[0]
+if ($env:BB_OFF -and $vm.State -ne 'Off') {
+  $job = Stop-VM -VM $vm -Force -AsJob -ErrorAction SilentlyContinue
+  if ($job) { Wait-Job $job -Timeout 120 | Out-Null }
+  $vm = Get-VM -Id $vm.Id
+  if ($vm.State -ne 'Off') { Stop-VM -VM $vm -TurnOff -Force }
+}
+Rename-VM -VM $vm -NewName $env:BB_TO
+`
+
+// Rename gives the machine called name the name to. With off it is
+// switched off first.
+func Rename(name, to string, off bool) error {
+	env := map[string]string{"BB_VM": name, "BB_TO": to}
+	if off {
+		env["BB_OFF"] = "1"
+	}
+	_, err := run(renameScript, env)
+	return err
+}

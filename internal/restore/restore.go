@@ -38,6 +38,10 @@ type Options struct {
 	// With a whole machine it asks for a new Hyper-V machine of that
 	// name to be built around the restored disks.
 	VMName string
+	// VMReplace lets a restored virtual machine take the place of the
+	// one that has its name. That one is switched off and renamed when
+	// the disks from the backup are in place; it is not deleted.
+	VMReplace bool
 	// Disks says where the disks of a whole machine go: the name a disk
 	// has in the backup ("disk0") to a disk device or a file to create.
 	// Empty puts them in files under Target.

@@ -802,6 +802,28 @@ function restoreDialog(s, path) {
     el("label", { textContent: "Domain controller: restore these parts of Active Directory authoritatively (optional)" }), sysAuthDN,
     el("div", { className: "hint", textContent: "Objects under these names, as they were in the backup, replace the newer ones on every domain controller. Use it to bring back deleted objects. Leave empty for an ordinary restore, which catches up from the other domain controllers." }),
     el("label", { textContent: "Confirm" }), sysConfirm);
+  // A virtual machine can go back over the one that has its name.
+  const vms = s.sources.filter(x => x.type === "vm").map(x => x.name);
+  const vmOver = el("input", { type: "checkbox", id: "vmReplace" });
+  const vmOverWarn = el("div", { className: "warn", id: "vmReplaceWarn" });
+  const vmConfirm = el("input", { id: "vmReplaceConfirm" });
+  const vmOverOpts = el("div", { hidden: true }, vmOverWarn, el("label", { textContent: "Confirm" }), vmConfirm);
+  // replaced names the machines a restore over the originals touches,
+  // and the word that confirms it.
+  const replaced = () => {
+    const one = only.value.trim(), hit = vms.find(v => s.os === "windows" ? v.toLowerCase() === one.toLowerCase() : v === one);
+    const names = !one ? vms : hit ? [hit] : [];
+    if (names.length === 1 && vmName.value.trim()) names[0] = vmName.value.trim();
+    return { names, word: names.length === 1 ? names[0] : s.hostname };
+  };
+  const vmOverText = () => {
+    const { names, word } = replaced();
+    vmOverWarn.textContent = !names.length ? "Choose a whole virtual machine above, or leave “Only this” empty for every machine in the snapshot. A single disk cannot replace a machine."
+      : "This switches off " + (names.length === 1 ? "the virtual machine " + names[0] : names.length + " virtual machines (" + names.join(", ") + ")") + " and puts the copy from this backup in its place, switched off. Whatever changed on " + (names.length === 1 ? "it" : "them") + " since " + when(s.time) + " is not in the restored copy. Nothing is deleted: the machine that is there now is kept, switched off, under a name that ends in “(replaced …)”, until you delete it. If there is no machine of that name, a new one is made.";
+    vmConfirm.placeholder = "Type " + word + " to confirm";
+  };
+  vmOver.onchange = () => { vmOverOpts.hidden = !vmOver.checked; vmOverText(); target.placeholder = vmOver.checked ? "Leave empty to put its files beside the original machine's" : "Leave empty to restore in place, over the originals"; };
+  only.oninput = vmName.oninput = vmOverText;
   const fileOpts = el("div");
   inPlace.onchange = () => { sysOpts.hidden = !inPlace.checked; fileOpts.hidden = inPlace.checked; if (inPlace.checked) agent.value = s.agent_id; agent.disabled = inPlace.checked; };
   const err = el("div", { id: "err" });
@@ -813,8 +835,14 @@ function restoreDialog(s, path) {
         if (sysConfirm.value.trim().toLowerCase() !== s.hostname.toLowerCase()) { err.textContent = "Type the machine's name, " + s.hostname + ", to confirm."; return; }
         j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: s.agent_id,
           system_state: { registry: sysReg.checked, restart: sysRestart.checked, authoritative_sysvol: sysAuthVol.checked, authoritative_subtrees: lines(sysAuthDN.value) } });
-      } else
-      j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: agent.value, target: target.value.trim(), include: only.value.trim() ? [only.value.trim()] : [], overwrite: mode.value, vm_name: vmName.value.trim(), vmware_server: vmware.value });
+      } else {
+        if (vmOver.checked) {
+          const { names, word } = replaced();
+          if (!names.length) { err.textContent = "Choose a whole virtual machine to put back over the original."; return; }
+          if (vmConfirm.value.trim().toLowerCase() !== word.toLowerCase()) { err.textContent = "Type " + word + " to confirm."; return; }
+        }
+        j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: agent.value, target: target.value.trim(), include: only.value.trim() ? [only.value.trim()] : [], overwrite: mode.value, vm_name: vmName.value.trim(), vm_replace: vmOver.checked, vmware_server: vmware.value });
+      }
       await refresh(); await jobDialog(j.id);
     } catch (e) { err.textContent = e.message; }
   };
@@ -830,6 +858,9 @@ function restoreDialog(s, path) {
     hasM365 ? el("div", { className: "hint", id: "m365RestoreHint", textContent: "Mail and files from Microsoft 365 always go into a folder: each message as an .eml file that Outlook and other mail programs open, and the OneDrive files as they were. Putting them straight back into a mailbox or a OneDrive is not built yet." }) : "",
     el("label", { textContent: "Existing files" }), mode,
     el("label", { textContent: "Name for a restored virtual machine" }), vmName,
+    vms.length ? el("label", { className: "check" }, vmOver, "Put it back over the original virtual machine") : "",
+    vms.length ? el("div", { className: "hint", textContent: "For Hyper-V and KVM with libvirt. Restore onto the host the machine runs on. Without this, a virtual machine is restored as a new one beside the original." }) : "",
+    vmOverOpts,
     el("div", { className: "hint", textContent: "Only for virtual machines. One is restored as a new machine, switched off, with its disks in the place above. Restore it onto a host of the same kind it was backed up from: Hyper-V, Proxmox VE, or KVM with libvirt (there a folder such as /var/lib/libvirt/images)." }),
     el("div", { className: "hint", textContent: "A whole-machine backup goes into the folder above as virtual disks (.vhdx on Windows) that start like the original. Give a name here and a Hyper-V host above to have a new virtual machine built around them, switched off and not connected to the network. To rebuild a physical machine, use “Bare-metal recovery” at the top of the page." }),
     vmwareBox);

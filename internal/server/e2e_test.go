@@ -181,6 +181,10 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal("restored file differs from the original")
 	}
 	// A system state restore needs a snapshot that holds one.
+	// A snapshot of files has no virtual machine to put back.
+	if err := e.admin.Do("POST", "/api/v1/restores", api.RestoreRequest{SnapshotID: j1.SnapshotID, VMReplace: true}, &rj); err == nil || !strings.Contains(err.Error(), "holds no virtual machine") {
+		t.Fatalf("vm_replace on a snapshot of files: %v", err)
+	}
 	if err := e.admin.Do("POST", "/api/v1/restores", api.RestoreRequest{SnapshotID: j1.SnapshotID, SystemState: &api.SystemStateRestore{Registry: true}}, &rj); err == nil || !strings.Contains(err.Error(), "holds no system state") {
 		t.Fatalf("system state restore from a file snapshot: %v", err)
 	}
