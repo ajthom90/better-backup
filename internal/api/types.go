@@ -554,6 +554,15 @@ type OffsiteSettings struct {
 	SecretKey    string `json:"secret_key,omitempty"`
 	SecretKeySet bool   `json:"secret_key_set,omitempty"`
 
+	// LockDays, for S3 storage with Object Lock: everything in the copy
+	// is locked against deletion and overwriting, with any credentials,
+	// for this many days, and the lock is renewed as long as the server
+	// keeps the copy up to date. 0: no lock.
+	LockDays int `json:"lock_days,omitempty"`
+	// LockMode is "compliance" (nobody can lift the lock; the default)
+	// or "governance" (an account with a special permission can).
+	LockMode string `json:"lock_mode,omitempty"`
+
 	// DailyAt is when the copy is brought up to date each day, "HH:MM"
 	// in the server's time zone. Empty: only when started by hand.
 	DailyAt string `json:"daily_at,omitempty"`
@@ -568,12 +577,17 @@ type OffsiteStatus struct {
 	LastSuccess *time.Time `json:"last_success,omitempty"`
 	// LastJob is the most recent copy job, whatever its outcome.
 	LastJob *Job `json:"last_job,omitempty"`
+	// LockedUntil is the date everything in the copy was locked to by
+	// the last run that locked.
+	LockedUntil *time.Time `json:"locked_until,omitempty"`
 }
 
 // OffsiteTest is the answer to a connection test.
 type OffsiteTest struct {
 	Objects int   `json:"objects"`
 	Bytes   int64 `json:"bytes"`
+	// Locks: the bucket can lock what is stored in it.
+	Locks bool `json:"locks,omitempty"`
 }
 
 // RecoveryConfig tells a machine started from the recovery disc where
@@ -774,6 +788,9 @@ type SetupRequest struct {
 type RecoverRequest struct {
 	Offsite OffsiteSettings `json:"offsite"`
 	Key     string          `json:"key"`
+	// AsOf, for a copy in a bucket with Object Lock: take the copy as it
+	// was at this time, ignoring what was deleted or overwritten since.
+	AsOf *time.Time `json:"as_of,omitempty"`
 }
 
 // UnlockRequest gives a server the key of the repository it found.

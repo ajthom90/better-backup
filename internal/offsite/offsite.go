@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Object is one file of a copy. Names use forward slashes.
@@ -43,11 +45,54 @@ type Target interface {
 	String() string
 }
 
+// Locker is a place that can keep what is stored in it from being
+// deleted or written over until a date, whoever asks: a bucket with S3
+// Object Lock.
+type Locker interface {
+	// CheckLock reports why the place cannot lock, or nil if it can.
+	CheckLock(ctx context.Context) error
+	// SetLock makes every later Put lock what it stores until then.
+	// mode is LockCompliance or LockGovernance.
+	SetLock(mode string, until time.Time)
+	// Relock moves the date of an object that is already stored.
+	Relock(ctx context.Context, name string, until time.Time) error
+	// Prune removes what was deleted or replaced before cutoff and is
+	// no longer locked, and returns how many versions it removed.
+	Prune(ctx context.Context, cutoff time.Time) (int, error)
+	// AsOf returns a read-only view of the copy as it was at a time.
+	AsOf(at time.Time) Target
+}
+
+// Lock asks Sync to keep the copy locked.
+type Lock struct {
+	// Days is how long everything in the copy stays locked, counted
+	// from the last run.
+	Days int
+	Mode string
+	// Until is the date the previous run left every object locked to.
+	Until time.Time
+}
+
+// lockDate returns the date to lock to at a given moment. Dates move in
+// steps, so that the objects already in the copy need a new date once
+// per step instead of on every run. An object is locked for Days at
+// least and Days plus one step at most.
+func lockDate(now time.Time, days int) time.Time {
+	step := time.Duration(min(10, max(1, days/3))) * 24 * time.Hour
+	return now.Add(time.Duration(days) * 24 * time.Hour).Truncate(step).Add(step).UTC()
+}
+
 // Result reports what a Sync did.
 type Result struct {
 	Uploaded      int   `json:"uploaded"`
 	UploadedBytes int64 `json:"uploaded_bytes"`
 	Deleted       int   `json:"deleted"`
+	// Relocked counts the objects whose lock was moved to a later date,
+	// Pruned the old versions removed after their lock ran out, and
+	// LockedUntil is the date everything in the copy is locked to.
+	Relocked    int        `json:"relocked,omitempty"`
+	Pruned      int        `json:"pruned,omitempty"`
+	LockedUntil *time.Time `json:"locked_until,omitempty"`
 	// Objects and Bytes describe the copy after the run.
 	Objects int   `json:"objects"`
 	Bytes   int64 `json:"bytes"`
@@ -124,9 +169,27 @@ func repoID(b []byte) string {
 // picked up by the next run. It must not run while the repository is
 // being garbage collected, because that moves data between pack files.
 //
+// With lock set, everything uploaded is locked, what is already there
+// has its lock moved on when it is due, and deleting only hides: the
+// versions stay until their lock has run out and a later run removes
+// them.
+//
 // progress, if set, is called with the running totals.
-func Sync(ctx context.Context, dir string, t Target, progress func(Result)) (Result, error) {
+func Sync(ctx context.Context, dir string, t Target, lock *Lock, progress func(Result)) (Result, error) {
 	var res Result
+	var locker Locker
+	var until time.Time
+	if lock != nil && lock.Days > 0 {
+		var ok bool
+		if locker, ok = t.(Locker); !ok {
+			return res, fmt.Errorf("%s cannot lock what is stored in it; only S3-compatible storage with Object Lock can", t)
+		}
+		if err := locker.CheckLock(ctx); err != nil {
+			return res, err
+		}
+		until = lockDate(time.Now(), lock.Days)
+		locker.SetLock(lock.Mode, until)
+	}
 	cfg, err := os.ReadFile(filepath.Join(dir, configName))
 	if err != nil {
 		return res, fmt.Errorf("reading the repository: %w", err)
@@ -136,8 +199,10 @@ func Sync(ctx context.Context, dir string, t Target, progress func(Result)) (Res
 		return res, errors.New("the repository's config.json has no id")
 	}
 	// Never mix two repositories in one place.
+	sameConfig := false
 	if rc, err := t.Get(ctx, configName); err == nil {
 		b, rerr := io.ReadAll(io.LimitReader(rc, 1<<20))
+		sameConfig = bytes.Equal(b, cfg)
 		rc.Close()
 		if rerr != nil {
 			return res, fmt.Errorf("reading the copy's config.json: %w", rerr)
@@ -169,7 +234,7 @@ func Sync(ctx context.Context, dir string, t Target, progress func(Result)) (Res
 	for _, o := range remote {
 		have[o.Name] = o.Size
 	}
-	keep := map[string]bool{configName: true}
+	keep, sent := map[string]bool{configName: true}, map[string]bool{}
 	upload := func(o Object) error {
 		keep[o.Name] = true
 		if size, ok := have[o.Name]; ok && size == o.Size {
@@ -193,6 +258,7 @@ func Sync(ctx context.Context, dir string, t Target, progress func(Result)) (Res
 		if err := t.Put(ctx, o.Name, f, fi.Size()); err != nil {
 			return fmt.Errorf("uploading %s: %w", o.Name, err)
 		}
+		sent[o.Name] = true
 		res.Uploaded++
 		res.UploadedBytes += fi.Size()
 		res.Objects++
@@ -223,11 +289,42 @@ func Sync(ctx context.Context, dir string, t Target, progress func(Result)) (Res
 		res.Uploaded, res.UploadedBytes = n, b
 	}
 	// The config goes last: its presence marks a copy that can be used.
-	if err := t.Put(ctx, configName, bytes.NewReader(cfg), int64(len(cfg))); err != nil {
-		return res, fmt.Errorf("uploading %s: %w", configName, err)
+	// A locked copy keeps every version written, so it is not written
+	// again when it is already right.
+	if locker == nil || !sameConfig {
+		if err := t.Put(ctx, configName, bytes.NewReader(cfg), int64(len(cfg))); err != nil {
+			return res, fmt.Errorf("uploading %s: %w", configName, err)
+		}
+		delete(have, configName)
 	}
 	res.Objects++
 	res.Bytes += int64(len(cfg))
+
+	if locker != nil {
+		// What was already in the copy gets the new date when the date
+		// has moved on. What this run uploaded has it already.
+		if until.After(lock.Until) {
+			var names []string
+			for name := range have {
+				if keep[name] && !sent[name] {
+					names = append(names, name)
+				}
+			}
+			sort.Strings(names)
+			n, err := relock(ctx, locker, names, until, func(n int) {
+				if progress != nil {
+					r := res
+					r.Relocked = n
+					progress(r)
+				}
+			})
+			res.Relocked = n
+			if err != nil {
+				return res, err
+			}
+		}
+		res.LockedUntil = &until
+	}
 
 	// Remove what the repository no longer has: forgotten snapshots
 	// first, then the packs garbage collection dropped.
@@ -258,10 +355,64 @@ func Sync(ctx context.Context, dir string, t Target, progress func(Result)) (Res
 			return res, err
 		}
 	}
+	if locker != nil {
+		n, err := locker.Prune(ctx, time.Now().Add(-time.Duration(lock.Days)*24*time.Hour))
+		res.Pruned = n
+		if err != nil {
+			return res, fmt.Errorf("removing old versions from the copy: %w", err)
+		}
+	}
 	if progress != nil {
 		progress(res)
 	}
 	return res, nil
+}
+
+// relock moves the lock of the named objects to a later date, several
+// at a time, and returns how many it moved.
+func relock(ctx context.Context, l Locker, names []string, until time.Time, progress func(int)) (int, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var mu sync.Mutex
+	var first error
+	done := 0
+	work := make(chan string)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for name := range work {
+				err := l.Relock(ctx, name, until)
+				mu.Lock()
+				if err != nil && first == nil {
+					first = fmt.Errorf("locking %s for longer: %w", name, err)
+					cancel()
+				}
+				if err == nil {
+					done++
+					if done%50 == 0 {
+						progress(done)
+					}
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+feed:
+	for _, name := range names {
+		select {
+		case work <- name:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(work)
+	wg.Wait()
+	if first == nil {
+		first = ctx.Err()
+	}
+	return done, first
 }
 
 // Fetch downloads the copy at t into dir, which must not already hold a
