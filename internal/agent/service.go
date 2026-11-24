@@ -88,6 +88,12 @@ func (s *Service) Run(ctx context.Context) error {
 		}
 	}()
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.watchFullDiskAccess(ctx)
+	}()
+
 	wait := func(d time.Duration) {
 		t := time.NewTimer(d)
 		defer t.Stop()
