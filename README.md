@@ -66,6 +66,8 @@ Images are published to GitHub's registry: `:latest` and `:vX.Y.Z` for releases,
 and `:edge` for the newest commit on `main`. Until the first release exists, use
 `:edge`. The agent image is `ghcr.io/ajthom90/better-backup-agent`.
 
+On Windows, run the server installer: see [Windows installers](#windows-installers).
+
 Or natively (Linux, macOS, Windows), from a release archive:
 
 ```sh
@@ -135,6 +137,56 @@ warnings, forget snapshots, verify the repository, reclaim space and set up
 email alerts. The `bb` command line does the same things for scripts. Sign in with the admin token
 from `admin.json` in the data directory. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
+
+### Windows installers
+
+Each release has two installers for Windows, for x64 and ARM64:
+`better-backup-server_VERSION_windows_amd64.msi` and
+`better-backup-agent_VERSION_windows_amd64.msi`.
+
+**The server installer** asks for the folder to keep the backups in and the
+port (8443). It installs the server as the service "better-backup server",
+opens the port in Windows Firewall, adds the `bb` command to the path and
+puts "better-backup web UI" in the Start menu. Sign in to the web UI with the
+admin token from `C:\ProgramData\better-backup\admin.json`.
+
+**The agent installer** asks for an enrollment code. Get one in the web UI:
+"Add an agent" shows the installer to download (the server carries the one
+that matches it), the code, and reports the machine when it has registered.
+The code holds the server's address, a one-time token and the server's
+fingerprint. The agent runs as the service "better-backup agent" and
+connects out to the server, so it needs no firewall rule.
+
+Both install without dialogs, for scripts and Group Policy:
+
+```bat
+msiexec /i better-backup-server_1.2.0_windows_amd64.msi /qn REPO_DIR=D:\Backups PORT=8443
+msiexec /i better-backup-agent_1.2.0_windows_amd64.msi /qn ENROLL_CODE=bb1.eyJz... AGENT_NAME=FILESERVER
+```
+
+| Property | Installer | Meaning |
+| --- | --- | --- |
+| `REPO_DIR` | server | Folder for the backups. Empty: `C:\ProgramData\better-backup\repo` |
+| `PORT` | server | Port for agents and the web UI. Default 8443 |
+| `ENROLL_CODE` | agent | Code from "Add an agent". Empty: install now, register later |
+| `AGENT_NAME` | agent | Name shown on the server. Empty: the computer's name |
+
+A code works once. For Group Policy, where one command installs many
+machines, set "Machines this code is for" in the dialog; that code works for
+a week.
+
+Installing a newer version over an older one upgrades it and keeps the
+settings; the server's are remembered in the registry and win over the
+command line on an upgrade. Removing either program keeps its data: the
+backups, `repo.key` and the server's database, and the agent's identity in
+`C:\ProgramData\better-backup-agent`, so a reinstalled agent is the same
+agent. The installers close both data folders to everyone but administrators
+and SYSTEM. The services log to `server.log` and `agent.log` in those folders.
+
+The installers are built by `packaging/windows/build.ps1` and are signed when
+the release workflow has a code signing certificate (the secrets
+`SIGN_PFX_BASE64` and `SIGN_PFX_PASSWORD`). Without one, Windows SmartScreen
+warns about an unknown publisher on the first run.
 
 ### Whole volumes
 

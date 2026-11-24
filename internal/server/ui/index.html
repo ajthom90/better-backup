@@ -507,12 +507,13 @@ function copyBox(text) {
 // addAgentDialog walks through adding a machine: get the installer, give
 // it the enrollment code, and watch the agent arrive.
 async function addAgentDialog() {
-  const [t, inst, before] = await Promise.all([call("POST", "/api/v1/enroll-tokens", { ttl: "24h", uses: 1 }),
+  let [t, inst, before] = await Promise.all([call("POST", "/api/v1/enroll-tokens", { ttl: "24h", uses: 1 }),
     call("GET", "/api/v1/installers"), call("GET", "/api/v1/agents")]);
   const known = new Set(before.map(a => a.id));
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
   const address = el("input", { id: "addAddress", value: local && inst.hostname ? "https://" + inst.hostname + ":" + (location.port || "443") : location.origin, spellcheck: false });
   const system = el("select", { id: "addSystem" }, el("option", { value: "windows", textContent: "Windows" }), el("option", { value: "darwin", textContent: "macOS" }), el("option", { value: "linux", textContent: "Linux" }));
+  const uses = el("input", { id: "addUses", type: "number", min: 1, max: 1000, value: 1 });
   const code = copyBox(""), silent = copyBox("");
   const steps = el("div", { id: "addSteps" });
   const arrived = el("div", { id: "addArrived", className: "hint", textContent: "Waiting for the new agent to connect. This updates by itself." });
@@ -529,20 +530,27 @@ async function addAgentDialog() {
       : ["Install the agent on the machine, then open “better-backup agent” there and paste the code.", "Or register it from a terminal:", "sudo bb-agent enroll " + c];
     silent.set(how[2]);
     steps.replaceChildren(el("label", { textContent: "1. Download the agent installer" }), ...links,
-      el("label", { textContent: "2. Give the agent this enrollment code" }), code.box, el("div", { className: "hint", textContent: how[0] + " The code works once, until " + when(t.expires) + "." }),
+      el("label", { textContent: "2. Give the agent this enrollment code" }), code.box, el("div", { className: "hint", textContent: how[0] + " The code works " + (t.uses > 1 ? "for " + t.uses + " machines" : "once") + ", until " + when(t.expires) + "." }),
       el("label", { textContent: how[1] }), silent.box);
   };
   address.oninput = system.onchange = draw; draw();
+  // One code can install many machines at once, as a script or Group Policy does.
+  uses.onchange = async () => {
+    const n = Math.min(1000, Math.max(1, parseInt(uses.value, 10) || 1)); uses.value = n;
+    try { t = await call("POST", "/api/v1/enroll-tokens", { ttl: n > 1 ? "168h" : "24h", uses: n }); draw(); } catch (e) { arrived.textContent = e.message; }
+  };
   openDialog(false, el("h3", { textContent: "Add an agent" }),
     el("div", { className: "hint", textContent: "The agent is the small program that runs on each machine to back up. It connects out to this server, so the machine needs no open ports." }),
     el("div", { className: "two" }, el("div", null, el("label", { textContent: "The machine runs" }), system), el("div", null, el("label", { textContent: "It reaches this server at" }), address)),
-    steps, el("label", { textContent: "3. Wait for it here" }), arrived,
+    steps, el("label", { textContent: "Machines this code is for" }), uses,
+    el("div", { className: "hint", textContent: "Leave it at 1 for a single machine. A code for several machines works for a week, for installing by script or Group Policy." }),
+    el("label", { textContent: "3. Wait for it here" }), arrived,
     el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
   const poll = setInterval(async () => {
     try {
       const fresh = (await call("GET", "/api/v1/agents")).filter(a => !known.has(a.id));
       if (!fresh.length) return;
-      arrived.className = "success"; arrived.textContent = "✓ " + fresh.map(a => a.name).join(", ") + " is registered" + (fresh.every(a => a.online) ? " and connected" : "") + ". Next, give it a policy.";
+      arrived.className = "success"; arrived.textContent = "✓ " + fresh.map(a => a.name).join(", ") + (fresh.length > 1 ? " are" : " is") + " registered" + (fresh.every(a => a.online) ? " and connected" : "") + ". Next, add a backup policy.";
       refresh().catch(() => {});
     } catch (e) {}
   }, 3000);
