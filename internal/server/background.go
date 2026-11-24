@@ -25,6 +25,7 @@ func (s *Server) background(ctx context.Context) {
 		s.scheduleOffsite(time.Now())
 		s.checkMissed(time.Now())
 		s.maintain()
+		s.maybeSaveState()
 		s.runOffsite(ctx)
 		select {
 		case <-ctx.Done():
