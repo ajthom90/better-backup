@@ -241,6 +241,9 @@ What happens:
   SYSTEM hive is given what the running one says a restore must keep (the
   `KeysNotToRestore` list: disk and volume assignments, drivers and services
   installed since the backup, and the list of files to swap in).
+- System state backups made before this feature existed lack the registry's
+  log files, and Windows may refuse to load their hives. The job then says
+  the registry was not restored. Take a new system state backup first.
 - Nothing is final until Windows restarts. `--restart` does that when the
   restore is done; otherwise the job ends with a reminder.
 
