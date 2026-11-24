@@ -37,6 +37,13 @@ better-backup has three programs:
 | `internal/xattr` | Extended attributes, and with them ACLs, on Linux and macOS |
 | `internal/truenas` | The configuration of a TrueNAS system as one file |
 | `internal/svc` | Windows service, systemd and launchd integration |
+| `internal/hypervisor` | What virtual machine hosts have in common: the driver interface |
+| `internal/hyperv` | Hyper-V driver (PowerShell and WMI) |
+| `internal/libvirt` | KVM driver (libvirt backup jobs and checkpoints through `virsh`) |
+| `internal/proxmox` | Proxmox VE driver (`qm`, `pvesm`, and QEMU's machine protocol) |
+| `internal/vmware` | VMware vSphere driver (snapshots and OVF export and import, through govmomi) |
+| `internal/vmdk` | Reads and writes VMware's stream-optimized disk format |
+| `internal/nbd`, `internal/qemuimg`, `internal/qmp` | NBD client, `qemu-nbd` wrapper and QMP client that read and write QEMU disks |
 
 Data sources other than files (volume images, Hyper-V and other hypervisors,
 system state) will plug in beside `internal/backup`: each produces entries and
@@ -134,6 +141,66 @@ On restore the DACL is applied first and the owner second, because setting
 another account as owner needs the restore privilege. A file that inherited
 its permissions inherits again from the folder it is restored into; a file
 with inheritance blocked keeps its exact permissions.
+
+## Virtual machines
+
+A hypervisor is a `hypervisor.Driver`: it lists the host's machines, freezes
+one (`Freeze`) into a configuration blob and a set of disks to image, and
+builds a machine again from such a blob (`NewRestore`). A machine is stored as
+an entry of type `vm` holding the configuration as a small file, whose name
+says which driver wrote it (`vm.json` for Hyper-V, `libvirt.json` for KVM,
+`proxmox.json` for Proxmox VE, `vmware.json` for VMware vSphere),
+and one image per disk. Disks are always stored as their raw contents in
+fixed 1 MiB blocks, whatever the format on the host, so any disk can be
+restored anywhere as a plain image.
+
+Change tracking is the driver's business up to one point: it hands the
+archiver a list of byte ranges written since the previous backup, and the
+archiver takes every other block from that backup without reading it. The
+driver learns what the previous backup was from its configuration blob, which
+the archiver passes back, so the state that matters (a Hyper-V reference
+point, a libvirt checkpoint name) travels with the snapshot it belongs to. A
+backup that fails leaves the previous checkpoint in place for the next try.
+
+The KVM driver reads running machines through libvirt's pull-mode backup
+job: QEMU exports each disk over NBD on a unix socket inside the machine's
+private folder, as of the moment the job began, and `internal/nbd` reads the
+allocation map, the dirty bitmap and the data from there. Stopped machines
+and restores go through `qemu-nbd`, which handles the image formats.
+
+Proxmox VE does not use libvirt, so its driver talks to each machine's QEMU
+directly over the QMP socket Proxmox keeps for it (`internal/proxmox/live.go`).
+It builds by hand what a libvirt backup job is underneath: a scratch qcow2
+image on top of each disk, a `blockdev-backup` job with `sync=none` that
+copies into it what the machine is about to overwrite, and an NBD export of
+the scratch image; all disks start in one QMP transaction, so they are frozen
+at the same instant. Change tracking is a dirty bitmap per backup, added in
+that same transaction, and a frozen copy of the previous backup's bitmap is
+exported beside the data. Bitmaps are not persistent, so they work on raw
+volumes too and vanish with the QEMU process. Proxmox's services use the same
+socket, which serves one client at a time, so the driver connects only for
+the moments it needs. After the disks are read the driver checks that every
+job is still running, because QEMU ends a job it cannot keep its promise for
+(a full scratch folder), and then the machine is left out of the backup.
+
+VMware vSphere is reached over its management API rather than from an agent
+on the host, so a policy names a server from a list the better-backup server
+keeps, and the job carries that server's address and account to the agent
+when it is handed over (`hypervisor.Connection`; it is not stored with the
+job). The driver takes a snapshot, asks for an export lease on it
+(`ExportSnapshot`) and downloads each disk as a stream-optimized VMDK, which
+`internal/vmdk` unpacks front to back as the archiver asks for blocks; the
+machine's description is the OVF descriptor the server writes
+(`OvfManager.CreateDescriptor`), kept in the configuration blob with small
+files such as the firmware settings. A restore gives that descriptor back
+(`CreateImportSpec`, `ImportVApp`) and uploads each disk as a stream-optimized
+VMDK written on the fly. Its grains are stored rather than compressed, which
+makes the length of the stream known before the first byte: the upload needs
+that, and the disk never has to be spooled. The lease is kept alive from a
+timer, and after the disks are read the driver checks that every stream ended
+the way the format says and that the lease is still good, or the machine is
+left out. This path reads whole disks; Changed Block Tracking needs random
+reads of a snapshot's disks (NBD through VDDK, or NBDSSL) and is not built.
 
 ## Offsite copy
 
