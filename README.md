@@ -289,6 +289,26 @@ backups, `repo.key` and the server's database, and the agent's identity in
 agent. The installers close both data folders to everyone but administrators
 and SYSTEM. The services log to `server.log` and `agent.log` in those folders.
 
+A server in Docker carries the Windows agent installer too (the `:edge`
+image carries the newest build, version `0.0.N`). To offer another installer
+from any server, put it in the folder `installers` in the server's data
+directory.
+
+#### Unsigned installers and antivirus
+
+The installers and programs are not code-signed yet, so Windows does not know
+their publisher:
+
+- A downloaded installer may be blocked. Right-click it, Properties, tick
+  **Unblock**; or run `Unblock-File better-backup-agent_*.msi` in PowerShell.
+- SmartScreen may say "Windows protected your PC". Choose **More info**, then
+  **Run anyway**.
+- Antivirus may distrust a new, unsigned program that reads every file and
+  talks to the network, which is what a backup agent does. Exclude the folder
+  `C:\Program Files\better-backup` and the processes `bb-agent.exe` and
+  `bb-server.exe`; excluding `C:\ProgramData\better-backup-agent` and the
+  server's backup folder from real-time scanning also keeps backups fast.
+
 The installers are built by `packaging/windows/build.ps1` and are signed when
 the release workflow has a code signing certificate (the secrets
 `SIGN_PFX_BASE64` and `SIGN_PFX_PASSWORD`). Without one, Windows SmartScreen
