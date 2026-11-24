@@ -53,6 +53,9 @@ type Agent struct {
 	LastSeen   time.Time `json:"last_seen"`
 	Online     bool      `json:"online"`
 	Revoked    bool      `json:"revoked"`
+	// Recovery marks a machine started from the recovery disc. It exists
+	// only to receive a restore and is not a machine to back up.
+	Recovery bool `json:"recovery,omitempty"`
 }
 
 // Hypervisors are the kinds of virtual machine host a policy can name.
@@ -120,6 +123,14 @@ type Policy struct {
 	// identity back: the registry, boot and system files, and on a domain
 	// controller the Active Directory database and SYSVOL.
 	SystemState bool `json:"system_state,omitempty"`
+	// BareMetal backs up the whole machine: the layout of the disks it
+	// starts from and an image of each of their partitions, which is
+	// what it takes to rebuild the machine on blank hardware.
+	BareMetal bool `json:"bare_metal,omitempty"`
+	// MachineDisks names the disks BareMetal covers: numbers such as "0"
+	// on Windows, devices such as /dev/sda elsewhere. Empty: the disk
+	// the system starts from.
+	MachineDisks []string `json:"machine_disks,omitempty"`
 	// TrueNASConfig backs up the configuration of a TrueNAS system:
 	// every setting, and the secret seed that decrypts the passwords
 	// stored with them.
@@ -135,16 +146,19 @@ type Policy struct {
 }
 
 type BackupSpec struct {
-	Paths         []string     `json:"paths"`
-	Excludes      []string     `json:"excludes,omitempty"`
-	Volumes       []string     `json:"volumes,omitempty"`
-	VMs           []string     `json:"vms,omitempty"`
-	Hypervisor    string       `json:"hypervisor,omitempty"`
-	VMTracking    string       `json:"vm_tracking,omitempty"`
-	SystemState   bool         `json:"system_state,omitempty"`
-	TrueNASConfig bool         `json:"truenas_config,omitempty"`
-	NoSnapshot    bool         `json:"no_snapshot,omitempty"`
-	Parent        []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
+	Paths         []string `json:"paths"`
+	Excludes      []string `json:"excludes,omitempty"`
+	Volumes       []string `json:"volumes,omitempty"`
+	VMs           []string `json:"vms,omitempty"`
+	Hypervisor    string   `json:"hypervisor,omitempty"`
+	VMTracking    string   `json:"vm_tracking,omitempty"`
+	SystemState   bool     `json:"system_state,omitempty"`
+	TrueNASConfig bool     `json:"truenas_config,omitempty"`
+	// BareMetal and MachineDisks are as in Policy.
+	BareMetal    bool         `json:"bare_metal,omitempty"`
+	MachineDisks []string     `json:"machine_disks,omitempty"`
+	NoSnapshot   bool         `json:"no_snapshot,omitempty"`
+	Parent       []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
 	// VMwareServer is as in Policy. Connection is that server's address
 	// and account; like Parent it is only set when the job is handed
 	// to the agent, and never stored with the job.
@@ -160,6 +174,9 @@ type RestoreSpec struct {
 	Target     string       `json:"target,omitempty"` // empty: restore in place
 	Overwrite  string       `json:"overwrite,omitempty"`
 	VMName     string       `json:"vm_name,omitempty"` // name for a restored virtual machine
+	// Disks says where the disks of a whole machine go: "disk0" to a
+	// device such as /dev/sda.
+	Disks map[string]string `json:"disks,omitempty"`
 	// VMwareServer and Connection are as in BackupSpec.
 	VMwareServer string                 `json:"vmware_server,omitempty"`
 	Connection   *hypervisor.Connection `json:"connection,omitempty"`
@@ -220,6 +237,10 @@ type RestoreRequest struct {
 	Overwrite  string   `json:"overwrite,omitempty"`
 	// VMName names a restored virtual machine. Default: its old name.
 	VMName string `json:"vm_name,omitempty"`
+	// Disks restores a whole machine onto disks of the agent: the name
+	// of a disk in the backup ("disk0") to a device such as /dev/sda.
+	// Everything on those disks is replaced.
+	Disks map[string]string `json:"disks,omitempty"`
 	// VMwareServer is the id of the VMwareServer a VMware machine is
 	// restored to. Default: the one its policy names.
 	VMwareServer string `json:"vmware_server,omitempty"`
@@ -274,6 +295,8 @@ type Status struct {
 	RawBytes    int64  `json:"raw_bytes"`
 	Chunks      int64  `json:"chunks"`
 	RunningJobs int    `json:"running_jobs"`
+	// KeySaved is false until someone has downloaded the repository key.
+	KeySaved bool `json:"key_saved"`
 }
 
 type Error struct {
@@ -342,4 +365,242 @@ type OffsiteStatus struct {
 type OffsiteTest struct {
 	Objects int   `json:"objects"`
 	Bytes   int64 `json:"bytes"`
+}
+
+// RecoveryConfig tells a machine started from the recovery disc where
+// its server is. It carries no secret.
+type RecoveryConfig struct {
+	Server      string `json:"server"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// RecoverySession is the server's answer to a recovery disc that
+// announces itself. The code is shown on the machine's screen; the
+// administrator approves the machine showing that code.
+type RecoverySession struct {
+	ID     string `json:"id"`
+	Secret string `json:"secret"`
+	Code   string `json:"code"`
+}
+
+// RecoveryHardware describes a machine started from the recovery disc.
+type RecoveryHardware struct {
+	Product     string         `json:"product,omitempty"`
+	Firmware    string         `json:"firmware,omitempty"` // "uefi" or "bios"
+	MemoryBytes int64          `json:"memory_bytes,omitempty"`
+	CPUs        int            `json:"cpus,omitempty"`
+	Disks       []RecoveryDisk `json:"disks"`
+	NICs        []RecoveryNIC  `json:"nics,omitempty"`
+}
+
+// RecoveryDisk is a disk a restore can go to.
+type RecoveryDisk struct {
+	Path       string `json:"path"` // /dev/sda
+	Model      string `json:"model,omitempty"`
+	Size       int64  `json:"size"`
+	SectorSize int    `json:"sector_size"`
+	// Contents says in a few words what the disk holds now.
+	Contents string `json:"contents,omitempty"`
+	// Media marks the disk the recovery disc itself was started from.
+	Media bool `json:"media,omitempty"`
+}
+
+// RecoveryNIC is a network adapter and its addresses.
+type RecoveryNIC struct {
+	Name  string   `json:"name"`
+	MAC   string   `json:"mac,omitempty"`
+	Addrs []string `json:"addrs,omitempty"`
+}
+
+// RecoveryPoll is what a recovery disc reports while it waits.
+type RecoveryPoll struct {
+	Version  string            `json:"version,omitempty"`
+	Status   string            `json:"status,omitempty"`
+	Hardware *RecoveryHardware `json:"hardware,omitempty"`
+}
+
+// RecoveryReply answers a poll.
+type RecoveryReply struct {
+	Approved bool `json:"approved"`
+	// EnrollToken is handed over once, after approval: the machine uses
+	// it to become an agent that can receive the restore.
+	EnrollToken string `json:"enroll_token,omitempty"`
+	// Command is "reboot", "poweroff" or "rescan".
+	Command string `json:"command,omitempty"`
+}
+
+// RecoveryMachine is a machine waiting at the recovery disc, as the
+// administrator sees it.
+type RecoveryMachine struct {
+	ID       string            `json:"id"`
+	Code     string            `json:"code"`
+	Remote   string            `json:"remote"`
+	Created  time.Time         `json:"created"`
+	LastSeen time.Time         `json:"last_seen"`
+	Approved bool              `json:"approved"`
+	AgentID  string            `json:"agent_id,omitempty"`
+	Version  string            `json:"version,omitempty"`
+	Status   string            `json:"status,omitempty"`
+	Hardware *RecoveryHardware `json:"hardware,omitempty"`
+	// Job is the machine's most recent restore.
+	Job *Job `json:"job,omitempty"`
+}
+
+// RecoveryStatus is everything the recovery page shows.
+type RecoveryStatus struct {
+	// ISO describes the recovery disc image the server can hand out.
+	ISO struct {
+		Available bool      `json:"available"`
+		Size      int64     `json:"size,omitempty"`
+		Modified  time.Time `json:"modified,omitempty"`
+	} `json:"iso"`
+	Machines []RecoveryMachine `json:"machines"`
+}
+
+// MachineBackup is a whole-machine backup inside a snapshot: the disk
+// layout, without the raw boot sectors, and the size of each image.
+type MachineBackup struct {
+	Hostname string        `json:"hostname"`
+	OS       string        `json:"os"`
+	Firmware string        `json:"firmware,omitempty"`
+	Disks    []MachineDisk `json:"disks"`
+}
+
+// MachineDisk is one disk of a MachineBackup.
+type MachineDisk struct {
+	Name       string `json:"name"`
+	Device     string `json:"device,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Size       int64  `json:"size"`
+	SectorSize int    `json:"sector_size"`
+	Style      string `json:"style"`
+	// Needs is the smallest disk the backup fits on.
+	Needs      int64              `json:"needs"`
+	Partitions []MachinePartition `json:"partitions"`
+}
+
+// MachinePartition is one partition of a MachineDisk.
+type MachinePartition struct {
+	Number int    `json:"number"`
+	Size   int64  `json:"size"`
+	Kind   string `json:"kind"`
+	FS     string `json:"fs,omitempty"`
+	Label  string `json:"label,omitempty"`
+	Mount  string `json:"mount,omitempty"`
+	Saved  bool   `json:"saved"`
+}
+
+// Roles, from least to most allowed. A viewer only reads; an operator
+// also runs backups and restores and edits policies and agents; an
+// administrator also manages users and the server's settings.
+const (
+	RoleViewer   = "viewer"
+	RoleOperator = "operator"
+	RoleAdmin    = "admin"
+)
+
+// User is a person who signs in to the web UI.
+type User struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Role     string `json:"role"`
+	Disabled bool   `json:"disabled,omitempty"`
+	// Password is write-only: set it to choose or change the password.
+	Password  string     `json:"password,omitempty"`
+	Created   time.Time  `json:"created"`
+	LastLogin *time.Time `json:"last_login,omitempty"`
+	// Token is true for the built-in identity of the admin token.
+	Token bool `json:"token,omitempty"`
+}
+
+// LoginRequest signs a user in.
+type LoginRequest struct {
+	Name     string `json:"name"`
+	Password string `json:"password"`
+}
+
+// Session is the answer to a sign-in: a bearer token for the admin API.
+type Session struct {
+	Token   string    `json:"token"`
+	Expires time.Time `json:"expires"`
+	User    User      `json:"user"`
+}
+
+// SetupStatus tells the web UI, before anyone is signed in, what the
+// server still needs.
+type SetupStatus struct {
+	Version string `json:"version"`
+	// NeedsSetup: no user exists yet.
+	NeedsSetup bool `json:"needs_setup"`
+	// NeedsToken: creating the first user needs the admin token, because
+	// the server is already in use.
+	NeedsToken bool `json:"needs_token,omitempty"`
+	// Locked: the repository exists but its key is missing.
+	Locked bool `json:"locked,omitempty"`
+	// LockedNeedsSignIn: entering the key needs an administrator.
+	LockedNeedsSignIn bool `json:"locked_needs_sign_in,omitempty"`
+	// CanRecover: the server is new and empty, so it may be replaced by
+	// what an offsite copy holds.
+	CanRecover bool `json:"can_recover,omitempty"`
+	// KeyFromEnv: the repository key is configured outside the server.
+	KeyFromEnv bool              `json:"key_from_env,omitempty"`
+	Recovery   *RecoveryProgress `json:"recovery,omitempty"`
+}
+
+// SetupRequest creates the first administrator.
+type SetupRequest struct {
+	Name     string `json:"name"`
+	Password string `json:"password"`
+	Token    string `json:"token,omitempty"`
+}
+
+// RecoverRequest rebuilds a new server from an offsite copy.
+type RecoverRequest struct {
+	Offsite OffsiteSettings `json:"offsite"`
+	Key     string          `json:"key"`
+}
+
+// UnlockRequest gives a server the key of the repository it found.
+type UnlockRequest struct {
+	Key string `json:"key"`
+}
+
+// RecoveryProgress describes a server recovery that is running or over.
+type RecoveryProgress struct {
+	Running bool   `json:"running"`
+	Done    int64  `json:"done"`
+	Total   int64  `json:"total"`
+	Error   string `json:"error,omitempty"`
+	// Restarting: the download is complete and the server is starting
+	// again on what it fetched.
+	Restarting bool `json:"restarting,omitempty"`
+}
+
+// AuditEntry is one line of the activity log.
+type AuditEntry struct {
+	ID     int64     `json:"id"`
+	Time   time.Time `json:"time"`
+	User   string    `json:"user"`
+	Remote string    `json:"remote,omitempty"`
+	Action string    `json:"action"`
+	Detail string    `json:"detail,omitempty"`
+}
+
+// ServerSettings is what the settings page shows and changes.
+type ServerSettings struct {
+	DataDir  string `json:"data_dir"`
+	RepoDir  string `json:"repo_dir"`
+	Listen   string `json:"listen"`
+	Hostname string `json:"hostname"`
+	// FixedTLSNames come from the command line; TLSNames are set here.
+	FixedTLSNames []string `json:"fixed_tls_names,omitempty"`
+	TLSNames      []string `json:"tls_names"`
+	Fingerprint   string   `json:"fingerprint"`
+	// KeySource is "file" (repo.key) or "environment".
+	KeySource string `json:"key_source"`
+	// KeySaved is when someone last downloaded the repository key.
+	KeySaved *time.Time `json:"key_saved,omitempty"`
+	// StateSaved is when the server's own configuration was last saved
+	// into the repository.
+	StateSaved *time.Time `json:"state_saved,omitempty"`
 }

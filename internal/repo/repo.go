@@ -613,3 +613,18 @@ func syncDir(dir string) {
 		d.Close()
 	}
 }
+
+// KeysFromConfig derives a repository's working keys from the contents
+// of its config.json. It fails when the passphrase is wrong, which makes
+// it the cheap way to check a key before anything else is read.
+func KeysFromConfig(configJSON, passphrase []byte) (keys.Keys, error) {
+	var cfg config
+	if err := json.Unmarshal(configJSON, &cfg); err != nil || cfg.Key == nil {
+		return keys.Keys{}, errors.New("config.json is not a repository's configuration")
+	}
+	master, err := keys.Unwrap(passphrase, cfg.Key)
+	if err != nil {
+		return keys.Keys{}, err
+	}
+	return keys.Derive(master), nil
+}

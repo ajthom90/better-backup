@@ -30,7 +30,7 @@
       <RegistrySearch Id="SavedRepo" Root="HKLM" Key="SOFTWARE\better-backup\Server" Name="Repo" Type="raw" />
     </Property>
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/ajthom90/better-backup" />
-    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="The server runs as the service “better-backup server”. Open “better-backup web UI” from the Start menu and sign in with the admin token, which is in C:\ProgramData\better-backup\admin.json. Then choose “Add an agent” for each machine to back up." />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="The server runs as the service “better-backup server”. Open “better-backup web UI” from the Start menu; the first visit asks you to create the administrator's name and password. Then choose “Add an agent” for each machine to back up." />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="CompanyFolder" Name="better-backup">

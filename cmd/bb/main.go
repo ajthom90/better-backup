@@ -48,6 +48,10 @@ Usage:
         [--system-state]       (Windows: registry, boot and system files,
                                 Active Directory and SYSVOL on a domain controller)
         [--exclude PATTERN ...] [--every 24h | --daily-at 02:00]
+        [--whole-machine]      (the system disk with its layout and every
+                                partition, for bare-metal recovery)
+        [--machine-disk DISK ...]  (with --whole-machine: these disks instead,
+                                such as 0 and 1, or /dev/sda)
         [--truenas-config]     (TrueNAS SCALE: the system configuration)
         [--no-snapshot]  (read live files instead of a VSS or ZFS snapshot)
         [--keep-last N] [--keep-daily N] [--keep-weekly N]
@@ -61,6 +65,8 @@ Usage:
   bb ls SNAPSHOT [PATH]                  browse a snapshot
   bb restore SNAPSHOT [--path PATH ...] [--target DIR] [--agent AGENT]
         [--overwrite if-changed|always|never] [--name NEW-VM-NAME] [--wait]
+        [--disk NAME=TARGET ...]  (whole machine: put a disk of the backup,
+                                such as disk0, onto a disk or into a file)
         [--vmware-server NAME] (for a VMware machine: where it goes, if not
                                 the server its policy names; --target is
                                 then a datastore)
@@ -144,6 +150,7 @@ var (
 	fOver    = fs.String("overwrite", "", "")
 	fWait    = fs.Bool("wait", false, "")
 	fSysSt   = fs.Bool("system-state", false, "")
+	fMachine = fs.Bool("whole-machine", false, "")
 	fTrueNAS = fs.Bool("truenas-config", false, "")
 	fSysRest = fs.Bool("system-state-in-place", false, "")
 	fNoReg   = fs.Bool("no-registry", false, "")
@@ -173,6 +180,8 @@ var (
 	fTo      cli.Multi
 	fVols    cli.Multi
 	fVMs     cli.Multi
+	fMDisks  cli.Multi
+	fDisks   cli.Multi
 	fPaths   cli.Multi
 	fExcl    cli.Multi
 	fKeep    api.Retention
@@ -354,6 +363,8 @@ func main() {
 	fs.Var(&fTo, "to", "")
 	fs.Var(&fVols, "volume", "")
 	fs.Var(&fVMs, "vm", "")
+	fs.Var(&fMDisks, "machine-disk", "")
+	fs.Var(&fDisks, "disk", "")
 	fs.Var(&fAuthDN, "authoritative", "")
 	fs.IntVar(&fKeep.KeepLast, "keep-last", 0, "")
 	fs.IntVar(&fKeep.KeepDaily, "keep-daily", 0, "")
@@ -457,6 +468,9 @@ func main() {
 			if p.SystemState {
 				what = append(what, "system state")
 			}
+			if p.BareMetal {
+				what = append(what, "whole machine")
+			}
 			if p.TrueNASConfig {
 				what = append(what, "TrueNAS configuration")
 			}
@@ -465,11 +479,11 @@ func main() {
 	case "policy":
 		switch sub {
 		case "add":
-			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols)+len(fVMs) == 0 && !*fSysSt && !*fTrueNAS {
-				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state or --truenas-config"))
+			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols)+len(fVMs) == 0 && !*fSysSt && !*fMachine && !*fTrueNAS {
+				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state, --whole-machine or --truenas-config"))
 			}
 			var p api.Policy
-			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, Hypervisor: *fHyper, VMwareServer: vmwareID(*fVMware), VMTracking: *fVMTrack, SystemState: *fSysSt, TrueNASConfig: *fTrueNAS,
+			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, Hypervisor: *fHyper, VMwareServer: vmwareID(*fVMware), VMTracking: *fVMTrack, SystemState: *fSysSt, TrueNASConfig: *fTrueNAS, BareMetal: *fMachine, MachineDisks: fMDisks,
 				Schedule: api.Schedule{Interval: *fEvery, DailyAt: *fDaily}, Retention: fKeep, NoSnapshot: *fNoSnap, Enabled: true}, &p)
 			fmt.Printf("created policy %s (%s)\n", p.Name, p.ID)
 		case "run":
@@ -537,6 +551,16 @@ func main() {
 			req.SystemState = &api.SystemStateRestore{Registry: !*fNoReg, AuthoritativeSYSVOL: *fAuthSys, AuthoritativeSubtrees: fAuthDN, Restart: *fRestart}
 		} else if *fNoReg || *fAuthSys || len(fAuthDN) > 0 || *fRestart {
 			cli.Fatal(errors.New("--no-registry, --authoritative-sysvol, --authoritative and --restart only go with --system-state-in-place"))
+		}
+		for _, d := range fDisks {
+			name, to, ok := strings.Cut(d, "=")
+			if !ok || name == "" || to == "" {
+				cli.Fatal(errors.New("--disk takes NAME=TARGET, such as disk0=/dev/sdb"))
+			}
+			if req.Disks == nil {
+				req.Disks = map[string]string{}
+			}
+			req.Disks[name] = to
 		}
 		if *fAgent != "" {
 			req.AgentID = agentID(*fAgent)

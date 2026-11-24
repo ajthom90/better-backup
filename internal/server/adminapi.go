@@ -24,10 +24,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	out := api.Status{Version: Version, RepoID: s.repo.ID(), Fingerprint: s.fp, Packs: st.Packs,
 		StoredBytes: st.StoredBytes, RawBytes: st.RawBytes, Chunks: st.Chunks}
-	s.db.QueryRow(`SELECT COUNT(*) FROM agents WHERE revoked = 0`).Scan(&out.Agents)
+	s.db.QueryRow(`SELECT COUNT(*) FROM agents WHERE revoked = 0 AND recovery = 0`).Scan(&out.Agents)
 	s.mu.Lock()
 	out.Snapshots, out.RunningJobs = len(s.snaps), len(s.running)
 	s.mu.Unlock()
+	out.KeySaved = s.setting("key_saved") != ""
 	reply(w, http.StatusOK, out)
 }
 
@@ -133,8 +134,15 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("a policy needs a name")
 		return
 	}
-	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 && !p.SystemState && !p.TrueNASConfig {
-		bad("a policy needs at least one path, volume or virtual machine, the system state or the TrueNAS configuration")
+	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 && !p.SystemState && !p.BareMetal && !p.TrueNASConfig {
+		bad("a policy needs at least one path, volume or virtual machine, the system state, the whole machine or the TrueNAS configuration")
+		return
+	}
+	if !p.BareMetal {
+		p.MachineDisks = nil
+	}
+	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.BareMetal && a.OS != "windows" && a.OS != "linux" {
+		bad("a whole machine can be backed up for bare-metal recovery on Windows and Linux only")
 		return
 	}
 	if p.VMTracking != "" && p.VMTracking != "on" && p.VMTracking != "check" {
@@ -165,7 +173,7 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("the TrueNAS configuration can only be backed up by an agent running on TrueNAS SCALE")
 		return
 	}
-	if a, err := s.agent(p.AgentID); err != nil || a == nil || a.Revoked {
+	if a, err := s.agent(p.AgentID); err != nil || a == nil || a.Revoked || a.Recovery {
 		bad("agent_id does not name an active agent")
 		return
 	}
@@ -197,6 +205,7 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.kickBackground()
+	note(r, "%s", p.Name)
 	reply(w, http.StatusOK, p)
 }
 
@@ -223,7 +232,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, SystemState: p.SystemState, TrueNASConfig: p.TrueNASConfig, NoSnapshot: p.NoSnapshot}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, SystemState: p.SystemState, TrueNASConfig: p.TrueNASConfig, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot}}
 	return j, s.enqueue(j)
 }
 
@@ -374,7 +383,7 @@ func listPath(get tree.Getter, sn *tree.Snapshot, path string) ([]tree.Entry, er
 		cur := src
 		if rest != "" {
 			for _, name := range strings.Split(rest, sep) {
-				if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM {
+				if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM && cur.Type != tree.TypeMachine {
 					return nil, fmt.Errorf("%s is not a directory in this snapshot", path)
 				}
 				var next *tree.Entry
@@ -399,7 +408,7 @@ func listPath(get tree.Getter, sn *tree.Snapshot, path string) ([]tree.Entry, er
 				cur = next
 			}
 		}
-		if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM {
+		if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM && cur.Type != tree.TypeMachine {
 			return []tree.Entry{*cur}, nil
 		}
 		var all []tree.Entry
@@ -425,6 +434,19 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "no such snapshot")
 		return
 	}
+	if len(req.Disks) > 0 {
+		// Onto disks: everything on them is replaced, so the machine must
+		// be named, and only the whole machine can go there.
+		if req.AgentID == "" {
+			fail(w, http.StatusBadRequest, "name the machine whose disks are to be written")
+			return
+		}
+		if machineEntry(sn) == nil {
+			fail(w, http.StatusBadRequest, "this snapshot holds no whole-machine backup")
+			return
+		}
+		req.Include, req.Target = []string{tree.MachineName}, ""
+	}
 	if req.AgentID == "" {
 		req.AgentID = sn.AgentID
 	}
@@ -443,6 +465,10 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "overwrite must be if-changed, always or never")
 		return
 	}
+	if a.Recovery && len(req.Disks) == 0 {
+		fail(w, http.StatusBadRequest, "a machine started from the recovery disc can only receive a whole machine onto its disks")
+		return
+	}
 	if req.VMwareServer == "" {
 		req.VMwareServer = s.restoreVMware(sn)
 	} else if s.vmwareServer(req.VMwareServer) == nil {
@@ -451,7 +477,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	// A machine on VMware does not go onto the agent at all: without a
 	// target it goes back to the datastore it was on.
-	if req.Target == "" && a.OS != sn.OS && req.VMwareServer == "" {
+	if req.Target == "" && len(req.Disks) == 0 && a.OS != sn.OS && req.VMwareServer == "" {
 		fail(w, http.StatusBadRequest, fmt.Sprintf("a %s backup cannot be restored in place on a %s agent; set a target directory", sn.OS, a.OS))
 		return
 	}
@@ -481,13 +507,25 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		req.Include = []string{tree.SystemStateName}
 	}
 	j := &api.Job{Type: api.JobRestore, AgentID: a.ID, SnapshotID: sn.ID, Restore: &api.RestoreSpec{
-		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName,
+		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName, Disks: req.Disks,
 		VMwareServer: req.VMwareServer, SystemState: req.SystemState}}
 	if err := s.enqueue(j); err != nil {
 		s.internal(w, err)
 		return
 	}
 	j.Restore.Sources = nil
+	where := "in place"
+	switch {
+	case len(req.Disks) > 0:
+		where = "onto its disks"
+	case req.Target != "":
+		where = "to " + req.Target
+	}
+	what := "everything"
+	if len(req.Include) > 0 {
+		what = strings.Join(req.Include, ", ")
+	}
+	note(r, "%s from snapshot %s of %s onto %s, %s", what, sn.ID, sn.Hostname, a.Name, where)
 	reply(w, http.StatusAccepted, j)
 }
 

@@ -35,6 +35,13 @@ backup until it has run beside your current one for a while.
   system's own VSS writers list them. It can be restored to a folder, or
   over the machine it came from, including Active Directory on a domain
   controller in Directory Services Restore Mode.
+- **Bare-metal recovery**: a policy can back up the whole machine (the disk
+  layout and every partition, including the hidden boot partitions). Start a
+  blank machine or a new virtual machine from the recovery disc, approve it
+  in the web UI, and the backup is put back onto its disks so that it starts
+  like the original. A whole machine can also be restored as virtual disks,
+  with a new Hyper-V machine built around them. Tested in emulators; a
+  restored Windows server has not been started on real hardware yet.
 - **Agents for Windows, macOS and Linux**, enrolled with a one-time token and
   authenticated with per-agent TLS certificates. Agents dial out to the
   server, so only the server needs an open port.
@@ -89,8 +96,37 @@ repository key, all in its data directory:
 | Windows | `C:\ProgramData\better-backup` |
 | Docker | `/data` |
 
-> **Copy `repo.key` somewhere safe now.** Backups are encrypted with it. If
-> the key is lost, the backups cannot be read by anyone.
+Then open `https://THE-SERVER:8443/` in a browser. The first visit asks you
+to create the administrator; nothing on the server's own disk is needed for
+that. (A server that already has agents asks for the admin token from
+`admin.json` as well, so that an upgrade never leaves it open to whoever
+finds the page first.)
+
+> **Download the repository key now.** The page reminds you until you have:
+> "Download the key" saves `repo.key`. Backups are encrypted with it. If the
+> key is lost, the backups cannot be read by anyone.
+
+### Users, roles and the activity log
+
+Under "Users" an administrator adds the people who may sign in:
+
+| Role | May |
+| --- | --- |
+| Administrator | everything, including users, server settings and the repository key |
+| Operator | run backups and restores, manage agents and policies, delete snapshots |
+| Viewer | look only |
+
+Passwords are stored as Argon2id hashes. Repeated wrong sign-ins for a name
+are slowed down, a sign-in ends after 12 hours without use, and changing a
+password ends that user's other sign-ins. The "Activity log" lists who
+signed in and who changed or started what, for two years.
+
+The admin token in `admin.json` still works, for the `bb` command line and as
+the way back in if every administrator is locked out ("Use the admin token
+instead" on the sign-in page). Replace it under "Settings".
+
+"Settings" also holds the names and IP addresses the server's certificate
+carries (the same as `--tls-name`, without a restart).
 
 Use `--repo DIR` (or mount a volume at `/data/repo`) to put the repository on
 a bigger disk or a NAS mount.
@@ -201,10 +237,11 @@ bb restore SNAPSHOT --agent other-machine --target /srv/restore --wait
 
 Everything can be done in the web UI at `https://your-server:8443/`: add and
 revoke agents, create and edit policies, start backups, browse a snapshot and
-restore a file, a folder, a disk or all of it, follow jobs and read their
+restore a file, a folder, a disk or all of it, rebuild a whole machine from
+the recovery disc, follow jobs and read their
 warnings, forget snapshots, verify the repository, reclaim space and set up
-email alerts. The `bb` command line does the same things for scripts. Sign in with the admin token
-from `admin.json` in the data directory. Your browser will warn about the
+email alerts. The `bb` command line does the same things for scripts. Sign in with the name and
+password you created on the first visit. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
 
 ### Windows installers
@@ -216,8 +253,8 @@ Each release has two installers for Windows, for x64 and ARM64:
 **The server installer** asks for the folder to keep the backups in and the
 port (8443). It installs the server as the service "better-backup server",
 opens the port in Windows Firewall, adds the `bb` command to the path and
-puts "better-backup web UI" in the Start menu. Sign in to the web UI with the
-admin token from `C:\ProgramData\better-backup\admin.json`.
+puts "better-backup web UI" in the Start menu. The first visit to the web UI
+asks you to create the administrator's name and password.
 
 **The agent installer** asks for an enrollment code. Get one in the web UI:
 "Add an agent" shows the installer to download (the server carries the one
@@ -268,7 +305,8 @@ bb restore SNAPSHOT --target /srv/d.img --agent linux-box --wait
 
 Restoring over a volume replaces everything on it. The volume must not be in
 use: Windows refuses to lock a volume with open files, and the system volume
-cannot be restored from the running system (recovery media comes in Phase 6).
+cannot be restored from the running system (see
+[bare-metal recovery](#bare-metal-recovery)).
 The target must be at least as large as the original volume.
 
 ### TrueNAS SCALE and other ZFS systems
@@ -601,6 +639,83 @@ policies and scripts): use it only when every domain controller lost SYSVOL.
 A backup older than the forest's tombstone lifetime (180 days by default,
 60 on old forests) must not be restored.
 
+### Bare-metal recovery
+
+Bare-metal recovery rebuilds a whole machine on blank hardware, or in a new
+virtual machine, when the original is gone.
+
+**Back up.** Tick "Back up the whole machine" on the machine's policy in the
+web UI, or:
+
+```sh
+bb policy add --name fs01-machine --agent fs01 --whole-machine --daily-at 01:00
+```
+
+This saves the partition table of the disk the system starts from and an
+image of every partition on it: the EFI system partition, the recovery
+partition and the Windows or Linux volumes. On Windows the volumes are read
+from a VSS snapshot and free space on NTFS is skipped. Other disks are added
+with `--machine-disk` (or the field under the tick box): disk numbers on
+Windows, such as `0` and `1`; devices on Linux, such as `/dev/sda`. Data that
+is already backed up as files is stored once, so a machine backup next to a
+file backup costs little extra space.
+
+**Recover.**
+
+1. In the web UI choose "Bare-metal recovery" and download the recovery disc.
+   The server writes its own address and fingerprint into the image, so check
+   the address shown is one the machine can reach. The Docker image carries
+   the disc. Other installs download `better-backup-recovery.iso` from the
+   releases page once and upload it on the same page.
+2. Start the machine from the disc: attach it to a virtual machine as a DVD,
+   or write it to a USB stick (`dd`, Rufus in DD mode, balenaEtcher). It
+   starts on BIOS and UEFI machines. It gets its address by DHCP; an address
+   can be typed in on its console.
+3. The machine shows a six-character recovery code and appears on the
+   "Bare-metal recovery" page. Approve it there if the codes match.
+4. Choose "Restore a backup onto it", pick the backup and which of the
+   machine's disks each disk of the backup goes onto, and start. Everything
+   on the chosen disks is erased.
+5. When the restore is finished, remove the disc and restart the machine from
+   the same page.
+
+The partition tables are written back with their identifiers, so Windows
+finds its boot files, drive letters and recovery partition as before.
+
+**As a virtual machine, without the disc.** Restore the "Whole machine" entry
+of a snapshot into a folder to get the disks as files (`.vhdx` on a Windows
+agent, `.img` elsewhere). Give a machine name as well, on an agent that runs
+on a Hyper-V host, and a new virtual machine is built around the disks,
+switched off and not connected to the network:
+
+```sh
+bb restore SNAPSHOT --path "Whole machine" --agent hyperv01 --target D:\Recovered --name fs01-recovered --wait
+```
+
+Things to know:
+
+- The target disk must be at least as large as the original and have the
+  same sector size (512 bytes on nearly every disk and on every virtual disk
+  made here). Extra space is left unused.
+- The machine must start the way the original did: UEFI (Hyper-V generation
+  2) or BIOS (generation 1). The page warns when they differ.
+- With Secure Boot on, the recovery disc needs the "Microsoft UEFI
+  Certificate Authority" to be trusted. On a Hyper-V generation 2 machine
+  choose that template under Security while recovering, then switch back to
+  "Microsoft Windows" before starting the restored Windows. Physical machines
+  trust it as delivered.
+- The recovery disc needs about 1.5 GB of memory.
+- Windows restored onto very different hardware may lack the driver for its
+  new disk controller. Recovering into a virtual machine of the same kind, or
+  onto similar hardware, avoids this. Injecting drivers is not built.
+- On Linux the partitions are read while in use, without a snapshot, so a
+  busy system can leave its file systems needing a check at first start.
+  LVM and software RAID members are copied as they are.
+- BitLocker volumes, dynamic disks and Storage Spaces are untested.
+- A recovery code only lets a machine ask; it receives nothing until an
+  administrator approves it. An approved machine may read backups until it
+  restarts or has been silent for two minutes.
+
 ### Email alerts
 
 Set them up under "Email alerts" in the web UI, or from the command line:
@@ -647,25 +762,42 @@ kept in the server's database, like the SMTP password.
 
 ### If the server is lost
 
-All you need is the repository folder and `repo.key`:
+Everything can be done from the browser. You need the repository key
+(`repo.key`, downloaded from the web UI) and either the offsite copy or the
+disk the repository is on.
+
+**From the offsite copy.** Install a new server and open its page. Instead
+of creating an administrator choose "Recover a lost server instead…", say
+where the copy is and give the key. The page shows the download and then
+the sign-in of the old server.
+
+**From the repository disk.** Start the new server with `--repo` pointing at
+the old repository. It finds backups but no key, and its page asks for the
+key.
+
+Either way the server gets back its users, agents, policies, settings and
+its certificate authority: the server saves these into the repository,
+encrypted with the repository key, every day, soon after a change and before
+each offsite copy. Agents carry on without being enrolled again when the new
+server has the old one's address. A copy made by an older version holds only
+the backups; the page then asks for a new administrator, and agents are
+enrolled again.
+
+Only a new server, without users, agents or backups, can be replaced this
+way.
+
+The same from a command line, for a restore without starting a server:
 
 ```sh
 bb-server snapshots --repo /mnt/backup-disk/repo --data /folder/holding/repo.key
 bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
     --snapshot SNAPSHOT --target /restore/here
-```
 
-If the repository is gone too, download the offsite copy first:
-
-```sh
 export BB_S3_ACCESS_KEY='...' BB_S3_SECRET_KEY='...'
 bb-server fetch --repo /mnt/new-disk/repo \
     --s3-endpoint https://s3.us-west-004.backblazeb2.com --s3-bucket my-backups
 # or: bb-server fetch --repo /mnt/new-disk/repo --from-folder /mnt/offsite
 ```
-
-Then use the two commands above, or start a new server with
-`--repo /mnt/new-disk/repo` and `repo.key` in its data directory.
 
 ## Known limits
 
@@ -693,8 +825,8 @@ Then use the two commands above, or start a new server with
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. restore over the running system with the registry, non-authoritative and authoritative Active Directory restore in DSRM (little tested on real machines) |
-| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node), VMware vSphere virtual machines over the network (untested on a real host, full reads only). To do: VMware Changed Block Tracking, Postgres option, user roles |
-| 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |
+| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node), VMware vSphere virtual machines over the network (untested on a real host, full reads only). Done also: users with roles, an activity log, and recovering a lost server in the browser. To do: VMware Changed Block Tracking, Postgres option, two-factor sign-in |
+| 6. Full recovery (in progress) | Done: whole-machine backup, bare-metal recovery disc, restore as a new Hyper-V machine. To do: driver injection for different hardware, SQL Server and Exchange writers, object-level AD restore |
 
 See [docs/architecture.md](docs/architecture.md) for the design and the
 storage format.
@@ -709,9 +841,13 @@ make app      # the desktop app, for this machine (needs cgo; on Linux also
               # the libgtk-3-dev and libwebkit2gtk-4.1-dev packages)
 make test
 make docker
+make recovery # the bare-metal recovery disc, in ./bin/recovery.iso
 ```
 
 The macOS installer is built on a Mac by `packaging/macos/build.sh VERSION`.
+
+`make recovery` needs an Ubuntu 24.04 machine with the tools named at the top
+of `packaging/recovery/build.py`.
 
 ## License
 

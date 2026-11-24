@@ -23,6 +23,7 @@ import (
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/cli"
 	"github.com/ajthom90/better-backup/internal/paths"
+	"github.com/ajthom90/better-backup/internal/recovery"
 	"github.com/ajthom90/better-backup/internal/svc"
 	"github.com/ajthom90/better-backup/internal/tree"
 )
@@ -64,6 +65,12 @@ var (
 )
 
 func main() {
+	// On the recovery disc this program is /init, the machine's first
+	// process.
+	if filepath.Base(os.Args[0]) == "init" || (len(os.Args) > 1 && os.Args[1] == "recover") {
+		recovery.Main(agent.Version)
+		return
+	}
 	fs := flag.NewFlagSet("bb-agent", flag.ExitOnError)
 	fs.Usage = func() { fmt.Fprintf(os.Stderr, usage, paths.AgentDir()) }
 	fs.StringVar(&dir, "dir", paths.AgentDir(), "")

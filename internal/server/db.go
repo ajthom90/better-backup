@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -32,6 +33,14 @@ CREATE TABLE IF NOT EXISTS jobs (
 	finished INTEGER NOT NULL DEFAULT 0, heartbeat INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS jobs_agent ON jobs(agent_id, status);
 CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created);
+CREATE TABLE IF NOT EXISTS users (
+	id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, hash TEXT NOT NULL, role TEXT NOT NULL,
+	disabled INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, last_login INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS sessions (
+	hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS audit (
+	id INTEGER PRIMARY KEY AUTOINCREMENT, time INTEGER NOT NULL, user TEXT NOT NULL,
+	remote TEXT NOT NULL DEFAULT '', action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '');
 `
 
 func openDB(dir string) (*sql.DB, error) {
@@ -46,6 +55,14 @@ func openDB(dir string) (*sql.DB, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, err
+	}
+	// Columns added after the first release. SQLite has no "add column if
+	// missing", so an error that the column exists is the expected case.
+	for _, col := range []string{`agents ADD COLUMN recovery INTEGER NOT NULL DEFAULT 0`} {
+		if _, err := db.Exec(`ALTER TABLE ` + col); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			db.Close()
+			return nil, err
+		}
 	}
 	return db, nil
 }
@@ -166,12 +183,12 @@ func (s *Server) policy(id string) (*api.Policy, error) {
 	return ps[0], nil
 }
 
-const agentCols = `id, name, hostname, os, arch, version, enrolled, last_seen, revoked`
+const agentCols = `id, name, hostname, os, arch, version, enrolled, last_seen, revoked, recovery`
 
 func scanAgent(row scanner) (*api.Agent, error) {
 	var a api.Agent
 	var enrolled, seen int64
-	if err := row.Scan(&a.ID, &a.Name, &a.Hostname, &a.OS, &a.Arch, &a.Version, &enrolled, &seen, &a.Revoked); err != nil {
+	if err := row.Scan(&a.ID, &a.Name, &a.Hostname, &a.OS, &a.Arch, &a.Version, &enrolled, &seen, &a.Revoked, &a.Recovery); err != nil {
 		return nil, err
 	}
 	a.EnrolledAt, a.LastSeen = fromMS(enrolled), fromMS(seen)

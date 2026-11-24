@@ -55,6 +55,11 @@ type Result struct {
 
 const configName = "config.json"
 
+// stateName is the server's own configuration, saved into the
+// repository so that a copy can bring back a whole server. It changes
+// in place, so its size says nothing about whether the copy has it.
+const stateName = "state/server.bak"
+
 // wanted reports whether a repository file belongs in a copy. The index
 // is a cache and temporary files are unfinished.
 func wanted(name string) bool {
@@ -67,6 +72,8 @@ func wanted(name string) bool {
 	case strings.HasPrefix(name, "packs/") && strings.HasSuffix(name, ".pack"):
 		return true
 	case strings.HasPrefix(name, "snapshots/") && strings.HasSuffix(name, ".snap"):
+		return true
+	case name == stateName:
 		return true
 	}
 	return false
@@ -204,6 +211,16 @@ func Sync(ctx context.Context, dir string, t Target, progress func(Result)) (Res
 		if err := upload(o); err != nil {
 			return res, err
 		}
+	}
+	if fi, err := os.Stat(filepath.Join(dir, filepath.FromSlash(stateName))); err == nil {
+		// Always sent again, and not counted as news: it is there to
+		// bring a server back, not something the user backed up.
+		delete(have, stateName)
+		n, b := res.Uploaded, res.UploadedBytes
+		if err := upload(Object{stateName, fi.Size()}); err != nil {
+			return res, err
+		}
+		res.Uploaded, res.UploadedBytes = n, b
 	}
 	// The config goes last: its presence marks a copy that can be used.
 	if err := t.Put(ctx, configName, bytes.NewReader(cfg), int64(len(cfg))); err != nil {

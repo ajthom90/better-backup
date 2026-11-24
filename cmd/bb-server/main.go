@@ -124,13 +124,8 @@ func main() {
 	switch cmd {
 	case "serve":
 		err = svc.Run(o.spec(), func(ctx context.Context) error {
-			s, err := server.New(server.Config{DataDir: o.data, RepoDir: o.repo, Listen: o.listen, TLSNames: o.names,
+			return server.Run(ctx, server.Config{DataDir: o.data, RepoDir: o.repo, Listen: o.listen, TLSNames: o.names,
 				Passphrase: os.Getenv("BB_REPO_PASSPHRASE"), Log: slog.Default()})
-			if err != nil {
-				return err
-			}
-			defer s.Close()
-			return s.Serve(ctx)
 		})
 	case "service":
 		if len(pos) < 2 {

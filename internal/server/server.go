@@ -6,7 +6,6 @@ package server
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
@@ -14,7 +13,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -23,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -50,6 +49,9 @@ type Config struct {
 	// key is generated on first start and kept in DataDir/repo.key.
 	Passphrase string
 	Log        *slog.Logger
+	// RecoveryISO is the recovery disc image to hand out. Default:
+	// DataDir/recovery.iso, then the copy installed with the server.
+	RecoveryISO string
 
 	// Tick is how often schedules and timeouts are checked.
 	Tick time.Duration
@@ -89,6 +91,30 @@ type Server struct {
 	kick        chan struct{}
 	stop        chan struct{} // closed at shutdown to release long polls
 	mail        chan mailMsg  // alerts waiting to be sent
+	// recovery holds the machines waiting at the recovery disc, and
+	// isoLinks the short-lived download links for the disc image.
+	recovery map[string]*recoverySession
+	isoLinks map[string]isoLink
+
+	// cert is the certificate the listener hands out. It is replaced
+	// when the server's names change.
+	cert   atomic.Pointer[tls.Certificate]
+	logins loginGuard
+	// stateDirty: something changed since the server's configuration
+	// was last saved into the repository.
+	stateDirty atomic.Bool
+	// locked: the repository exists but its key is missing. Only the
+	// pages that ask for the key work.
+	locked bool
+	// setupMu makes first-run steps happen one at a time.
+	setupMu sync.Mutex
+	// recover is the progress of a recovery from an offsite copy.
+	recover *api.RecoveryProgress
+	// restart, when set, is run by Run after Serve returns, before the
+	// server starts again. cancel makes Serve return; ctx ends with it.
+	restart func() error
+	cancel  context.CancelFunc
+	ctx     context.Context
 }
 
 // New opens, or on first start creates, the server state and repository.
@@ -106,25 +132,36 @@ func New(cfg Config) (*Server, error) {
 		cfg.Tick = 20 * time.Second
 	}
 	s := &Server{cfg: cfg, log: cfg.Log, snaps: map[string]*tree.Snapshot{}, running: map[string]string{},
-		wake: map[string]chan struct{}{}, kick: make(chan struct{}, 1), stop: make(chan struct{}), mail: make(chan mailMsg, 64)}
+		wake: map[string]chan struct{}{}, kick: make(chan struct{}, 1), stop: make(chan struct{}), mail: make(chan mailMsg, 64),
+		recovery: map[string]*recoverySession{}, isoLinks: map[string]isoLink{}}
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, err
 	}
+	s.ctx = context.Background()
 	pass, err := s.passphrase()
-	if err != nil {
+	switch {
+	case errors.Is(err, errKeyMissing):
+		// Start anyway: the web UI asks for the key.
+		s.locked = true
+		s.log.Warn("the repository exists but its key file is missing. Open the web page to enter the key, restore the key file, or set BB_REPO_PASSPHRASE",
+			"repository", cfg.RepoDir, "key file", filepath.Join(cfg.DataDir, "repo.key"))
+	case err != nil:
 		return nil, err
-	}
-	if !repo.Exists(cfg.RepoDir) {
-		if err := repo.Init(cfg.RepoDir, pass); err != nil {
+	default:
+		if !repo.Exists(cfg.RepoDir) {
+			if err := repo.Init(cfg.RepoDir, pass); err != nil {
+				return nil, err
+			}
+			s.log.Info("created a new repository", "dir", cfg.RepoDir)
+		}
+		if s.repo, err = repo.Open(cfg.RepoDir, pass); err != nil {
 			return nil, err
 		}
-		s.log.Info("created a new repository", "dir", cfg.RepoDir)
-	}
-	if s.repo, err = repo.Open(cfg.RepoDir, pass); err != nil {
-		return nil, err
 	}
 	if s.db, err = openDB(cfg.DataDir); err != nil {
-		s.repo.Close()
+		if s.repo != nil {
+			s.repo.Close()
+		}
 		return nil, err
 	}
 	if s.ca, err = loadOrCreateCA(filepath.Join(cfg.DataDir, "tls")); err != nil {
@@ -135,17 +172,27 @@ func New(cfg Config) (*Server, error) {
 	s.enc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
 	s.dec, _ = zstd.NewReader(nil, zstd.WithDecoderMaxMemory(repo.MaxChunkSize))
 
-	snaps, err := s.repo.LoadSnapshots()
-	if err != nil {
-		s.Close()
-		return nil, err
+	if !s.locked {
+		snaps, err := s.repo.LoadSnapshots()
+		if err != nil {
+			s.Close()
+			return nil, err
+		}
+		for _, sn := range snaps {
+			s.snaps[sn.ID] = sn
+		}
 	}
-	for _, sn := range snaps {
-		s.snaps[sn.ID] = sn
-	}
+	s.db.Exec(`DELETE FROM sessions WHERE expires < ?`, ms(time.Now()))
+	s.db.Exec(`DELETE FROM audit WHERE time < ?`, ms(time.Now().Add(-auditKeep)))
 	// Jobs that were running when the server last stopped cannot finish.
 	if _, err := s.db.Exec(`UPDATE jobs SET status = ?, error = 'the server restarted while this job was running', finished = ? WHERE status = ?`,
 		api.StatusFailed, ms(time.Now()), api.StatusRunning); err != nil {
+		s.Close()
+		return nil, err
+	}
+	// Machines that were at the recovery disc must announce themselves
+	// again: their sessions lived in memory.
+	if _, err := s.db.Exec(`UPDATE agents SET revoked = 1 WHERE recovery = 1`); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -167,7 +214,7 @@ func (s *Server) passphrase() ([]byte, error) {
 		return nil, err
 	}
 	if repo.Exists(s.cfg.RepoDir) {
-		return nil, fmt.Errorf("the repository in %s exists but its key file %s is missing; restore the key file or set BB_REPO_PASSPHRASE", s.cfg.RepoDir, path)
+		return nil, errKeyMissing
 	}
 	key := keys.RandomHex(32)
 	if err := os.WriteFile(path, []byte(key+"\n"), 0o600); err != nil {
@@ -196,16 +243,17 @@ func (s *Server) Fingerprint() string { return s.fp }
 
 // Listen binds the server's port. Addr is valid afterwards.
 func (s *Server) Listen() error {
-	cert, err := s.ca.serverCert(s.cfg.TLSNames)
-	if err != nil {
+	if err := s.issueCert(); err != nil {
 		return err
 	}
 	pool := x509.NewCertPool()
 	pool.AddCert(s.ca.cert)
 	ln, err := tls.Listen("tcp", s.cfg.Listen, &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{cert},
-		ClientCAs:    pool,
+		MinVersion: tls.VersionTLS13,
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return s.cert.Load(), nil
+		},
+		ClientCAs: pool,
 		// Agents present a certificate; browsers and the CLI do not.
 		ClientAuth: tls.VerifyClientCertIfGiven,
 	})
@@ -256,12 +304,19 @@ func (s *Server) Serve(ctx context.Context) error {
 			return err
 		}
 	}
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
+	s.mu.Lock()
+	s.ctx, s.cancel = ctx, stop
+	s.mu.Unlock()
 	s.http = &http.Server{Handler: s.routes(), ReadHeaderTimeout: 30 * time.Second,
 		ErrorLog: slog.NewLogLogger(s.log.Handler(), slog.LevelDebug)}
 	bg, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() { defer wg.Done(); s.background(bg) }()
+	if !s.locked {
+		wg.Add(1)
+		go func() { defer wg.Done(); s.background(bg) }()
+	}
 	go s.mailer(s.stop)
 	go func() {
 		<-ctx.Done()
@@ -316,47 +371,106 @@ func (s *Server) routes() http.Handler {
 	ag("GET /agent/v1/summary", s.handleAgentSummary)
 	ag("POST /agent/v1/backup", s.handleAgentBackup)
 
-	ad := func(pattern string, h http.HandlerFunc) {
+	// route registers an admin API call. role is the least role that
+	// may make it. action, when set, is what the activity log says after
+	// the call succeeded.
+	route := func(pattern, role, action string, h http.HandlerFunc) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if subtle.ConstantTimeCompare([]byte(hashToken(tok)), []byte(s.setting("admin_token_hash"))) != 1 {
-				fail(w, http.StatusUnauthorized, "invalid or missing admin token")
+			p := s.authAdmin(r)
+			if p == nil {
+				fail(w, http.StatusUnauthorized, "sign in first: the session has ended or the token is wrong")
 				return
 			}
-			h(w, r)
+			if roleRank(p.role) < roleRank(role) {
+				fail(w, http.StatusForbidden, "Your role ("+p.role+") does not allow this. It takes the role "+role+".")
+				return
+			}
+			if action == "" {
+				h(w, withPrincipal(r, p, nil))
+				return
+			}
+			n := &auditNote{detail: s.subject(r)}
+			sw := &statusWriter{ResponseWriter: w}
+			h(sw, withPrincipal(r, p, n))
+			if sw.status < 400 {
+				s.audit(p.name, remoteHost(r), action, n.detail)
+			}
 		})
 	}
-	ad("GET /api/v1/status", s.handleStatus)
-	ad("POST /api/v1/enroll-tokens", s.handleCreateToken)
-	ad("GET /api/v1/installers", s.handleInstallers)
-	ad("GET /api/v1/agents", s.handleAgents)
-	ad("DELETE /api/v1/agents/{id}", s.handleRevokeAgent)
-	ad("GET /api/v1/policies", s.handlePolicies)
-	ad("POST /api/v1/policies", s.handleSavePolicy)
-	ad("PUT /api/v1/policies/{id}", s.handleSavePolicy)
-	ad("DELETE /api/v1/policies/{id}", s.handleDeletePolicy)
-	ad("POST /api/v1/policies/{id}/run", s.handleRunPolicy)
-	ad("GET /api/v1/alerts", s.handleAlertSettings)
-	ad("PUT /api/v1/alerts", s.handleSaveAlertSettings)
-	ad("POST /api/v1/alerts/test", s.handleTestAlert)
-	ad("GET /api/v1/jobs", s.handleJobs)
-	ad("GET /api/v1/jobs/{id}", s.handleJob)
-	ad("GET /api/v1/snapshots", s.handleSnapshots)
-	ad("GET /api/v1/snapshots/{id}", s.handleSnapshot)
-	ad("DELETE /api/v1/snapshots/{id}", s.handleDeleteSnapshot)
-	ad("GET /api/v1/snapshots/{id}/ls", s.handleList)
-	ad("POST /api/v1/restores", s.handleRestore)
-	ad("GET /api/v1/vmware-servers", s.handleVMwareServers)
-	ad("POST /api/v1/vmware-servers", s.handleSaveVMwareServer)
-	ad("PUT /api/v1/vmware-servers/{id}", s.handleSaveVMwareServer)
-	ad("DELETE /api/v1/vmware-servers/{id}", s.handleDeleteVMwareServer)
-	ad("GET /api/v1/offsite", s.handleOffsite)
-	ad("PUT /api/v1/offsite", s.handleSaveOffsite)
-	ad("POST /api/v1/offsite/test", s.handleTestOffsite)
-	ad("POST /api/v1/offsite/run", s.handleRunOffsite)
-	ad("POST /api/v1/repo/gc", s.handleMaintenance(api.JobGC))
-	ad("POST /api/v1/repo/verify", s.handleMaintenance(api.JobVerify))
-	return mux
+	const viewer, operator, admin = api.RoleViewer, api.RoleOperator, api.RoleAdmin
+
+	// Before anyone is signed in.
+	mux.HandleFunc("GET /api/v1/setup", s.handleSetupStatus)
+	mux.HandleFunc("POST /api/v1/setup", s.handleSetup)
+	mux.HandleFunc("POST /api/v1/setup/recover", s.handleRecover)
+	mux.HandleFunc("POST /api/v1/setup/unlock", s.handleUnlock)
+	mux.HandleFunc("POST /api/v1/login", s.handleLogin)
+
+	route("POST /api/v1/logout", viewer, "Signed out", s.handleLogout)
+	route("GET /api/v1/me", viewer, "", s.handleMe)
+	route("PUT /api/v1/me/password", viewer, "Changed their own password", s.handleMyPassword)
+	route("GET /api/v1/users", admin, "", s.handleUsers)
+	route("POST /api/v1/users", admin, "Added a user", s.handleCreateUser)
+	route("PUT /api/v1/users/{id}", admin, "Changed a user", s.handleUpdateUser)
+	route("DELETE /api/v1/users/{id}", admin, "Removed a user", s.handleDeleteUser)
+	route("GET /api/v1/audit", admin, "", s.handleAudit)
+	route("GET /api/v1/settings", admin, "", s.handleSettings)
+	route("PUT /api/v1/settings", admin, "Changed the server's names", s.handleSaveSettings)
+	route("POST /api/v1/settings/repo-key", admin, "Downloaded the repository key", s.handleRepoKey)
+	route("POST /api/v1/settings/admin-token", admin, "Replaced the admin token", s.handleNewAdminToken)
+
+	route("GET /api/v1/status", viewer, "", s.handleStatus)
+	route("POST /api/v1/enroll-tokens", operator, "Created an enrollment token for a new agent", s.handleCreateToken)
+	route("GET /api/v1/installers", operator, "", s.handleInstallers)
+	route("GET /api/v1/agents", viewer, "", s.handleAgents)
+	route("DELETE /api/v1/agents/{id}", operator, "Revoked an agent", s.handleRevokeAgent)
+	route("GET /api/v1/policies", viewer, "", s.handlePolicies)
+	route("POST /api/v1/policies", operator, "Created a policy", s.handleSavePolicy)
+	route("PUT /api/v1/policies/{id}", operator, "Changed a policy", s.handleSavePolicy)
+	route("DELETE /api/v1/policies/{id}", operator, "Deleted a policy", s.handleDeletePolicy)
+	route("POST /api/v1/policies/{id}/run", operator, "Started a backup", s.handleRunPolicy)
+	route("GET /api/v1/alerts", viewer, "", s.handleAlertSettings)
+	route("PUT /api/v1/alerts", admin, "Changed the email alert settings", s.handleSaveAlertSettings)
+	route("POST /api/v1/alerts/test", admin, "Sent a test email", s.handleTestAlert)
+	route("GET /api/v1/jobs", viewer, "", s.handleJobs)
+	route("GET /api/v1/jobs/{id}", viewer, "", s.handleJob)
+	route("GET /api/v1/snapshots", viewer, "", s.handleSnapshots)
+	route("GET /api/v1/snapshots/{id}", viewer, "", s.handleSnapshot)
+	route("DELETE /api/v1/snapshots/{id}", operator, "Deleted a snapshot", s.handleDeleteSnapshot)
+	route("GET /api/v1/snapshots/{id}/ls", viewer, "", s.handleList)
+	route("POST /api/v1/restores", operator, "Started a restore", s.handleRestore)
+	route("GET /api/v1/vmware-servers", viewer, "", s.handleVMwareServers)
+	route("POST /api/v1/vmware-servers", admin, "Added a VMware server", s.handleSaveVMwareServer)
+	route("PUT /api/v1/vmware-servers/{id}", admin, "Changed a VMware server", s.handleSaveVMwareServer)
+	route("DELETE /api/v1/vmware-servers/{id}", admin, "Removed a VMware server", s.handleDeleteVMwareServer)
+	route("GET /api/v1/offsite", viewer, "", s.handleOffsite)
+	route("PUT /api/v1/offsite", admin, "Changed the offsite copy settings", s.handleSaveOffsite)
+	route("POST /api/v1/offsite/test", admin, "Tested the offsite copy", s.handleTestOffsite)
+	route("POST /api/v1/offsite/run", operator, "Started the offsite copy", s.handleRunOffsite)
+	mux.HandleFunc("POST /agent/v1/recovery/sessions", s.handleRecoveryHello)
+	mux.HandleFunc("POST /agent/v1/recovery/sessions/{id}/poll", s.handleRecoveryPoll)
+	mux.HandleFunc("GET /dl/recovery/{ticket}", s.handleRecoveryDownload)
+	route("GET /api/v1/recovery", viewer, "", s.handleRecovery)
+	route("POST /api/v1/recovery/machines/{id}/approve", operator, "Approved a machine at the recovery disc", s.handleRecoveryApprove)
+	route("POST /api/v1/recovery/machines/{id}/command", operator, "Sent a command to a machine at the recovery disc", s.handleRecoveryCommand)
+	route("DELETE /api/v1/recovery/machines/{id}", operator, "Forgot a machine at the recovery disc", s.handleRecoveryForget)
+	route("POST /api/v1/recovery/iso/link", operator, "", s.handleRecoveryLink)
+	route("PUT /api/v1/recovery/iso", admin, "Uploaded a recovery disc image", s.handleRecoveryUpload)
+	route("GET /api/v1/snapshots/{id}/machine", viewer, "", s.handleSnapshotMachine)
+	route("POST /api/v1/repo/gc", operator, "Started reclaiming space", s.handleMaintenance(api.JobGC))
+	route("POST /api/v1/repo/verify", operator, "Started verifying all data", s.handleMaintenance(api.JobVerify))
+	if !s.locked {
+		return mux
+	}
+	// Without the repository key only the pages that ask for it work.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/", "/ca.pem", "/healthz", "/api/v1/setup", "/api/v1/setup/unlock", "/api/v1/login", "/api/v1/logout", "/api/v1/me":
+			mux.ServeHTTP(w, r)
+		default:
+			fail(w, http.StatusServiceUnavailable, "The server is waiting for its repository key. Open its web page to enter it.")
+		}
+	})
 }
 
 func reply(w http.ResponseWriter, code int, v any) {

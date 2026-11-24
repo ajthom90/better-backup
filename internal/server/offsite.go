@@ -207,6 +207,10 @@ func (s *Server) runOffsite(ctx context.Context) {
 			// Finish the pack being written, so the copy includes
 			// everything backed up so far.
 			if err = s.repo.Flush(); err == nil {
+				// The copy also carries the server's own configuration.
+				if serr := s.saveState(); serr != nil {
+					s.log.Error("saving the server's configuration into the repository", "err", serr)
+				}
 				last := time.Now()
 				res, err = offsite.Sync(ctx, s.cfg.RepoDir, t, func(r offsite.Result) {
 					if time.Since(last) < 2*time.Second {
