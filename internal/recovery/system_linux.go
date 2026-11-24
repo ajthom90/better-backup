@@ -3,6 +3,7 @@ package recovery
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -146,44 +148,99 @@ func shutdown(cmd string) {
 }
 
 // console is the machine's screen and keyboard: the first virtual
-// terminal, and the serial port when the kernel was told to use it.
+// terminal, the serial port when the kernel was told to use it, and the
+// console a hypervisor gives a virtual machine in place of a serial
+// port (hvc0: Apple's Virtualization, Xen, a virtio console under KVM).
 type console struct {
-	mu   sync.Mutex
-	outs []io.Writer
-	in   chan string
+	mu    sync.Mutex
+	outs  []io.Writer
+	terms []*terminal
+	in    chan key
+}
+
+// terminal is one device of the console.
+type terminal struct {
+	path   string
+	f      *os.File
+	paused atomic.Bool // a command line has the device; leave its keyboard alone
+}
+
+// key is a line typed on one of the console's terminals.
+type key struct {
+	text string
+	from *terminal
 }
 
 func openConsole() *console {
-	c := &console{in: make(chan string, 8)}
+	c := &console{in: make(chan key, 8)}
 	devs := []string{"/dev/tty1"}
 	// A serial port: ttyS0 on a PC, ttyAMA0 on an ARM machine.
 	for _, f := range strings.Fields(readFile("/proc/cmdline")) {
 		if v, ok := strings.CutPrefix(f, "console="); ok {
-			if name, _, _ := strings.Cut(v, ","); strings.HasPrefix(name, "tty") && name != "tty0" {
+			if name, _, _ := strings.Cut(v, ","); (strings.HasPrefix(name, "tty") || strings.HasPrefix(name, "hvc")) && name != "tty0" {
 				devs = append(devs, "/dev/"+name)
 			}
 		}
 	}
+	// It is there only on a machine that has one.
+	devs = append(devs, "/dev/hvc0")
 	if os.Getpid() != 1 {
 		devs = []string{"/dev/tty"}
 	}
+	seen := map[string]bool{}
 	for _, d := range devs {
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
 		f, err := os.OpenFile(d, os.O_RDWR, 0)
 		if err != nil {
 			continue
 		}
+		t := &terminal{path: d, f: f}
 		c.outs = append(c.outs, f)
-		go func() {
-			sc := bufio.NewScanner(f)
-			for sc.Scan() {
-				c.in <- strings.TrimSpace(sc.Text())
-			}
-		}()
+		c.terms = append(c.terms, t)
+		go t.read(c.in)
 	}
 	if len(c.outs) == 0 {
 		c.outs = []io.Writer{os.Stdout}
 	}
 	return c
+}
+
+// read passes on the lines typed on the terminal. It reads in short
+// turns where the device allows, so that it can stand back while a
+// command line uses the device.
+func (t *terminal) read(in chan<- key) {
+	if t.f.SetReadDeadline(time.Now().Add(time.Second)) != nil {
+		sc := bufio.NewScanner(t.f)
+		for sc.Scan() {
+			in <- key{strings.TrimSpace(sc.Text()), t}
+		}
+		return
+	}
+	var line []byte
+	buf := make([]byte, 256)
+	for {
+		if t.paused.Load() {
+			line = line[:0]
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		t.f.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+		n, err := t.f.Read(buf)
+		for _, b := range buf[:n] {
+			if b != '\n' && b != '\r' {
+				line = append(line, b)
+				continue
+			}
+			in <- key{strings.TrimSpace(string(line)), t}
+			line = line[:0]
+		}
+		if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
+			return
+		}
+	}
 }
 
 func (c *console) printf(format string, args ...any) {
@@ -197,7 +254,7 @@ func (c *console) printf(format string, args ...any) {
 
 func (c *console) ask(prompt string) string {
 	c.printf("%s", prompt)
-	return <-c.in
+	return (<-c.in).text
 }
 
 func askServer(c *console) string {
@@ -291,7 +348,8 @@ func (u *screen) keys() (changeServer bool) {
 			}
 			u.draw() // the network may have come up meanwhile
 			continue
-		case key := <-u.con.in:
+		case k := <-u.con.in:
+			key := k.text
 			u.pause()
 			switch strings.ToLower(key) {
 			case "n":
@@ -302,7 +360,7 @@ func (u *screen) keys() (changeServer bool) {
 				}
 			case "c":
 				if os.Getpid() == 1 {
-					shell()
+					shell(k.from)
 				}
 			case "r", "p":
 				cmd := map[string]string{"r": "reboot", "p": "poweroff"}[strings.ToLower(key)]
@@ -315,11 +373,26 @@ func (u *screen) keys() (changeServer bool) {
 	}
 }
 
-// shell runs a command line on the second virtual terminal, shows that
-// terminal and waits for the command line to end. The first terminal
-// stays with the recovery screen, whose keyboard would otherwise have
-// two readers.
-func shell() {
+// shell runs a command line where it was asked for and waits for it to
+// end. From the screen that is the second virtual terminal, which it
+// shows: the first stays with the recovery screen. From a serial port
+// or a hypervisor's console it is that device itself, which the
+// recovery screen leaves alone meanwhile.
+func shell(from *terminal) {
+	if from != nil && from.path != "/dev/tty1" && from.f.SetReadDeadline(time.Now().Add(time.Second)) == nil {
+		from.paused.Store(true)
+		defer from.paused.Store(false)
+		time.Sleep(300 * time.Millisecond) // the read that was under way
+		// The shell opens the device itself, as the terminal of a
+		// session of its own, so that Ctrl-C works in it.
+		cmd := exec.Command(busybox, "setsid", "-c", busybox, "sh", "-l")
+		if f, err := os.OpenFile(from.path, os.O_RDWR, 0); err == nil {
+			defer f.Close()
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = f, f, f
+			cmd.Run()
+			return
+		}
+	}
 	exec.Command(busybox, "openvt", "-c", "2", "-f", "-s", "-w", "--", busybox, "sh", "-l").Run()
 	exec.Command(busybox, "chvt", "1").Run()
 }
