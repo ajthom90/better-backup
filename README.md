@@ -599,9 +599,29 @@ Things to know:
   administrator approves it. An approved machine may read backups until it
   restarts or has been silent for two minutes.
 
-### Email alerts
+### Health, alerts and reports
 
-Set them up under "Email alerts" in the web UI, or from the command line:
+The top of the web UI answers "is everything protected?": a verdict, a list
+of what needs attention (a failed or overdue backup, a machine without a
+policy, a nearly full disk, a failing or missing offsite copy, a repository
+key nobody has downloaded), and for every policy its state, last good
+backup, size and what it added in the last seven days. Under "Repository" it
+shows how fast the repository grows and how long the disk will last.
+
+A job that is waiting or running can be stopped with "Cancel"; an agent
+stops within about ten seconds. Reclaiming space and checking data cannot be
+stopped once they have started.
+
+The server reads and checks all stored data every 30 days, and warns when
+less than 10% of the repository's disk is free. Change both under
+"Settings".
+
+Under "Alerts and reports" you can also have a summary of all backups
+emailed every day or every Monday, and give a webhook address (Slack,
+Microsoft Teams, Discord, Mattermost) that receives every alert and summary,
+with or without email.
+
+Set email up under "Alerts and reports" in the web UI, or from the command line:
 
 ```sh
 export BB_SMTP_PASSWORD='...'    # only if the mail server needs a sign-in
@@ -707,7 +727,7 @@ bb-server fetch --repo /mnt/new-disk/repo \
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. restore over the running system with the registry, non-authoritative and authoritative Active Directory restore in DSRM (little tested on real machines) |
-| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node), VMware vSphere virtual machines over the network (untested on a real host, full reads only). Done also: users with roles, an activity log, and recovering a lost server in the browser. To do: VMware Changed Block Tracking, Postgres option, two-factor sign-in |
+| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node), VMware vSphere virtual machines over the network (untested on a real host, full reads only). Done also: users with roles, an activity log, and recovering a lost server in the browser. Done also: health report, summaries, webhooks, cancelling jobs, scheduled checks. To do: VMware Changed Block Tracking, Postgres option, two-factor sign-in |
 | 6. Full recovery (in progress) | Done: whole-machine backup, bare-metal recovery disc, restore as a new Hyper-V machine. To do: driver injection for different hardware, SQL Server and Exchange writers, object-level AD restore |
 
 See [docs/architecture.md](docs/architecture.md) for the design and the

@@ -24,6 +24,8 @@ const (
 	StatusSuccess = "success"
 	StatusWarning = "warning" // finished, but some files were skipped
 	StatusFailed  = "failed"
+	// StatusCancelled: someone stopped the job in the web UI.
+	StatusCancelled = "cancelled"
 )
 
 type EnrollRequest struct {
@@ -306,6 +308,87 @@ type AlertSettings struct {
 	// OnWarning also sends mail for backups that finish with warnings,
 	// such as skipped files.
 	OnWarning bool `json:"on_warning,omitempty"`
+	// Summary sends a report of all backups: "" (never), "daily" or
+	// "weekly" (on Mondays), at SummaryAt ("HH:MM", default 07:00).
+	Summary   string `json:"summary,omitempty"`
+	SummaryAt string `json:"summary_at,omitempty"`
+	// Webhook, if set, receives every alert as a JSON POST that Slack,
+	// Microsoft Teams, Discord and similar services understand. It works
+	// with or without email.
+	Webhook string `json:"webhook,omitempty"`
+}
+
+// MonitorSettings are the checks the server runs on itself.
+type MonitorSettings struct {
+	// VerifyEveryDays reads and checks all stored data this often; 0
+	// turns the check off. VerifyAt is when it starts ("HH:MM").
+	VerifyEveryDays int    `json:"verify_every_days"`
+	VerifyAt        string `json:"verify_at"`
+	// DiskWarnPercent warns when less than this share of the
+	// repository's disk is free; 0 turns the warning off.
+	DiskWarnPercent int `json:"disk_warn_percent"`
+}
+
+// Health is the answer to "is everything protected?".
+type Health struct {
+	// State is "ok", "warning" or "failed": the worst of what follows.
+	State    string         `json:"state"`
+	Issues   []HealthIssue  `json:"issues"`
+	Policies []PolicyHealth `json:"policies"`
+	Disk     DiskUsage      `json:"disk"`
+	// Usage is one point a day, oldest first, for at most 90 days.
+	Usage []UsagePoint `json:"usage"`
+	// GrowthPerDay is the average growth of the repository over the
+	// last 30 days of Usage, and DaysLeft how long the disk lasts at
+	// that rate (0 when it cannot be told).
+	GrowthPerDay int64 `json:"growth_per_day"`
+	DaysLeft     int   `json:"days_left,omitempty"`
+	// LastVerify is when all data was last checked and found good.
+	LastVerify *time.Time `json:"last_verify,omitempty"`
+	NextVerify *time.Time `json:"next_verify,omitempty"`
+	// Jobs counts what finished in the last 24 hours, by status.
+	Jobs map[string]int `json:"jobs"`
+}
+
+// HealthIssue is one thing that needs attention.
+type HealthIssue struct {
+	Level string `json:"level"` // "warning" or "failed"
+	Text  string `json:"text"`
+}
+
+// PolicyHealth is the state of one policy's backups.
+type PolicyHealth struct {
+	PolicyID string `json:"policy_id"`
+	Policy   string `json:"policy"`
+	AgentID  string `json:"agent_id"`
+	Agent    string `json:"agent"`
+	// State is "ok", "warning" (the last backup skipped something),
+	// "failed", "overdue", "never" (no backup yet), "running" or
+	// "paused" (not scheduled).
+	State    string     `json:"state"`
+	Detail   string     `json:"detail,omitempty"`
+	LastGood *time.Time `json:"last_good,omitempty"`
+	// Size is what the newest snapshot holds, New7Days what its backups
+	// added to the repository in the last seven days, Snapshots how many
+	// are kept.
+	Size      int64 `json:"size"`
+	New7Days  int64 `json:"new_7_days"`
+	Snapshots int   `json:"snapshots"`
+}
+
+// DiskUsage describes the disk the repository is on.
+type DiskUsage struct {
+	Total int64 `json:"total"`
+	Free  int64 `json:"free"`
+	// Known is false where the server cannot ask the system.
+	Known bool `json:"known"`
+}
+
+// UsagePoint is the repository's size on one day.
+type UsagePoint struct {
+	Day    string `json:"day"` // 2006-01-02
+	Stored int64  `json:"stored"`
+	Free   int64  `json:"free"`
 }
 
 // OffsiteSettings configures the second copy of the repository: a folder

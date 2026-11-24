@@ -67,6 +67,18 @@ func checkAlertSettings(a *api.AlertSettings) error {
 			return fmt.Errorf("%q is not an email address", a.From)
 		}
 	}
+	a.Webhook, a.SummaryAt = strings.TrimSpace(a.Webhook), strings.TrimSpace(a.SummaryAt)
+	if err := checkWebhook(a.Webhook); err != nil {
+		return err
+	}
+	if a.Summary != "" && a.Summary != "daily" && a.Summary != "weekly" {
+		return errors.New(`summary must be "daily", "weekly" or empty`)
+	}
+	if a.SummaryAt != "" {
+		if _, _, err := parseDailyAt(a.SummaryAt); err != nil {
+			return errors.New("the time of the summary must look like 07:00")
+		}
+	}
 	if !a.Enabled {
 		return nil
 	}
@@ -151,13 +163,17 @@ func (s *Server) mailer(stop <-chan struct{}) {
 			return
 		case m := <-s.mail:
 			a := s.alertSettings()
-			if !a.Enabled {
-				continue
+			if a.Enabled {
+				if err := sendMail(a, m.subject, m.body); err != nil {
+					s.log.Error("sending alert email", "subject", m.subject, "err", err)
+				} else {
+					s.log.Info("sent alert email", "subject", m.subject)
+				}
 			}
-			if err := sendMail(a, m.subject, m.body); err != nil {
-				s.log.Error("sending alert email", "subject", m.subject, "err", err)
-			} else {
-				s.log.Info("sent alert email", "subject", m.subject)
+			if a.Webhook != "" {
+				if err := postWebhook(s.ctx, a.Webhook, m.subject, m.body); err != nil {
+					s.log.Error("sending alert to the webhook", "subject", m.subject, "err", err)
+				}
 			}
 		}
 	}
@@ -170,7 +186,7 @@ func (s *Server) alertJob(j *api.Job, status, errMsg string, warnings []string) 
 		return
 	}
 	a := s.alertSettings()
-	if !a.Enabled || (status == api.StatusWarning && !a.OnWarning) {
+	if (!a.Enabled && a.Webhook == "") || (status == api.StatusWarning && !a.OnWarning) {
 		return
 	}
 	what := map[string]string{api.JobBackup: "Backup", api.JobRestore: "Restore", api.JobGC: "Garbage collection", api.JobVerify: "Repository verification", api.JobOffsite: "Offsite copy"}[j.Type]
@@ -240,7 +256,7 @@ func overdue(p *api.Policy, lastGood, now time.Time) bool {
 // checkMissed sends one alert when a policy becomes overdue, and forgets
 // about it once the policy has a good backup again.
 func (s *Server) checkMissed(now time.Time) {
-	if !s.alertSettings().Enabled {
+	if a := s.alertSettings(); !a.Enabled && a.Webhook == "" {
 		return
 	}
 	ps, err := s.policies("")
