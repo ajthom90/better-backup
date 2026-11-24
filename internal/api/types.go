@@ -259,6 +259,24 @@ type EnrollToken struct {
 	Fingerprint string    `json:"fingerprint"`
 }
 
+// Installers lists the agent installers an administrator can download
+// when adding a machine.
+type Installers struct {
+	Hostname string      `json:"hostname"` // the server's own name, to suggest as its address
+	Releases string      `json:"releases"` // page that lists every published installer
+	Files    []Installer `json:"files"`
+}
+
+type Installer struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	OS      string `json:"os"`
+	Arch    string `json:"arch"`
+	Format  string `json:"format"` // msi, pkg, deb or rpm
+	URL     string `json:"url"`    // a path on this server, or a release download
+	Size    int64  `json:"size,omitempty"`
+}
+
 // ListEntry is one row of a snapshot directory listing.
 type ListEntry struct {
 	Name    string    `json:"name"`

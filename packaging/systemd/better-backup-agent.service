@@ -3,8 +3,7 @@ Description=better-backup agent
 Documentation=https://github.com/ajthom90/better-backup
 After=network-online.target
 Wants=network-online.target
-# Starts only once the machine is enrolled: bb-agent enroll ...
-ConditionPathExists=/var/lib/better-backup-agent/agent.json
+# Runs from installation on, and waits to be enrolled: bb-agent enroll
 
 [Service]
 ExecStart=/usr/bin/bb-agent run

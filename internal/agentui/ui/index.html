@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Better Backup</title>
+<style>
+:root {
+  --bg: #f5f5f7; --card: #ffffff; --text: #1d1d1f; --muted: #6e6e73; --line: #e2e2e7;
+  --accent: #0a66d8; --accent-text: #ffffff; --ok: #1e8e3e; --warn: #b26a00; --bad: #c5221f;
+  --warn-bg: #fff6e0; --warn-line: #f0d48a; --field: #ffffff; --field-line: #c7c7cc;
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e20; --card: #2a2a2d; --text: #f2f2f4; --muted: #a1a1a8; --line: #3a3a3f;
+    --accent: #3b8cf5; --ok: #4cc26a; --warn: #f2b84b; --bad: #ff6b63;
+    --warn-bg: #3a3118; --warn-line: #6b5820; --field: #1e1e20; --field-line: #55555c;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { padding: 20px 20px 28px; max-width: 620px; margin: 0 auto; -webkit-user-select: none; user-select: none; cursor: default; }
+.selectable, input, textarea { -webkit-user-select: text; user-select: text; }
+header { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+header svg { flex: none; }
+header h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+header p { margin: 1px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.pill { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px 4px 9px;
+  border-radius: 999px; background: var(--card); border: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.dot.busy { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 14px; }
+section h2 { font-size: 13px; font-weight: 600; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+section.notice { background: var(--warn-bg); border-color: var(--warn-line); }
+section.notice h2 { color: var(--text); text-transform: none; letter-spacing: 0; font-size: 15px; }
+p { margin: 0 0 10px; } p:last-child { margin-bottom: 0; }
+ol { margin: 0 0 12px; padding-left: 20px; } li { margin-bottom: 4px; }
+.muted { color: var(--muted); } .bad { color: var(--bad); } .ok { color: var(--ok); } .warn { color: var(--warn); }
+label { display: block; font-weight: 500; margin: 12px 0 5px; }
+input[type=text], textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--field-line); border-radius: 7px;
+  background: var(--field); color: var(--text); font: inherit; }
+textarea { height: 92px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; word-break: break-all; }
+input:focus, textarea:focus, button:focus-visible, a:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; }
+button { font: inherit; font-weight: 500; padding: 7px 16px; border-radius: 7px; border: 1px solid var(--field-line);
+  background: var(--card); color: var(--text); cursor: default; }
+button:hover:not(:disabled) { filter: brightness(.96); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .5; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.row .grow { flex: 1; }
+.msg { margin-top: 12px; overflow-wrap: anywhere; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+a { color: var(--accent); text-decoration: none; cursor: pointer; } a:hover { text-decoration: underline; }
+.policy { padding: 10px 0; border-top: 1px solid var(--line); }
+.policy:first-of-type { border-top: 0; padding-top: 0; }
+.policy b { font-weight: 600; }
+.bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin: 10px 0 6px; }
+.bar i { display: block; height: 100%; width: 35%; border-radius: 3px; background: var(--accent); animation: slide 1.6s ease-in-out infinite; }
+@keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; background: var(--bg);
+  padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); overflow-wrap: anywhere; }
+[hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) { .dot.busy, .bar i { animation: none; } .bar i { width: 100%; opacity: .5; } }
+</style>
+</head>
+<body>
+<header>
+  <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
+    <rect width="44" height="44" rx="10" fill="#0a66d8"/>
+    <path d="M28 11.6A12 12 0 1 0 33.3 26.1" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M32.4 14.1 29.2 7.6 24.9 14.4z" fill="#fff"/>
+    <path d="M22 16v6.5l4.2 2.6" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <div>
+    <h1>Better Backup</h1>
+    <p id="sub" class="selectable">&nbsp;</p>
+  </div>
+  <span class="pill" id="pill" hidden><span class="dot" id="dot"></span><span id="pillText"></span></span>
+</header>
+<main id="main" aria-live="polite"></main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+// h builds an element. Text always goes in as text, never as markup:
+// names and messages come from the server and from the system.
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v; else if (k.startsWith("on")) e[k] = v;
+    else if (v === true) e.setAttribute(k, ""); else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) e.append(kid);
+  return e;
+}
+async function call(method, path, body) {
+  const r = await fetch(path, { method, headers: { "Content-Type": "application/json", "X-Better-Backup": "1" }, body: body ? JSON.stringify(body) : undefined });
+  const text = await r.text();
+  let v = null; try { v = JSON.parse(text); } catch (e) {}
+  if (!r.ok) throw new Error((v && v.error) || text.trim() || ("Request failed (" + r.status + ")"));
+  return v;
+}
+function ago(iso) {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 10) return "just now";
+  if (s < 60) return Math.floor(s) + " seconds ago";
+  if (s < 120) return "a minute ago";
+  if (s < 3600) return Math.floor(s / 60) + " minutes ago";
+  if (s < 7200) return "an hour ago";
+  if (s < 172800) return Math.floor(s / 3600) + " hours ago";
+  return Math.floor(s / 86400) + " days ago";
+}
+function when(iso) { return h("span", { title: new Date(iso).toLocaleString() }, ago(iso)); }
+function size(n) {
+  const u = ["bytes", "KB", "MB", "GB", "TB", "PB"]; let i = 0;
+  while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
+  return (i === 0 ? n : n.toFixed(n < 10 ? 2 : 1)) + " " + u[i];
+}
+function sentence(s) { s = String(s || "").trim(); return s ? s[0].toUpperCase() + s.slice(1) + (/[.!?]$/.test(s) ? "" : ".") : ""; }
+
+let state = null;       // the last answer of /api/state
+let view = "";          // which screen is drawn; forms are not redrawn while typed in
+let busy = false;       // a request the user started is under way
+let note = null;        // {text, cls}: the result of the last action
+let confirming = false; // the "disconnect" confirmation is showing
+const form = { code: "", name: "" };
+
+const machine = () => ({ darwin: "Mac", windows: "PC" }[state && state.platform] || "computer");
+function host(u) { try { return new URL(u).host; } catch (e) { return u; } }
+
+function setPill(cls, text) {
+  $("pill").hidden = !text; $("dot").className = "dot " + cls; $("pillText").textContent = text;
+}
+
+function draw() {
+  const st = state, s = st && st.status;
+  let next;
+  if (!st) next = "loading";
+  else if (st.denied) next = "denied";
+  else if (!st.running) next = "stopped";
+  else if (!s.enrolled) next = "enroll";
+  else next = "home";
+  // Keep what is being typed: the enrollment form is only drawn once.
+  if (next === "enroll" && view === "enroll") { drawEnrollStatus(); return; }
+  view = next;
+  const main = $("main");
+  main.replaceChildren();
+  if (next === "loading") { $("sub").textContent = "Looking for the agent on this " + machine() + "…"; setPill("", ""); return; }
+  if (next === "denied") {
+    $("sub").textContent = "This account may not change backup settings.";
+    setPill("bad", "No access");
+    const how = st.platform === "windows" ? ["Close this window and open Better Backup again with ", h("b", null, "Run as administrator"), "."]
+      : st.platform === "darwin" ? ["Sign in to this Mac as an administrator, or ask one to set up backups."]
+      : ["Run ", h("code", null, "sudo bb-agent enroll"), " in a terminal, or ask an administrator to add your account to the ",
+         h("code", null, st.group || "better-backup"), " group."];
+    main.append(h("section", null, h("h2", null, "An administrator is needed"),
+      h("p", null, "Backups read every file on this " + machine() + ", so only administrators may set them up."), h("p", null, how)));
+    return;
+  }
+  if (next === "stopped") {
+    $("sub").textContent = "The backup agent is not running on this " + machine() + ".";
+    setPill("bad", "Not running");
+    const fix = st.platform === "darwin" ? ["In Terminal, run ", h("code", { class: "selectable" }, "sudo bb-agent service start"), ". If that does not help, install Better Backup again."]
+      : st.platform === "windows" ? ["Open Services, find ", h("b", null, "better-backup agent"), " and start it. If it is not listed, install Better Backup again."]
+      : ["Run ", h("code", { class: "selectable" }, "sudo systemctl start better-backup-agent"), "."];
+    main.append(h("section", null, h("h2", null, "The agent is not running"),
+      h("p", null, "The agent is the part of Better Backup that runs in the background and does the backups. This window shows what it is doing, so there is nothing to show until it runs."),
+      h("p", null, fix), st.error ? h("p", { class: "muted selectable" }, sentence(st.error)) : null));
+    return;
+  }
+  if (next === "enroll") { drawEnroll(main); return; }
+  drawHome(main);
+}
+
+function fdaNotice() {
+  const s = state.status;
+  if (state.platform !== "darwin" || s.full_disk_access !== false) return null;
+  return h("section", { class: "notice", id: "fda" }, h("h2", null, "Allow Full Disk Access"),
+    h("p", null, "macOS is keeping Mail, Messages, Safari, Photos and other apps’ data away from the backup agent. Until you allow it, backups of this Mac will leave those out."),
+    h("ol", null,
+      h("li", null, "Open the Full Disk Access settings and unlock them if asked."),
+      h("li", null, "Press ", h("b", null, "+"), ", then press ⌘⇧G and enter ", h("code", { class: "selectable" }, s.binary || "/usr/local/bin/bb-agent"), ". Or drag ", h("b", null, "bb-agent"), " from the Finder window into the list."),
+      h("li", null, "Make sure the switch next to ", h("b", null, "bb-agent"), " is on.")),
+    h("div", { class: "row" },
+      h("button", { class: "primary", onclick: () => act(() => call("POST", "/api/open", { what: "full-disk-access" })) }, "Open Full Disk Access Settings"),
+      h("button", { onclick: () => act(() => call("POST", "/api/open", { what: "agent-program" })) }, "Show bb-agent in Finder")),
+    h("p", { class: "muted", style: "margin-top:12px" }, "Once access is allowed, the agent restarts by itself within a minute and this notice goes away."));
+}
+
+function drawEnroll(main) {
+  const m = machine();
+  $("sub").textContent = "This " + m + " is not connected to a backup server yet.";
+  const code = h("textarea", { id: "code", spellcheck: "false", autocomplete: "off", autocapitalize: "off", placeholder: "bb1.…",
+    oninput: e => { form.code = e.target.value; $("go").disabled = !form.code.trim() || busy; } });
+  code.value = form.code;
+  const name = h("input", { id: "name", type: "text", autocomplete: "off", spellcheck: "false", placeholder: state.status.hostname || "",
+    oninput: e => { form.name = e.target.value; } });
+  name.value = form.name;
+  main.append(
+    h("section", null, h("h2", null, "Connect this " + m),
+      h("ol", null,
+        h("li", null, "Open your backup server’s web page and choose ", h("b", null, "Add an agent"), "."),
+        h("li", null, "Copy the enrollment code it shows and paste it below.")),
+      h("label", { for: "code" }, "Enrollment code"), code,
+      h("label", { for: "name" }, "Name for this " + m), name,
+      h("p", { class: "muted", style: "margin-top:6px" }, "The server lists this " + m + " under this name. Leave it empty to use “" + (state.status.hostname || "its own name") + "”."),
+      h("div", { class: "row" }, h("button", { class: "primary", id: "go", disabled: true, onclick: enroll }, "Connect"),
+        h("span", { class: "muted", id: "going", hidden: true }, "Connecting…")),
+      h("div", { class: "msg bad selectable", id: "enrollErr", role: "alert", hidden: true })),
+    h("div", { id: "fdaSlot" }));
+  $("go").disabled = !form.code.trim();
+  drawEnrollStatus();
+}
+function drawEnrollStatus() {
+  const s = state.status;
+  setPill("warn", "Not connected");
+  const err = $("enrollErr");
+  // A code the installer was given may have been refused: say so.
+  if (!note && s.error && err.hidden) { err.textContent = sentence(s.error); err.hidden = false; }
+  $("fdaSlot").replaceChildren(fdaNotice() || "");
+}
+
+async function enroll() {
+  const err = $("enrollErr");
+  err.hidden = true; note = { text: "" };
+  busy = true; $("go").disabled = true; $("going").hidden = false;
+  try {
+    state = await call("POST", "/api/enroll", { code: form.code, name: form.name.trim() });
+    form.code = ""; form.name = ""; note = null;
+  } catch (e) {
+    err.textContent = sentence(e.message); err.hidden = false;
+  }
+  busy = false;
+  if ($("go")) { $("go").disabled = !form.code.trim(); $("going").hidden = true; }
+  draw();
+}
+
+function policyLine(p) {
+  const out = [];
+  if (p.paused) out.push(h("span", { class: "warn" }, "Paused. "));
+  if (!p.last_finished) out.push("No backup yet.");
+  else if (p.last_status === "failed") {
+    out.push(h("span", { class: "bad" }, "The last backup failed ", when(p.last_finished), ". "), h("span", { class: "selectable" }, sentence(p.last_error)));
+    if (p.last_success) out.push(" The last good backup was ", when(p.last_success), ".");
+  } else if (p.last_status === "warning") out.push(h("span", { class: "warn" }, "Last backup ", when(p.last_finished), ", with warnings."), " The server’s web page lists what was skipped.");
+  else out.push(h("span", { class: "ok" }, "Last backup ", when(p.last_finished), "."));
+  return out;
+}
+
+function drawHome(main) {
+  const s = state.status, m = machine();
+  $("sub").textContent = "This " + m + " backs up to " + host(s.server) + ".";
+  const job = s.job, pending = (s.policies || []).some(p => p.pending);
+  if (s.revoked) setPill("bad", "Removed by server");
+  else if (job) setPill("busy", job.type === "restore" ? "Restoring" : "Backing up");
+  else if (s.connected) setPill("ok", "Connected");
+  else if (s.error) setPill("bad", "Not connected");
+  else setPill("warn", "Connecting");
+
+  if (s.revoked) main.append(h("section", { class: "notice" }, h("h2", null, "The server no longer accepts this " + m),
+    h("p", null, "It was probably removed on the server. To back it up again, disconnect below and connect with a new enrollment code.")));
+  else if (!s.connected && s.error) main.append(h("section", { class: "notice" }, h("h2", null, "Cannot reach the server"),
+    h("p", null, "The agent keeps trying, and backups resume by themselves once the server answers."),
+    h("p", { class: "muted selectable" }, sentence(s.error))));
+  const fda = fdaNotice(); if (fda) main.append(fda);
+
+  const backups = h("section", null, h("h2", null, "Backups"));
+  if (job) {
+    const p = job.progress || {};
+    let detail = "Started " + ago(job.started) + ".";
+    if (job.type === "backup" && p.files) detail = p.files.toLocaleString() + " files checked, " + size(p.bytes_read || 0) + " read, " + size(p.bytes_uploaded || 0) + " sent.";
+    else if (job.type === "restore" && p.files) detail = p.files.toLocaleString() + " files restored.";
+    backups.append(h("p", null, h("b", null, job.type === "restore" ? "Restoring files…" : "Backing up…")), h("div", { class: "bar" }, h("i")), h("p", { class: "muted" }, detail));
+  }
+  const ps = s.policies || [];
+  if (ps.length) for (const p of ps) backups.append(h("div", { class: "policy" },
+    h("div", null, h("b", { class: "selectable" }, p.name), p.schedule ? h("span", { class: "muted" }, " · " + p.schedule) : null), h("div", null, policyLine(p))));
+  else if (s.connected && s.policies) backups.append(h("p", null, "Nothing is set to be backed up yet."),
+    h("p", { class: "muted" }, "What to back up, and when, is decided on the server. Open its web page, choose ", h("b", null, "Add policy"), " and pick this " + m + "."));
+  else if (!job) backups.append(h("p", { class: "muted" }, "The list of backups comes from the server, and shows once it answers."));
+  const can = s.connected && ps.length > 0 && !job && !pending && !busy;
+  backups.append(h("div", { class: "row" },
+    h("button", { class: "primary", id: "backup", disabled: !can, onclick: backupNow }, "Back Up Now"),
+    !job && pending ? h("span", { class: "muted" }, "A backup is about to start…") : null,
+    note && note.text ? h("span", { class: note.cls || "muted", role: "status" }, note.text) : null));
+  main.append(backups);
+
+  const serverLink = h("a", { href: s.server, target: "_blank", rel: "noopener", onclick: ev => {
+    if (state.app) { ev.preventDefault(); act(() => call("POST", "/api/open", { what: "server" })); } } }, "Open its web page");
+  const about = h("section", null, h("h2", null, "This " + m),
+    h("dl", null,
+      h("dt", null, "Name"), h("dd", { class: "selectable" }, s.name),
+      h("dt", null, "Server"), h("dd", null, h("span", { class: "selectable" }, s.server), " · ", serverLink),
+      h("dt", null, "Last contact"), h("dd", null, s.last_contact ? when(s.last_contact) : "none yet"),
+      h("dt", null, "Agent"), h("dd", { class: "selectable" }, "version " + s.version)));
+  if (confirming) about.append(h("div", { class: "msg" },
+    h("p", null, h("b", null, "Disconnect this " + m + " from the server?")),
+    h("p", { class: "muted" }, "Backups of this " + m + " stop. The backups already made stay on the server. To connect again you need a new enrollment code."),
+    h("div", { class: "row" }, h("button", { class: "danger", id: "really", disabled: busy, onclick: unenroll }, "Disconnect"),
+      h("button", { onclick: () => { confirming = false; draw(); } }, "Cancel"))));
+  else about.append(h("div", { class: "row" }, h("button", { id: "disconnect", onclick: () => { confirming = true; draw(); } }, "Disconnect…")));
+  main.append(about);
+}
+
+// act runs something the user asked for and shows why it failed.
+async function act(f) {
+  try { await f(); } catch (e) { note = { text: sentence(e.message), cls: "bad" }; draw(); }
+}
+async function backupNow() {
+  busy = true; note = null; draw();
+  try {
+    const r = await call("POST", "/api/backup");
+    note = { text: r.started ? "Backup requested." : "A backup is already under way.", cls: "muted" };
+  } catch (e) { note = { text: sentence(e.message), cls: "bad" }; }
+  busy = false;
+  await refresh();
+  setTimeout(() => { if (note && note.cls === "muted") { note = null; draw(); } }, 6000);
+}
+async function unenroll() {
+  busy = true; draw();
+  try { state = await call("POST", "/api/unenroll"); confirming = false; note = null; }
+  catch (e) { note = { text: sentence(e.message), cls: "bad" }; }
+  busy = false; draw();
+}
+
+async function refresh() {
+  try { state = await call("GET", "/api/state"); }
+  catch (e) { state = { running: false, denied: false, error: e.message, platform: (state && state.platform) || "", app: state && state.app }; }
+  // Draw only when something changed (or to keep "5 minutes ago" true),
+  // so that a selection or a pressed button is not swept away.
+  const key = JSON.stringify(state);
+  if (key !== drawn || Date.now() - drawnAt > 30000) { drawn = key; drawnAt = Date.now(); draw(); }
+}
+let drawn = "", drawnAt = 0;
+draw();
+refresh();
+setInterval(() => { if (!busy && !document.hidden) refresh(); }, 2000);
+// A hidden page still asks now and then: in a browser, whatever serves
+// this page stops when no page has asked for a while.
+setInterval(() => { if (!busy && document.hidden) refresh(); }, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !busy) refresh(); });
+</script>
+</body>
+</html>

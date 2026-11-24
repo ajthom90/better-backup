@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  better-backup server for Windows.
+
+  Installs bb-server.exe as the service "better-backup-server" with the
+  bb command, opens its port in Windows Firewall, and carries the agent
+  installer so the web UI can hand it out.
+
+  Without dialogs:
+    msiexec /i better-backup-server_VERSION_windows_amd64.msi /qn [REPO_DIR=D:\Backups] [PORT=8443]
+
+  REPO_DIR is where the backups go; empty means C:\ProgramData\better-backup\repo.
+  Both settings are remembered in the registry, so an upgrade keeps them.
+  The server's database and keys live in C:\ProgramData\better-backup;
+  they and the backups are kept on upgrade and on removal.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall">
+  <Package Name="better-backup server" Manufacturer="better-backup" Version="$(Version)"
+           UpgradeCode="5C0B8C4E-5E0B-4F0B-9E57-0C1F4E1B7B01" Scope="perMachine" InstallerVersion="500" Compressed="yes">
+    <SummaryInformation Description="better-backup server: stores backups and coordinates agents." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of the better-backup server is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- An upgrade finds the earlier answers here; they win over the command line. -->
+    <Property Id="PORT" Value="8443" Secure="yes">
+      <RegistrySearch Id="SavedPort" Root="HKLM" Key="SOFTWARE\better-backup\Server" Name="Port" Type="raw" />
+    </Property>
+    <Property Id="REPO_DIR" Secure="yes">
+      <RegistrySearch Id="SavedRepo" Root="HKLM" Key="SOFTWARE\better-backup\Server" Name="Repo" Type="raw" />
+    </Property>
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/ajthom90/better-backup" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="The server runs as the service “better-backup server”. Open “better-backup web UI” from the Start menu; the first visit asks you to create the administrator's name and password. Then choose “Add an agent” for each machine to back up." />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="CompanyFolder" Name="better-backup">
+        <Directory Id="INSTALLFOLDER" Name="Server">
+          <Directory Id="InstallersFolder" Name="installers" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DATADIR" Name="better-backup" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="better-backup server">
+      <Component Id="ServerExe" Directory="INSTALLFOLDER">
+        <File Id="ServerExe" Source="$(BinDir)\bb-server.exe" KeyPath="yes" />
+        <ServiceInstall Id="ServerService" Name="better-backup-server" DisplayName="better-backup server"
+                        Description="better-backup server: stores backups and coordinates agents."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Arguments="serve" Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="30" ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <ServiceControl Id="ServerService" Name="better-backup-server" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <fw:FirewallException Id="ServerPort" Name="better-backup server" Description="Agents and the web UI connect to the better-backup server on this port."
+                              Port="[PORT]" Protocol="tcp" Scope="any" Profile="all" IgnoreFailure="yes" />
+      </Component>
+      <Component Id="CliExe" Directory="INSTALLFOLDER">
+        <File Id="CliExe" Source="$(BinDir)\bb.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="AgentInstaller" Directory="InstallersFolder">
+        <File Id="AgentInstaller" Source="$(AgentMsi)" Name="$(AgentMsiName)" KeyPath="yes" />
+      </Component>
+
+      <!-- bb-server reads these at start. -->
+      <Component Id="SavedPort" Directory="INSTALLFOLDER">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\better-backup\Server" Name="Port" Type="string" Value="[PORT]" KeyPath="yes" />
+      </Component>
+      <Component Id="SavedRepo" Directory="INSTALLFOLDER" Condition="REPO_DIR">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\better-backup\Server" Name="Repo" Type="string" Value="[REPO_DIR]" KeyPath="yes" />
+      </Component>
+
+      <Component Id="ServerPath" Directory="INSTALLFOLDER" Guid="6B0E2B33-2C1C-4D55-8C36-6E1E1D7B5B02" KeyPath="yes">
+        <Environment Id="ServerPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" />
+      </Component>
+
+      <!-- The admin token and the repository key are in this folder: only SYSTEM and administrators may read it. -->
+      <Component Id="DataDir" Directory="DATADIR" Guid="0D8A0A64-6C0F-4B58-9E0E-2C0A3F4B5B03" KeyPath="yes" Permanent="yes">
+        <CreateFolder>
+          <PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" />
+        </CreateFolder>
+      </Component>
+
+      <Component Id="WebShortcut" Directory="ProgramMenuFolder">
+        <util:InternetShortcut Id="WebShortcut" Name="better-backup web UI" Target="https://localhost:[PORT]/" Type="url" />
+        <RegistryValue Root="HKLM" Key="SOFTWARE\better-backup\Server" Name="Shortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </Feature>
+
+    <UI>
+      <Dialog Id="SettingsDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Server settings" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="Where the backups are stored and how the server is reached." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="RepoLabel" Type="Text" X="20" Y="58" Width="330" Height="12" NoPrefix="yes" Text="&amp;Folder for the backups:" />
+        <Control Id="RepoEdit" Type="Edit" X="20" Y="71" Width="330" Height="18" Property="REPO_DIR" Text="{260}" />
+        <Control Id="RepoHelp" Type="Text" X="20" Y="93" Width="330" Height="36" NoPrefix="yes" Text="Choose a folder on the volume with the most room, for example D:\Backups. Leave it empty to use C:\ProgramData\better-backup\repo. Everything in it is encrypted and deduplicated." />
+        <Control Id="PortLabel" Type="Text" X="20" Y="138" Width="330" Height="12" NoPrefix="yes" Text="&amp;Port for agents and the web UI:" />
+        <Control Id="PortEdit" Type="Edit" X="20" Y="151" Width="60" Height="18" Property="PORT" Text="{5}" Integer="yes" />
+        <Control Id="PortHelp" Type="Text" X="20" Y="173" Width="330" Height="24" NoPrefix="yes" Text="Setup opens this port in Windows Firewall. Agents connect to it; nothing connects to the agents." />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel" />
+      </Dialog>
+    </UI>
+    <UIRef Id="BetterBackupUI" />
+  </Package>
+</Wix>

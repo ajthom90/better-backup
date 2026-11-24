@@ -77,6 +77,8 @@ Images are published to GitHub's registry: `:latest` and `:vX.Y.Z` for releases,
 and `:edge` for the newest commit on `main`. Until the first release exists, use
 `:edge`. The agent image is `ghcr.io/ajthom90/better-backup-agent`.
 
+On Windows, run the server installer: see [Windows installers](#windows-installers).
+
 Or natively (Linux, macOS, Windows), from a release archive:
 
 ```sh
@@ -131,21 +133,86 @@ a bigger disk or a NAS mount.
 
 ### 2. Enroll a machine
 
-On the server (in Docker: `docker exec better-backup bb token create`):
+Each machine to back up runs the agent. Installing it and connecting it to
+the server ("enrolling") takes one **enrollment code**, which carries the
+server's address, a one-time token and the server's fingerprint. Get a code
+from **Add an agent** in the web UI, or on the server (in Docker:
+`docker exec better-backup bb token create`):
 
 ```sh
-bb token create
+bb token create                                   # valid 24 hours, for one machine
+bb token create --for https://backup.example.com:8443   # name the address agents use
 ```
 
-It prints a command to run on the machine you want to back up:
+The agent runs in the background from the moment it is installed, and waits
+to be enrolled. What it backs up, and when, is then set on the server.
+
+#### macOS
+
+Download `better-backup-agent_VERSION_darwin_universal.pkg` from the
+[releases](https://github.com/ajthom90/better-backup/releases) and open it. It
+installs the agent (a launchd daemon that also runs when nobody is signed in),
+the **Better Backup** app and the `bb-agent` command, for Intel and Apple
+silicon Macs.
+
+The app opens when the installer finishes. Paste the enrollment code into it
+and press **Connect**. Afterwards it shows whether the Mac reaches the server
+and how the last backups went, and has a **Back Up Now** button. Any
+administrator of the Mac can use it.
+
+macOS keeps Mail, Messages, Safari, Photos and other apps' data away from
+programs until you allow it. The app says so and walks you through it: in
+System Settings, Privacy & Security, **Full Disk Access**, add
+`/usr/local/bin/bb-agent`. The agent restarts by itself once it has access.
+Without it backups still run, and leave those folders out with a warning.
+
+- Until the installer is signed with an Apple Developer ID, macOS refuses to
+  open it by double-click: right-click it and choose **Open**, or allow it
+  under System Settings, Privacy & Security, or install it from Terminal with
+  `sudo installer -pkg FILE.pkg -target /`. An unsigned agent also has to be
+  given Full Disk Access again after each update.
+- Without questions (scripts, management tools): put a file `enroll.conf`
+  beside the package holding `code=bb1...` and optionally `name=...`, then run
+  `sudo installer -pkg FILE.pkg -target /`. Or use the script below.
+- Remove it with `sudo bb-agent-uninstall`.
+
+#### Linux
+
+One line installs the `.deb` or `.rpm` package (or, on other systems, the
+plain program as a service) and enrolls the machine:
 
 ```sh
-sudo bb-agent enroll --server https://backup.example.com:8443 --token ... --fingerprint sha256:...
-sudo bb-agent service install
-sudo bb-agent service start
+curl -fsSL https://raw.githubusercontent.com/ajthom90/better-backup/main/packaging/install.sh | sudo sh -s -- CODE
 ```
 
-On Windows, run the same commands without `sudo` from an elevated prompt.
+The same line works on macOS. Or install the package yourself and enroll
+after:
+
+```sh
+sudo apt install ./better-backup-agent_VERSION_linux_amd64.deb   # or: sudo dnf install ./...rpm
+sudo bb-agent enroll          # asks for the code; or: sudo bb-agent enroll CODE
+```
+
+To enroll without anyone at the keyboard, write `code=bb1...` (and optionally
+`name=...`) to `/var/lib/better-backup-agent/enroll.conf`; the agent picks it
+up within seconds, and deletes it.
+
+#### On the machine, afterwards
+
+```sh
+sudo bb-agent status      # connected? what is it doing? how did the last backups go?
+sudo bb-agent backup      # back this machine up now
+sudo bb-agent unenroll    # forget the server
+sudo bb-agent setup       # all of this on a web page, served to this machine only
+```
+
+On Linux these need root, or membership of a group named `better-backup` if
+you create one (`sudo groupadd better-backup`, then restart the agent). On
+macOS, administrators need no `sudo`. The desktop app also builds for Linux
+(`make app`), but is not packaged there yet.
+
+On Windows, run `bb-agent enroll CODE` from an elevated prompt, then
+`bb-agent service install` and `bb-agent service start`.
 
 ### 3. Create a policy and back up
 
@@ -176,6 +243,76 @@ warnings, forget snapshots, verify the repository, reclaim space and set up
 email alerts. The `bb` command line does the same things for scripts. Sign in with the name and
 password you created on the first visit. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
+
+### Windows installers
+
+Each release has two installers for Windows, for x64 and ARM64:
+`better-backup-server_VERSION_windows_amd64.msi` and
+`better-backup-agent_VERSION_windows_amd64.msi`.
+
+**The server installer** asks for the folder to keep the backups in and the
+port (8443). It installs the server as the service "better-backup server",
+opens the port in Windows Firewall, adds the `bb` command to the path and
+puts "better-backup web UI" in the Start menu. The first visit to the web UI
+asks you to create the administrator's name and password.
+
+**The agent installer** asks for an enrollment code. Get one in the web UI:
+"Add an agent" shows the installer to download (the server carries the one
+that matches it), the code, and reports the machine when it has registered.
+The code holds the server's address, a one-time token and the server's
+fingerprint. The agent runs as the service "better-backup agent" and
+connects out to the server, so it needs no firewall rule.
+
+Both install without dialogs, for scripts and Group Policy:
+
+```bat
+msiexec /i better-backup-server_1.2.0_windows_amd64.msi /qn REPO_DIR=D:\Backups PORT=8443
+msiexec /i better-backup-agent_1.2.0_windows_amd64.msi /qn ENROLL_CODE=bb1.eyJz... AGENT_NAME=FILESERVER
+```
+
+| Property | Installer | Meaning |
+| --- | --- | --- |
+| `REPO_DIR` | server | Folder for the backups. Empty: `C:\ProgramData\better-backup\repo` |
+| `PORT` | server | Port for agents and the web UI. Default 8443 |
+| `ENROLL_CODE` | agent | Code from "Add an agent". Empty: install now, register later |
+| `AGENT_NAME` | agent | Name shown on the server. Empty: the computer's name |
+
+A code works once. For Group Policy, where one command installs many
+machines, set "Machines this code is for" in the dialog; that code works for
+a week.
+
+Installing a newer version over an older one upgrades it and keeps the
+settings; the server's are remembered in the registry and win over the
+command line on an upgrade. Removing either program keeps its data: the
+backups, `repo.key` and the server's database, and the agent's identity in
+`C:\ProgramData\better-backup-agent`, so a reinstalled agent is the same
+agent. The installers close both data folders to everyone but administrators
+and SYSTEM. The services log to `server.log` and `agent.log` in those folders.
+
+A server in Docker carries the Windows agent installer too (the `:edge`
+image carries the newest build, version `0.0.N`). To offer another installer
+from any server, put it in the folder `installers` in the server's data
+directory.
+
+#### Unsigned installers and antivirus
+
+The installers and programs are not code-signed yet, so Windows does not know
+their publisher:
+
+- A downloaded installer may be blocked. Right-click it, Properties, tick
+  **Unblock**; or run `Unblock-File better-backup-agent_*.msi` in PowerShell.
+- SmartScreen may say "Windows protected your PC". Choose **More info**, then
+  **Run anyway**.
+- Antivirus may distrust a new, unsigned program that reads every file and
+  talks to the network, which is what a backup agent does. Exclude the folder
+  `C:\Program Files\better-backup` and the processes `bb-agent.exe` and
+  `bb-server.exe`; excluding `C:\ProgramData\better-backup-agent` and the
+  server's backup folder from real-time scanning also keeps backups fast.
+
+The installers are built by `packaging/windows/build.ps1` and are signed when
+the release workflow has a code signing certificate (the secrets
+`SIGN_PFX_BASE64` and `SIGN_PFX_PASSWORD`). Without one, Windows SmartScreen
+warns about an unknown publisher on the first run.
 
 ### Whole volumes
 
@@ -713,8 +850,9 @@ bb-server fetch --repo /mnt/new-disk/repo \
   restored as its own file). Windows keeps most system files as hard links
   into its component store, so a system state restored in place uses more
   disk space than before.
-- No MSI or `.pkg` installers yet; `service install` does the same job.
-  `.deb` and `.rpm` packages are built on release.
+- No MSI installer yet; `service install` does the same job on Windows.
+- The macOS installer is not signed or notarized until the release workflow is
+  given an Apple Developer ID (see `.github/workflows/release.yml`).
 - The repository itself lives on a local disk or mounted share; S3 is for the
   offsite copy. The copy holds what the repository holds, so a snapshot
   forgotten here is also removed there at the next run.
@@ -738,11 +876,15 @@ storage format.
 Requires Go 1.26 or later.
 
 ```sh
-make build    # binaries in ./bin
+make build    # bb, bb-agent and bb-server in ./bin
+make app      # the desktop app, for this machine (needs cgo; on Linux also
+              # the libgtk-3-dev and libwebkit2gtk-4.1-dev packages)
 make test
 make docker
 make recovery # the bare-metal recovery disc, in ./bin/recovery.iso
 ```
+
+The macOS installer is built on a Mac by `packaging/macos/build.sh VERSION`.
 
 `make recovery` needs an Ubuntu 24.04 machine with the tools named at the top
 of `packaging/recovery/build.py`.

@@ -58,6 +58,8 @@ dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:1
 dt { color:var(--muted); } dd { margin:0; word-break:break-word; }
 button.danger { color:var(--bad); }
 dialog .row { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+.copybox { display:flex; gap:8px; align-items:flex-start; } .copybox pre { flex:1; margin:0; max-height:7.5em; overflow:auto; } #nasFolder ~ .copybox pre { max-height:none; }
+dialog a { color:var(--accent); }
 pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:10px; border-radius:6px; }
 .machine { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin:10px 0; }
 .machine h4 { margin:0 0 6px; font-size:15px; display:flex; gap:10px; align-items:center; }
@@ -786,28 +788,85 @@ for (const [id, kind] of [["runGC", "gc"], ["runVerify", "verify"]]) {
 }
 $("moreJobs").onclick = () => { jobLimit = jobLimit === 15 ? 100 : 15; $("moreJobs").textContent = jobLimit === 15 ? "Show more" : "Show fewer"; refresh().catch(() => {}); };
 
-$("newToken").onclick = async () => {
-  try {
-    const t = await call("POST", "/api/v1/enroll-tokens", { ttl: "24h", uses: 1 });
-    const st = await call("GET", "/api/v1/status");
-    const tag = /^v?\d+\.\d+\.\d+$/.test(st.version || "") ? "latest" : "edge";
-    const folder = el("input", { id: "nasFolder", value: "/mnt/tank/better-backup-agent" });
-    const yaml = el("pre", { id: "nasYaml" });
-    const fill = () => { yaml.textContent = "services:\n  better-backup-agent:\n    image: ghcr.io/ajthom90/better-backup-agent:" + tag + "\n    restart: unless-stopped\n    privileged: true\n    pid: host\n    network_mode: host\n    environment:\n      BB_HOST_ROOT: /proc/1/root\n      BB_AGENT_DIR: " + JSON.stringify(folder.value.trim()) + "\n      BB_SERVER: " + location.origin + "\n      BB_ENROLL_TOKEN: " + t.token + "\n      BB_FINGERPRINT: " + t.fingerprint + "\n"; };
-    folder.oninput = fill; fill();
-    openDialog(true, el("h3", { textContent: "Add an agent" }),
-      el("div", { textContent: "Install bb-agent on the machine, then run this there within 24 hours:" }),
-      el("pre", { textContent: "bb-agent enroll --server " + location.origin + " --token " + t.token + " --fingerprint " + t.fingerprint }),
-      el("div", { textContent: "Then start it with: bb-agent service install && bb-agent service start" }),
-      el("h3", { textContent: "On TrueNAS SCALE", style: "margin-top:22px" }),
-      el("div", { textContent: "The agent runs as an app. In TrueNAS open Apps, Discover Apps, the menu at the top right, Install via YAML. Name it better-backup-agent and paste the text below. It needs TrueNAS SCALE 24.10 or newer." }),
-      el("label", { textContent: "A folder on one of its pools, where the agent keeps its identity" }), folder,
-      el("div", { className: "hint", textContent: "Replace tank with the name of a pool. The folder is created on first start." }),
-      yaml,
-      el("div", { className: "hint", textContent: "The app is privileged and works in the file system of TrueNAS itself, so policies use the real paths (/mnt/tank/documents), files are read from ZFS snapshots, and a restore can write them back in place." }),
-      el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
-  } catch (e) { notice("Could not create a token", e.message); }
-};
+// enrollCode packs what an agent needs to find and trust this server
+// into one string to paste: "bb1." and base64url JSON.
+function enrollCode(server, t) {
+  const bytes = new TextEncoder().encode(JSON.stringify({ s: server, t: t.token, f: t.fingerprint }));
+  return "bb1." + btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function copyBox(text) {
+  const pre = el("pre", { textContent: text, className: "copy" });
+  const b = el("button", { textContent: "Copy", type: "button" });
+  b.onclick = async () => { try { await navigator.clipboard.writeText(pre.textContent); b.textContent = "Copied"; } catch (e) { getSelection().selectAllChildren(pre); b.textContent = "Press Ctrl+C"; } setTimeout(() => b.textContent = "Copy", 2000); };
+  return { box: el("div", { className: "copybox" }, pre, b), set: v => pre.textContent = v };
+}
+// addAgentDialog walks through adding a machine: get the installer, give
+// it the enrollment code, and watch the agent arrive.
+async function addAgentDialog() {
+  let [t, inst, before] = await Promise.all([call("POST", "/api/v1/enroll-tokens", { ttl: "24h", uses: 1 }),
+    call("GET", "/api/v1/installers"), call("GET", "/api/v1/agents")]);
+  const known = new Set(before.map(a => a.id));
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+  const address = el("input", { id: "addAddress", value: local && inst.hostname ? "https://" + inst.hostname + ":" + (location.port || "443") : location.origin, spellcheck: false });
+  const system = el("select", { id: "addSystem" }, el("option", { value: "windows", textContent: "Windows" }), el("option", { value: "darwin", textContent: "macOS" }), el("option", { value: "linux", textContent: "Linux" }), el("option", { value: "truenas", textContent: "TrueNAS SCALE" }));
+  const folder = el("input", { id: "nasFolder", value: "/mnt/tank/better-backup-agent" });
+  const yaml = copyBox("");
+  const tag = /^v?\d+\.\d+\.\d+$/.test($("version").textContent.replace("version ", "")) ? "latest" : "edge";
+  const uses = el("input", { id: "addUses", type: "number", min: 1, max: 1000, value: 1 });
+  const code = copyBox(""), silent = copyBox("");
+  const steps = el("div", { id: "addSteps" });
+  const arrived = el("div", { id: "addArrived", className: "hint", textContent: "Waiting for the new agent to connect. This updates by itself." });
+  const draw = () => {
+    const server = address.value.trim().replace(/\/+$/, ""), c = enrollCode(server, t), os = system.value;
+    code.set(c);
+    if (os === "truenas") {
+      // TrueNAS runs the agent as an app, which enrolls itself on first start.
+      yaml.set("services:\n  better-backup-agent:\n    image: ghcr.io/ajthom90/better-backup-agent:" + tag + "\n    restart: unless-stopped\n    privileged: true\n    pid: host\n    network_mode: host\n    environment:\n      BB_HOST_ROOT: /proc/1/root\n      BB_AGENT_DIR: " + JSON.stringify(folder.value.trim()) + "\n      BB_SERVER: " + server + "\n      BB_ENROLL_TOKEN: " + t.token + "\n      BB_FINGERPRINT: " + t.fingerprint + "\n");
+      steps.replaceChildren(el("label", { textContent: "1. A folder on one of its pools, where the agent keeps its identity" }), folder,
+        el("div", { className: "hint", textContent: "Replace tank with the name of a pool. The folder is created on first start." }),
+        el("label", { textContent: "2. Install the agent as an app" }),
+        el("div", { className: "hint", textContent: "In TrueNAS open Apps, Discover Apps, the menu at the top right, Install via YAML. Name it better-backup-agent and paste the text below. It needs TrueNAS SCALE 24.10 or newer. The text works " + (t.uses > 1 ? "for " + t.uses + " machines" : "once") + ", until " + when(t.expires) + "." }),
+        yaml.box,
+        el("div", { className: "hint", textContent: "The app is privileged and works in the file system of TrueNAS itself, so policies use the real paths (/mnt/tank/documents), files are read from ZFS snapshots, and a restore can write them back in place." }));
+      return;
+    }
+    const files = inst.files.filter(f => f.os === os);
+    const links = files.length
+      ? files.map(f => el("div", null, el("a", { href: f.url, textContent: f.name, download: f.name }), f.size ? " (" + size(f.size) + ")" : ""))
+      : [el("div", null, "This server has no installer for this system. Get it from the ", el("a", { href: inst.releases, target: "_blank", rel: "noopener", textContent: "releases page" }), ".")];
+    const first = files[0] ? files[0].name : os === "windows" ? "better-backup-agent.msi" : "the agent package";
+    const how = os === "windows"
+      ? ["Run the installer on the machine and paste the code when it asks for it.", "Or install without any dialogs, from a script or Group Policy:", "msiexec /i " + first + " /qn ENROLL_CODE=" + c]
+      : ["Install the agent on the machine, then open “better-backup agent” there and paste the code.", "Or register it from a terminal:", "sudo bb-agent enroll " + c];
+    silent.set(how[2]);
+    steps.replaceChildren(el("label", { textContent: "1. Download the agent installer" }), ...links,
+      el("label", { textContent: "2. Give the agent this enrollment code" }), code.box, el("div", { className: "hint", textContent: how[0] + " The code works " + (t.uses > 1 ? "for " + t.uses + " machines" : "once") + ", until " + when(t.expires) + "." }),
+      el("label", { textContent: how[1] }), silent.box);
+  };
+  address.oninput = system.onchange = folder.oninput = draw; draw();
+  // One code can install many machines at once, as a script or Group Policy does.
+  uses.onchange = async () => {
+    const n = Math.min(1000, Math.max(1, parseInt(uses.value, 10) || 1)); uses.value = n;
+    try { t = await call("POST", "/api/v1/enroll-tokens", { ttl: n > 1 ? "168h" : "24h", uses: n }); draw(); } catch (e) { arrived.textContent = e.message; }
+  };
+  openDialog(false, el("h3", { textContent: "Add an agent" }),
+    el("div", { className: "hint", textContent: "The agent is the small program that runs on each machine to back up. It connects out to this server, so the machine needs no open ports." }),
+    el("div", { className: "two" }, el("div", null, el("label", { textContent: "The machine runs" }), system), el("div", null, el("label", { textContent: "It reaches this server at" }), address)),
+    steps, el("label", { textContent: "Machines this code is for" }), uses,
+    el("div", { className: "hint", textContent: "Leave it at 1 for a single machine. A code for several machines works for a week, for installing by script or Group Policy." }),
+    el("label", { textContent: "3. Wait for it here" }), arrived,
+    el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
+  const poll = setInterval(async () => {
+    try {
+      const fresh = (await call("GET", "/api/v1/agents")).filter(a => !known.has(a.id));
+      if (!fresh.length) return;
+      arrived.className = "success"; arrived.textContent = "✓ " + fresh.map(a => a.name).join(", ") + (fresh.length > 1 ? " are" : " is") + " registered" + (fresh.every(a => a.online) ? " and connected" : "") + ". Next, add a backup policy.";
+      refresh().catch(() => {});
+    } catch (e) {}
+  }, 3000);
+  $("dlg").addEventListener("close", () => clearInterval(poll), { once: true });
+}
+$("newToken").onclick = () => addAgentDialog().catch(e => notice("Could not create a token", e.message));
 const ranks = { viewer: 1, operator: 2, admin: 3 };
 function can(role) { return !!me && ranks[me.role] >= ranks[role]; }
 const roleNames = { admin: "Administrator", operator: "Operator", viewer: "Viewer" };

@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  better-backup agent for Windows.
+
+  Installs bb-agent.exe as the service "better-backup-agent" and, when
+  given an enrollment code, leaves it for the service to register with.
+
+  Without dialogs:
+    msiexec /i better-backup-agent_VERSION_windows_amd64.msi /qn ENROLL_CODE=bb1... [AGENT_NAME=name]
+
+  The agent's identity lives in C:\ProgramData\better-backup-agent and is
+  kept on upgrade and on removal, so a reinstalled agent is still the
+  same agent to the server.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="better-backup agent" Manufacturer="better-backup" Version="$(Version)"
+           UpgradeCode="5C0B8C4E-5E0B-4F0B-9E57-0C1F4E1B7A01" Scope="perMachine" InstallerVersion="500" Compressed="yes">
+    <SummaryInformation Description="better-backup agent: backs up and restores this machine." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of the better-backup agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Secure: typed on a page as the user, used by the elevated install. Hidden: kept out of logs. -->
+    <Property Id="ENROLL_CODE" Secure="yes" Hidden="yes" />
+    <Property Id="AGENT_NAME" Secure="yes" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/ajthom90/better-backup" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="The agent runs as the service “better-backup agent”. If you gave it an enrollment code, it registers with the server within a minute and then shows up in the server's web UI. To register later, or to see how the backups are going, open “better-backup agent” from the Start menu." />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="CompanyFolder" Name="better-backup">
+        <Directory Id="INSTALLFOLDER" Name="Agent" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="STATEDIR" Name="better-backup-agent" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="better-backup agent">
+      <Component Id="AgentExe" Directory="INSTALLFOLDER">
+        <File Id="AgentExe" Source="$(BinDir)\bb-agent.exe" KeyPath="yes" />
+        <ServiceInstall Id="AgentService" Name="better-backup-agent" DisplayName="better-backup agent"
+                        Description="better-backup agent: backs up and restores this machine."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Arguments="run" Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="30" ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <ServiceControl Id="AgentService" Name="better-backup-agent" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+
+      <!-- The settings window: register with a server, see how backups go, start one. -->
+      <Component Id="AgentUi" Directory="INSTALLFOLDER">
+        <File Id="AgentUi" Source="$(BinDir)\bb-agent-ui.exe" KeyPath="yes">
+          <Shortcut Id="AgentUi" Directory="ProgramMenuFolder" Name="better-backup agent" Description="Register this machine with a backup server and see its backups." WorkingDirectory="INSTALLFOLDER" />
+        </File>
+      </Component>
+
+      <!-- Lets the agent start in safe mode with networking, where a domain controller is restored. -->
+      <Component Id="SafeBoot" Directory="INSTALLFOLDER">
+        <RegistryValue Root="HKLM" Key="SYSTEM\CurrentControlSet\Control\SafeBoot\Network\better-backup-agent" Type="string" Value="Service" KeyPath="yes" />
+      </Component>
+
+      <Component Id="AgentPath" Directory="INSTALLFOLDER" Guid="6B0E2B33-2C1C-4D55-8C36-6E1E1D7A5A02" KeyPath="yes">
+        <Environment Id="AgentPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" />
+      </Component>
+
+      <!-- The agent's keys are in this folder: only SYSTEM and administrators may read it. -->
+      <Component Id="StateDir" Directory="STATEDIR" Guid="0D8A0A64-6C0F-4B58-9E0E-2C0A3F4B5A03" KeyPath="yes" Permanent="yes">
+        <CreateFolder>
+          <PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" />
+        </CreateFolder>
+      </Component>
+
+      <!-- The service reads enroll.conf, registers with the server and deletes it. -->
+      <Component Id="EnrollConf" Directory="STATEDIR" Guid="A3C5B1E2-7F64-4C1D-8B7A-9D2E6F4B5A04" KeyPath="yes" Condition="ENROLL_CODE">
+        <IniFile Id="EnrollCode" Action="addLine" Directory="STATEDIR" Name="enroll.conf" Section="enroll" Key="code" Value="[ENROLL_CODE]" />
+        <IniFile Id="EnrollName" Action="addLine" Directory="STATEDIR" Name="enroll.conf" Section="enroll" Key="name" Value="[AGENT_NAME]" />
+      </Component>
+    </Feature>
+
+    <UI>
+      <Dialog Id="SettingsDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Register with a server" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="Tell the agent which better-backup server it belongs to." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="CodeHelp" Type="Text" X="20" Y="58" Width="330" Height="38" NoPrefix="yes" Text="In the server's web UI choose “Add an agent”, copy the enrollment code shown there, and paste it here. The code holds the server's address and works once." />
+        <Control Id="CodeLabel" Type="Text" X="20" Y="100" Width="330" Height="12" NoPrefix="yes" Text="&amp;Enrollment code:" />
+        <Control Id="CodeEdit" Type="Edit" X="20" Y="113" Width="330" Height="18" Property="ENROLL_CODE" Text="{2048}" />
+        <Control Id="CodeLater" Type="Text" X="20" Y="135" Width="330" Height="24" NoPrefix="yes" Text="Leave it empty to register later with “better-backup agent” in the Start menu. The agent is installed either way and waits until it is registered." />
+        <Control Id="NameLabel" Type="Text" X="20" Y="168" Width="330" Height="12" NoPrefix="yes" Text="&amp;Name to show on the server (empty for this computer's name):" />
+        <Control Id="NameEdit" Type="Edit" X="20" Y="181" Width="200" Height="18" Property="AGENT_NAME" Text="{64}" />
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel" />
+      </Dialog>
+    </UI>
+    <UIRef Id="BetterBackupUI" />
+  </Package>
+</Wix>

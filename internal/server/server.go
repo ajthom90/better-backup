@@ -354,6 +354,8 @@ func (s *Server) routes() http.Handler {
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok\n") })
 
+	mux.HandleFunc("GET /installers/{name}", s.handleInstallerFile)
+
 	mux.HandleFunc("POST /agent/v1/enroll", s.handleEnroll)
 	ag := func(pattern string, h func(http.ResponseWriter, *http.Request, *api.Agent)) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +373,8 @@ func (s *Server) routes() http.Handler {
 	ag("POST /agent/v1/chunks/missing", s.handleMissing)
 	ag("PUT /agent/v1/chunks/{id}", s.handlePutChunk)
 	ag("GET /agent/v1/chunks/{id}", s.handleGetChunk)
+	ag("GET /agent/v1/summary", s.handleAgentSummary)
+	ag("POST /agent/v1/backup", s.handleAgentBackup)
 
 	// route registers an admin API call. role is the least role that
 	// may make it. action, when set, is what the activity log says after
@@ -422,6 +426,7 @@ func (s *Server) routes() http.Handler {
 
 	route("GET /api/v1/status", viewer, "", s.handleStatus)
 	route("POST /api/v1/enroll-tokens", operator, "Created an enrollment token for a new agent", s.handleCreateToken)
+	route("GET /api/v1/installers", operator, "", s.handleInstallers)
 	route("GET /api/v1/agents", viewer, "", s.handleAgents)
 	route("DELETE /api/v1/agents/{id}", operator, "Revoked an agent", s.handleRevokeAgent)
 	route("GET /api/v1/policies", viewer, "", s.handlePolicies)

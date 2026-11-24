@@ -35,6 +35,8 @@ CMD ["run"]
 FROM gcr.io/distroless/static-debian12 AS server
 COPY --from=build /out/bb-server /out/bb /usr/local/bin/
 COPY --from=recovery /recovery.iso /usr/share/better-backup/recovery.iso
+# Agent installers for the web UI to hand out; see packaging/installers.
+COPY packaging/installers/ /usr/local/bin/installers/
 ENV BB_DATA=/data
 VOLUME /data
 EXPOSE 8443
