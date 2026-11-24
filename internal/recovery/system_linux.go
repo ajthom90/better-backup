@@ -51,6 +51,9 @@ func Main(version string) {
 	if pid1 {
 		n := loadDrivers(log)
 		log.Info("drivers loaded", "modules", n)
+		if useDisplayDriver() {
+			log.Info("moved the screen from the firmware's picture to the display's driver")
+		}
 	}
 	con.printf("Starting the network...\n")
 	nw := &network{log: log, procs: map[string]*exec.Cmd{}}
@@ -374,6 +377,7 @@ func (u *screen) keys() (changeServer bool) {
 		case <-tick.C:
 			if os.Getpid() == 1 {
 				u.nw.start() // adapters whose drivers were slow to load
+				useDisplayDriver()
 			}
 			u.draw() // the network may have come up meanwhile
 			continue
@@ -688,6 +692,50 @@ func loadDrivers(log *slog.Logger) int {
 		time.Sleep(700 * time.Millisecond) // let new devices show up
 	}
 	return total
+}
+
+// useDisplayDriver gives the screen to the display's own driver where
+// the kernel started on the picture the firmware left behind and a
+// driver for the display was loaded afterwards without taking that
+// picture's place (QEMU's ramfb next to a virtio display). Such a
+// display shows what its driver draws from then on, while the text
+// stayed on the firmware's picture: a blank screen. It reports whether
+// it changed anything.
+func useDisplayDriver() bool {
+	firmware := func(name string) bool {
+		return strings.Contains(name, "simple") || strings.Contains(name, "EFI VGA") || strings.Contains(name, "efifb")
+	}
+	old, other := 0, 0
+	for _, line := range strings.Split(readFile("/proc/fb"), "\n") {
+		if _, name, ok := strings.Cut(line, " "); ok {
+			if firmware(name) {
+				old++
+			} else {
+				other++
+			}
+		}
+	}
+	if old == 0 || other == 0 {
+		return false
+	}
+	for _, drv := range []string{"simple-framebuffer", "efi-framebuffer"} {
+		dir := "/sys/bus/platform/drivers/" + drv
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.Type()&os.ModeSymlink != 0 && e.Name() != "module" {
+				os.WriteFile(dir+"/unbind", []byte(e.Name()), 0o200)
+			}
+		}
+	}
+	// The text goes to no screen at all now, until it is told to use
+	// the one that is left.
+	cons, _ := filepath.Glob("/sys/class/vtconsole/vtcon*")
+	for _, c := range cons {
+		if strings.Contains(readFile(c+"/name"), "frame buffer") && readFile(c+"/bind") == "0" {
+			os.WriteFile(c+"/bind", []byte("1"), 0o200)
+		}
+	}
+	return true
 }
 
 func moduleName(file string) string {

@@ -869,7 +869,9 @@ Things to know:
   baud) and on the console a hypervisor gives a virtual machine in place of
   one (`hvc0`: Apple's Virtualization, Xen, a virtio console). Keys work
   there as on the keyboard, and "C" opens the command line on the device it
-  was typed on.
+  was typed on. One exception is known: in UTM, a virtual machine with
+  Apple's Virtualization that has a keyboard shows the screen on its serial
+  port but takes no keys from it.
 - The machine must have the same kind of processor as the original: x64 or
   ARM64. The page warns when they differ.
 - Windows restored onto very different hardware may lack the driver for its
