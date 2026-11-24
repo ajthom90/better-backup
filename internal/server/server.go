@@ -100,6 +100,11 @@ type Server struct {
 	// when the server's names change.
 	cert   atomic.Pointer[tls.Certificate]
 	logins loginGuard
+	// cancelOffsite stops the offsite copy that is running, if one is.
+	cancelOffsite context.CancelCauseFunc
+	// lastUsage is when the repository's size was last recorded. Only
+	// the background loop touches it.
+	lastUsage time.Time
 	// stateDirty: something changed since the server's configuration
 	// was last saved into the repository.
 	stateDirty atomic.Bool
@@ -429,6 +434,12 @@ func (s *Server) routes() http.Handler {
 	route("POST /api/v1/alerts/test", admin, "Sent a test email", s.handleTestAlert)
 	route("GET /api/v1/jobs", viewer, "", s.handleJobs)
 	route("GET /api/v1/jobs/{id}", viewer, "", s.handleJob)
+	route("POST /api/v1/jobs/{id}/cancel", operator, "Cancelled a job", s.handleCancelJob)
+	route("GET /api/v1/health", viewer, "", s.handleHealth)
+	route("GET /api/v1/monitor", viewer, "", s.handleMonitorSettings)
+	route("PUT /api/v1/monitor", admin, "Changed the checks the server runs on itself", s.handleSaveMonitorSettings)
+	route("POST /api/v1/alerts/test-webhook", admin, "Sent a test message to the webhook", s.handleTestWebhook)
+	route("POST /api/v1/alerts/summary", admin, "", s.handleTestSummary)
 	route("GET /api/v1/snapshots", viewer, "", s.handleSnapshots)
 	route("GET /api/v1/snapshots/{id}", viewer, "", s.handleSnapshot)
 	route("DELETE /api/v1/snapshots/{id}", operator, "Deleted a snapshot", s.handleDeleteSnapshot)

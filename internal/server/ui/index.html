@@ -31,7 +31,10 @@ button.primary { background:var(--accent); border-color:var(--accent); color:#ff
 button:hover { filter:brightness(0.95); }
 input,select,textarea { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); width:100%; }
 .pill { font-size:12px; font-weight:600; }
-.success,.online { color:var(--good); } .warning,.queued,.running { color:var(--warn); } .failed,.revoked { color:var(--bad); } .offline { color:var(--muted); }
+.success,.online { color:var(--good); } .warning,.queued,.running { color:var(--warn); } .failed,.revoked { color:var(--bad); } .offline,.cancelled,.paused,.never { color:var(--muted); } .ok { color:var(--good); } .overdue { color:var(--bad); }
+.issues { margin:0; padding:10px 16px 10px 34px; border-bottom:1px solid var(--line); } .issues li { margin:3px 0; } .issues li.failed { color:var(--bad); } .issues li.warning { color:var(--warn); }
+.usage { padding:10px 16px; border-top:1px solid var(--line); display:flex; gap:16px; align-items:center; flex-wrap:wrap; color:var(--muted); }
+.usage svg { flex:0 0 220px; height:44px; } .usage span { flex:1; min-width:240px; }
 #login { max-width:420px; margin:12vh auto; padding:22px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
 #login p { color:var(--muted); }
 #err { color:var(--bad); min-height:1.4em; }
@@ -83,10 +86,11 @@ h4 { margin:18px 0 4px; }
 <body>
 <div id="front" class="front" hidden></div>
 <div id="app" hidden>
-<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="recovery" class="need-operator">Bare-metal recovery</button><button id="vmware" class="need-admin">VMware servers</button><button id="offsite" class="need-operator">Offsite copy</button><button id="alerts" class="need-admin">Email alerts</button><button id="users" class="need-admin">Users</button><button id="activity" class="need-admin">Activity log</button><button id="settings" class="need-admin">Settings</button><span id="whoami"></span><button id="account">My password</button><button id="logout">Sign out</button></header>
+<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="recovery" class="need-operator">Bare-metal recovery</button><button id="vmware" class="need-admin">VMware servers</button><button id="offsite" class="need-operator">Offsite copy</button><button id="alerts" class="need-admin">Alerts and reports</button><button id="users" class="need-admin">Users</button><button id="activity" class="need-admin">Activity log</button><button id="settings" class="need-admin">Settings</button><span id="whoami"></span><button id="account">My password</button><button id="logout">Sign out</button></header>
 <main>
   <div class="banner need-admin" id="keyBanner" hidden><span><b>Keep a copy of the repository key.</b> Without it, neither the backups on this server nor the offsite copy can be read. Download it and keep it somewhere other than this server.</span><button class="primary" id="keyBannerBtn">Download the key</button></div>
-  <section><h2><span>Repository</span><button id="runVerify" class="need-operator">Verify all data</button><button id="runGC" class="need-operator">Reclaim space</button></h2><div class="stats" id="stats"></div></section>
+  <section><h2><span>Health</span><span id="healthState" style="flex:none;white-space:nowrap"></span></h2><ul class="issues" id="issues" hidden></ul><div class="scroll" id="health"></div></section>
+  <section><h2><span>Repository</span><button id="runVerify" class="need-operator">Verify all data</button><button id="runGC" class="need-operator">Reclaim space</button></h2><div class="stats" id="stats"></div><div class="usage" id="usage" hidden></div></section>
   <section><h2><span>Agents</span><button id="newToken" class="need-operator">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
   <section><h2><span>Backup policies</span><button id="newPolicy" class="need-operator">New policy</button></h2><div class="scroll" id="policies"></div></section>
   <section><h2><span>Recent jobs</span><button id="moreJobs">Show more</button></h2><div class="scroll" id="jobs"></div></section>
@@ -131,9 +135,10 @@ function notice(title, text) {
 }
 
 async function refresh() {
-  const [st, allAgents, policies, jobs, snaps, off, vmw] = await Promise.all([
+  const [st, allAgents, policies, jobs, snaps, off, vmw, health] = await Promise.all([
     call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
-    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers")]);
+    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers"), call("GET", "/api/v1/health")]);
+  showHealth(health);
   vmwareList = vmw;
   $("version").textContent = "version " + st.version;
   $("keyBanner").hidden = st.key_saved;
@@ -144,7 +149,7 @@ async function refresh() {
   const stat = (v, label) => el("div", { className: "stat" }, el("b", { textContent: v }), el("small", { textContent: label }));
   $("stats").replaceChildren(stat(st.agents, "agents"), stat(st.snapshots, "snapshots"), stat(size(st.stored_bytes), "used on disk"),
     stat(size(st.raw_bytes), "unique data before compression"), stat(st.running_jobs, "jobs running"),
-    stat(offsiteSummary(off), "offsite copy"));
+    stat(offsiteSummary(off), "offsite copy"), stat(health.disk.known ? size(health.disk.free) : "unknown", "free on the repository's disk"));
   table("agents", ["Name", "Host", "System", "Version", "State", "Last seen", ""],
     agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, a.version, pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen),
       a.revoked || !can("operator") ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
@@ -160,12 +165,48 @@ async function refresh() {
   table("jobs", ["Started", "Type", "Agent", "Status", "Detail", ""],
     jobs.map(j => [when(j.created), j.type, agentNames[j.agent_id] || "server", pill(j.status),
       j.error || (j.warnings ? j.warnings.length + " warnings" : "") || (j.snapshot_id ? "snapshot " + j.snapshot_id : ""),
-      button("Details", async () => jobDialog(j.id))]),
+      el("div", { className: "acts" }, button("Details", async () => jobDialog(j.id)), cancelButton(j, refresh))]),
     "No jobs have run yet.");
   table("snapshots", ["Time", "Host", "Paths", "Files", "Size", "New data", ""],
     snaps.slice(0, 50).map(s => [when(s.time), s.hostname, s.sources.map(x => x.name).join(", "), s.stats.files, size(s.stats.bytes), size(s.stats.bytes_uploaded),
       el("div", { className: "acts" }, button("Browse", async () => browseDialog(s, "")), can("operator") ? button("Restore", async () => restoreDialog(s, "")) : "")]),
     "No snapshots yet.");
+}
+
+const stateNames = { ok: "protected", warning: "warnings", failed: "failed", overdue: "overdue", never: "no backup yet", running: "running", paused: "manual" };
+function day(t) { return t ? new Date(t).toLocaleDateString([], { dateStyle: "medium" }) : "never"; }
+// showHealth fills the health section: the verdict, what needs attention, every policy, and how the repository grows.
+function showHealth(h) {
+  const verdict = { ok: "Everything is protected", warning: "Needs a look", failed: "Needs attention" }[h.state];
+  $("healthState").replaceChildren(el("span", { className: "pill " + (h.state === "ok" ? "success" : h.state), id: "verdict", textContent: verdict }));
+  $("issues").hidden = !h.issues.length;
+  $("issues").replaceChildren(...h.issues.map(i => el("li", { className: i.level, textContent: i.text })));
+  table("health", ["Machine", "Policy", "State", "Last good backup", "Size", "New in 7 days", "Snapshots"],
+    h.policies.map(p => [p.agent, p.policy, Object.assign(el("span", { className: "pill " + p.state, textContent: stateNames[p.state] || p.state }), { title: p.detail || "" }),
+      when(p.last_good || ""), size(p.size), size(p.new_7_days), p.snapshots]),
+    "No backup policies yet.");
+  const parts = [];
+  if (h.growth_per_day > 0) parts.push("Grows by about " + size(h.growth_per_day) + " a day" + (h.days_left ? ", so the disk lasts about " + (h.days_left > 730 ? "more than two years" : h.days_left + " days") : "") + ".");
+  else if (h.usage.length > 1) parts.push("Not growing.");
+  parts.push(h.last_verify ? "All data was checked and found good on " + day(h.last_verify) + "." : "All data has not been checked yet.");
+  if (h.next_verify) parts.push("Next check: " + day(h.next_verify) + ".");
+  const box = $("usage"); box.hidden = false; box.replaceChildren();
+  if (h.usage.length > 1) {
+    const ns = "http://www.w3.org/2000/svg", w = 220, ht = 44;
+    const max = Math.max(...h.usage.map(u => u.stored), 1), min = Math.min(...h.usage.map(u => u.stored));
+    const span = Math.max(max - min, max * 0.02, 1);
+    const pts = h.usage.map((u, i) => (i * (w - 4) / (h.usage.length - 1) + 2).toFixed(1) + "," + (ht - 3 - (u.stored - min) / span * (ht - 6)).toFixed(1)).join(" ");
+    const svg = document.createElementNS(ns, "svg"); svg.setAttribute("viewBox", "0 0 " + w + " " + ht); svg.setAttribute("role", "img");
+    const title = document.createElementNS(ns, "title"); title.textContent = "Space used over the last " + h.usage.length + " days, from " + size(h.usage[0].stored) + " to " + size(h.usage[h.usage.length - 1].stored);
+    const line = document.createElementNS(ns, "polyline"); line.setAttribute("points", pts); line.setAttribute("fill", "none"); line.setAttribute("stroke", "currentColor"); line.setAttribute("stroke-width", "2"); line.setAttribute("stroke-linejoin", "round");
+    svg.style.color = "var(--accent)"; svg.append(title, line); box.append(svg);
+  }
+  box.append(el("span", { id: "usageText", textContent: parts.join(" ") }));
+}
+// cancelButton stops a job that is waiting or running.
+function cancelButton(j, after) {
+  if (!can("operator") || (j.status !== "queued" && j.status !== "running") || (j.status === "running" && (j.type === "gc" || j.type === "verify"))) return "";
+  return confirmButton("Cancel", "Click again to stop it", async () => { await call("POST", "/api/v1/jobs/" + j.id + "/cancel"); await after(); });
 }
 
 function keeps(r) {
@@ -295,9 +336,14 @@ async function alertsDialog() {
   const from = el("input", { value: a.from || "", placeholder: "backups@example.com" });
   const to = el("textarea", { rows: 2, value: (a.to || []).join("\n"), placeholder: "One address per line" });
   const warn = el("input", { type: "checkbox", checked: !!a.on_warning });
+  const summary = el("select", { id: "summary" }, el("option", { value: "", textContent: "No summary" }), el("option", { value: "daily", textContent: "Every day" }), el("option", { value: "weekly", textContent: "Every Monday" }));
+  summary.value = a.summary || "";
+  const summaryAt = el("input", { type: "time", id: "summaryAt", value: a.summary_at || "07:00" });
+  const hook = el("input", { id: "webhook", value: a.webhook || "", placeholder: "https://… (optional)", autocomplete: "off" });
   const msg = el("div", { id: "err" });
   const body = () => ({ enabled: enabled.checked, host: host.value.trim(), port: parseInt(port.value, 10) || 0, security: sec.value, username: user.value.trim(),
-    password: pass.value, password_set: !pass.value && !!a.password_set && !!user.value.trim(), from: from.value.trim(), to: lines(to.value), on_warning: warn.checked });
+    password: pass.value, password_set: !pass.value && !!a.password_set && !!user.value.trim(), from: from.value.trim(), to: lines(to.value), on_warning: warn.checked,
+    summary: summary.value, summary_at: summaryAt.value || "07:00", webhook: hook.value.trim() });
   const say = (text, good) => { msg.textContent = text; msg.style.color = good ? "var(--good)" : ""; };
   const save = el("button", { className: "primary", textContent: "Save" });
   save.onclick = async () => { try { await call("PUT", "/api/v1/alerts", body()); $("dlg").close(); } catch (e) { say(e.message); } };
@@ -312,7 +358,18 @@ async function alertsDialog() {
       say("Test message sent. Check the inbox.", true);
     } catch (e) { say(e.message); }
   };
-  $("dlgBody").replaceChildren(el("h3", { textContent: "Email alerts" }),
+  const testHook = el("button", { id: "testWebhook", textContent: "Save and test the webhook" });
+  testHook.onclick = async () => {
+    say("Sending…", true);
+    try { await call("PUT", "/api/v1/alerts", body()); await call("POST", "/api/v1/alerts/test-webhook"); say("Test message delivered to the webhook.", true); } catch (e) { say(e.message); }
+  };
+  const preview = el("button", { id: "previewSummary", textContent: "Show what the summary says now" });
+  preview.onclick = async () => {
+    try { await call("PUT", "/api/v1/alerts", body()); const r = await call("POST", "/api/v1/alerts/summary");
+      openDialog(true, el("h3", { textContent: r.subject }), el("pre", { id: "summaryText", textContent: r.body }), el("div", { className: "row" }, el("button", { textContent: "Back", onclick: () => alertsDialog().catch(() => $("dlg").close()) })));
+    } catch (e) { say(e.message); }
+  };
+  $("dlgBody").replaceChildren(el("h3", { textContent: "Alerts and reports" }),
     el("div", { className: "hint", textContent: "Sends an email when a backup, restore or repository check fails, and when a scheduled backup is missed, for example because a machine is switched off." }),
     el("label", { className: "check" }, enabled, "Send email alerts"),
     el("label", { textContent: "Mail server (SMTP)" }), el("div", { className: "two" }, host, port),
@@ -320,7 +377,13 @@ async function alertsDialog() {
     el("label", { textContent: "Sign in as" }), el("div", { className: "two" }, user, pass),
     el("label", { textContent: "From address" }), from,
     el("label", { textContent: "Send alerts to" }), to,
-    el("label", { className: "check" }, warn, "Also email when a backup finishes with warnings, such as skipped files"),
+    el("label", { className: "check" }, warn, "Also alert when a backup finishes with warnings, such as skipped files"),
+    el("label", { textContent: "Summary of all backups" }), el("div", { className: "two" }, summary, summaryAt),
+    el("div", { className: "hint", textContent: "A report of every backup, what needs attention, and how full the disk is, at this time in the server's time zone." }),
+    el("div", { style: "margin-top:6px" }, preview),
+    el("label", { textContent: "Webhook" }), hook,
+    el("div", { className: "hint", textContent: "Every alert and summary is also posted here. Works with incoming webhooks of Slack, Microsoft Teams, Discord and Mattermost, with or without email." }),
+    el("div", { style: "margin-top:6px" }, testHook),
     msg, el("div", { className: "row" }, test, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
   $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
 }
@@ -711,7 +774,9 @@ async function jobDialog(id) {
   const title = { offsite: "Offsite copy", gc: "Reclaim space", verify: "Verify all data" }[j.type] || j.type.charAt(0).toUpperCase() + j.type.slice(1) + " job";
   const kids = [el("h3", { textContent: title }), dl];
   if (j.warnings && j.warnings.length) kids.push(el("label", { textContent: "Warnings (" + j.warnings.length + ")" }), el("pre", { textContent: j.warnings.join("\n"), style: "max-height:30vh;overflow:auto" }));
-  kids.push(el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => { clearTimeout(jobTimer); $("dlg").close(); } })));
+  const stop = cancelButton(j, async () => { await refresh(); await jobDialog(id); });
+  if (stop) { stop.id = "cancelJob"; stop.style.marginRight = "auto"; }
+  kids.push(el("div", { className: "row" }, stop, el("button", { textContent: "Close", onclick: () => { clearTimeout(jobTimer); $("dlg").close(); } })));
   openDialog(true, ...kids);
   if (j.status === "queued" || j.status === "running") jobTimer = setTimeout(() => { if ($("dlg").open) jobDialog(id).catch(() => {}); }, 2000);
 }
@@ -961,12 +1026,21 @@ function downloadKey(back) {
 $("keyBannerBtn").onclick = () => downloadKey();
 
 async function settingsDialog() {
-  const st = await call("GET", "/api/v1/settings");
+  const [st, mon] = await Promise.all([call("GET", "/api/v1/settings"), call("GET", "/api/v1/monitor")]);
+  const verifyDays = el("input", { type: "number", id: "verifyDays", min: 0, max: 3650, value: mon.verify_every_days });
+  const verifyAt = el("input", { type: "time", id: "verifyAt", value: mon.verify_at || "01:00" });
+  const diskWarn = el("input", { type: "number", id: "diskWarn", min: 0, max: 90, value: mon.disk_warn_percent });
   const names = el("textarea", { id: "tlsNames", rows: 3, value: (st.tls_names || []).join("\n"), placeholder: "One per line, for example backup.example.com or 192.168.1.20" });
   const msg = el("div", { className: "msg", id: "err" });
   const say = (text, good) => { msg.textContent = text; msg.style.color = good ? "var(--good)" : ""; };
   const save = el("button", { className: "primary", id: "saveSettings", textContent: "Save" });
-  save.onclick = async () => { try { await call("PUT", "/api/v1/settings", { tls_names: lines(names.value) }); say("Saved. The server's certificate now carries these names.", true); } catch (e) { say(e.message); } };
+  save.onclick = async () => {
+    try {
+      await call("PUT", "/api/v1/monitor", { verify_every_days: parseInt(verifyDays.value, 10) || 0, verify_at: verifyAt.value || "01:00", disk_warn_percent: parseInt(diskWarn.value, 10) || 0 });
+      if (lines(names.value).join("\n") !== (st.tls_names || []).join("\n")) { await call("PUT", "/api/v1/settings", { tls_names: lines(names.value) }); st.tls_names = lines(names.value); }
+      say("Saved.", true); refresh().catch(() => {});
+    } catch (e) { say(e.message); }
+  };
   const fixed = ["localhost", st.hostname].concat(st.fixed_tls_names || []).filter(Boolean);
   const newToken = el("button", { id: "newAdminToken", textContent: "Replace the admin token…" });
   newToken.onclick = () => withPassword("Replace the admin token", "The admin token is what the bb command line signs in with, and a way in if every administrator is locked out. Replacing it stops the old one from working.", "Replace the token", async password => {
@@ -983,6 +1057,11 @@ async function settingsDialog() {
     el("h4", { textContent: "Names and addresses of this server" }),
     el("div", { className: "hint", textContent: "Agents and browsers check the server's certificate against the address they use. It always carries: " + fixed.join(", ") + ". Add every other name or IP address the server is reached by." }),
     names,
+    el("h4", { textContent: "Checks the server runs on itself" }),
+    el("label", { textContent: "Read and check all stored data every so many days, starting at" }), el("div", { className: "two" }, verifyDays, verifyAt),
+    el("div", { className: "hint", textContent: "0 turns the check off. It finds data damaged by a failing disk before a restore needs it. It reads the whole repository, which takes hours on a large one, and backups wait while it runs." }),
+    el("label", { textContent: "Warn when less than this percentage of the repository's disk is free" }), diskWarn,
+    el("div", { className: "hint", textContent: "0 turns the warning off. The warning shows under Health and goes out as an alert." }),
     el("h4", { textContent: "Command line access" }),
     el("div", { style: "margin-top:8px" }, newToken),
     el("h4", { textContent: "Where things are" }),

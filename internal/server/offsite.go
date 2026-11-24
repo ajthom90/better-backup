@@ -200,7 +200,13 @@ func (s *Server) runOffsite(ctx context.Context) {
 	j := js[0]
 	s.db.Exec(`UPDATE jobs SET status = ?, started = ? WHERE id = ?`, api.StatusRunning, ms(time.Now()), j.ID)
 	s.log.Info("offsite copy started", "job", j.ID)
+	parent := ctx
+	ctx, cancel := context.WithCancelCause(parent)
+	s.mu.Lock()
+	s.cancelOffsite = cancel
+	s.mu.Unlock()
 	go func() {
+		defer cancel(nil)
 		var res offsite.Result
 		t, err := offsiteTarget(s.offsiteSettings())
 		if err == nil {
@@ -224,9 +230,13 @@ func (s *Server) runOffsite(ctx context.Context) {
 		}
 		s.mu.Lock()
 		s.offsiteBusy = false
+		s.cancelOffsite = nil
 		s.mu.Unlock()
-		if err != nil {
-			if ctx.Err() != nil {
+		var stopped errCancelled
+		if errors.As(context.Cause(ctx), &stopped) {
+			s.finish(j, api.StatusCancelled, stopped.Error()+". The next run continues where this one stopped.", res, nil)
+		} else if err != nil {
+			if parent.Err() != nil {
 				err = errors.New("the server stopped before the copy finished; it continues with the next run")
 			}
 			s.finish(j, api.StatusFailed, err.Error(), res, nil)
