@@ -160,7 +160,7 @@ func (s *Server) indexStatus() api.SearchIndexStatus {
 	if reset || s.index.Meta("built") == "" {
 		out.State = "building"
 		if reset {
-			out.Waiting, out.Names = out.Snapshots, 0
+			out.Waiting, out.Names, out.Bytes = out.Snapshots, 0, 0
 		}
 	}
 	return out
