@@ -1,7 +1,7 @@
 VERSION ?= dev
 LDFLAGS := -s -w -X github.com/ajthom90/better-backup/internal/server.Version=$(VERSION) -X github.com/ajthom90/better-backup/internal/agent.Version=$(VERSION)
 
-.PHONY: build app test docker recovery
+.PHONY: build app test docker recovery recovery-arm64
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/ ./cmd/bb ./cmd/bb-agent ./cmd/bb-server
 
@@ -27,3 +27,9 @@ docker:
 recovery:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/recovery/bb-agent ./cmd/bb-agent
 	python3 packaging/recovery/build.py --agent bin/recovery/bb-agent --out bin/recovery.iso --firmware --cache bin/recovery-cache --version $(VERSION)
+
+# The same for ARM64 machines, in bin/recovery-arm64.iso. It is built on
+# an x64 or an ARM64 machine alike.
+recovery-arm64:
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/recovery-arm64/bb-agent ./cmd/bb-agent
+	python3 packaging/recovery/build.py --arch arm64 --agent bin/recovery-arm64/bb-agent --out bin/recovery-arm64.iso --firmware --cache bin/recovery-cache --version $(VERSION)

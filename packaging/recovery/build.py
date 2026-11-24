@@ -3,12 +3,17 @@
 starts on BIOS and UEFI machines (with Secure Boot), runs bb-agent as
 its first process and restores a whole machine onto blank disks.
 
+There are two discs: for x64 machines (--arch amd64, the default), and
+for ARM64 machines that start by UEFI, such as ARM servers and virtual
+machines (--arch arm64). Either is built on either kind of machine: the
+ARM64 one takes everything it needs from Ubuntu's ARM64 packages.
+
 It needs no root. On Ubuntu 24.04 install the tools with:
 
     sudo apt-get install xorriso mtools grub-pc-bin grub-common \
         grub-efi-amd64-signed shim-signed kmod zstd busybox-static
 
-Usage:  build.py --agent bin/bb-agent --out recovery.iso [--firmware]
+Usage:  build.py --agent bin/bb-agent --out recovery.iso [--firmware] [--arch arm64]
 
 The kernel, its drivers and the boot loaders are Ubuntu's own signed
 packages, downloaded from the Ubuntu archive and checked against apt's
@@ -95,6 +100,34 @@ def out(*cmd):
 # again, from the next place if there is one. Some mirrors crawl.
 MIN_SPEED = 250 << 10
 ARCHIVES = ["http://archive.ubuntu.com/ubuntu", "http://security.ubuntu.com/ubuntu"]
+PORTS = "http://ports.ubuntu.com/ubuntu-ports"
+# Options for apt when the packages wanted are not this machine's own.
+APT = []
+
+
+def foreign(arch, work):
+    """Points apt at Ubuntu's packages for another kind of processor,
+    in a private directory: the machine's own package lists are left
+    alone, and no root is needed. The lists are signed and checked like
+    any other."""
+    global APT, ARCHIVES
+    release = "noble"
+    with open("/etc/os-release") as f:
+        for line in f:
+            if line.startswith("VERSION_CODENAME="):
+                release = line.split("=", 1)[1].strip().strip('"')
+    d = os.path.join(work, "apt")
+    os.makedirs(os.path.join(d, "lists/partial"))
+    os.makedirs(os.path.join(d, "cache/archives/partial"))
+    with open(os.path.join(d, "sources.list"), "w") as f:
+        for pocket in ("", "-updates", "-security"):
+            f.write("deb [arch=%s signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] %s %s%s main restricted\n" % (arch, PORTS, release, pocket))
+    APT = ["-o", "Dir::Etc::sourcelist=" + os.path.join(d, "sources.list"), "-o", "Dir::Etc::sourceparts=/dev/null",
+           "-o", "Dir::State::lists=" + os.path.join(d, "lists"), "-o", "Dir::Cache=" + os.path.join(d, "cache"),
+           "-o", "Dir::State::status=/dev/null", "-o", "APT::Architecture=" + arch, "-o", "APT::Architectures=" + arch,
+           "-o", "APT::Sandbox::User=root", "-o", "Debug::NoLocking=1", "-o", "Acquire::Retries=3"]
+    ARCHIVES = [PORTS]
+    run("apt-get", *APT, "update")
 
 
 def download(url, dest, size):
@@ -123,7 +156,7 @@ def download(url, dest, size):
 def fetch(pkg, cache):
     """Puts a package's .deb in cache, checked against the hash in apt's
     signed package lists."""
-    url, name, size, digest = out("apt-get", "download", "--print-uris", pkg).split()[-4:]
+    url, name, size, digest = out("apt-get", *APT, "download", "--print-uris", pkg).split()[-4:]
     url, size, (algo, want) = url.strip("'"), int(size), digest.split(":")
     part = os.path.join(cache, name + ".part")
     urls = [a + url[url.index("/pool/"):] for a in ARCHIVES if "/pool/" in url]
@@ -198,7 +231,8 @@ def cpio(root, dest):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--agent", required=True, help="a static linux/amd64 bb-agent binary")
+    ap.add_argument("--agent", required=True, help="a static bb-agent binary for Linux on the disc's kind of processor")
+    ap.add_argument("--arch", default="amd64", choices=["amd64", "arm64"], help="the machines the disc is for (default: amd64)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--kernel", default="", help="kernel version, such as 6.8.0-151-generic (default: the distribution's current one)")
     ap.add_argument("--firmware", action="store_true", help="include firmware for adapters that need it (a larger download)")
@@ -209,9 +243,17 @@ def main():
     work = tempfile.mkdtemp(prefix="bb-recovery-")
     cache = os.path.abspath(a.cache) if a.cache else os.path.join(work, "dl")
     os.makedirs(cache, exist_ok=True)
+    with open(a.agent, "rb") as f:
+        machine = f.read(20)[18:20]
+    if machine != {"amd64": b"\x3e\x00", "arm64": b"\xb7\x00"}[a.arch]:
+        sys.exit("%s is not a Linux program for %s machines" % (a.agent, a.arch))
+    if a.arch == "arm64":
+        foreign(a.arch, work)
+    elif out("dpkg", "--print-architecture").strip() != "amd64":
+        sys.exit("the x64 disc is built on an x64 machine, from its own boot loader packages")
     kver = a.kernel
     if not kver:
-        for line in out("apt-cache", "depends", "linux-image-generic").splitlines():
+        for line in out("apt-cache", *APT, "depends", "linux-image-generic").splitlines():
             if "Depends: linux-image-" in line:
                 kver = line.split("linux-image-", 1)[1].strip()
     if not kver:
@@ -222,6 +264,9 @@ def main():
     if a.firmware:
         # linux-firmware itself is an empty package that pulls in these.
         pkgs += ["linux-firmware-misc", "linux-firmware-qlogic", "linux-firmware-realtek", "linux-firmware-intel-misc"]
+    if a.arch == "arm64":
+        # The x64 disc takes these from the machine it is built on.
+        pkgs += ["busybox-static", "shim-signed", "grub-efi-arm64-signed"]
     tree = os.path.join(work, "pkg")
     for p in pkgs:
         if not glob.glob(os.path.join(cache, p + "_*.deb")):
@@ -261,11 +306,16 @@ def main():
         os.makedirs(os.path.join(root, d))
     shutil.copy(a.agent, os.path.join(root, "init"))
     os.chmod(os.path.join(root, "init"), 0o755)
-    bb = shutil.which("busybox") or "/bin/busybox"
+    here = shutil.which("busybox") or "/bin/busybox"
+    bb = find("bin", "busybox") if a.arch == "arm64" else here
     if b"statically linked" not in subprocess.run(["file", "-L", bb], stdout=subprocess.PIPE).stdout:
         sys.exit("busybox must be the static build (the busybox-static package)")
     shutil.copy(bb, os.path.join(root, "bin/busybox"))
-    for applet in out(bb, "--list").split():
+    try:
+        applets = out(bb, "--list").split()
+    except OSError:  # built for another kind of processor: ask this machine's, of the same version
+        applets = out(here, "--list").split()
+    for applet in applets:
         if applet != "busybox":
             os.symlink("busybox", os.path.join(root, "bin", applet))
     for name, text, mode in (("etc/udhcpc.script", UDHCPC, 0o755), ("etc/profile", PROFILE, 0o644),
@@ -310,7 +360,7 @@ def main():
                     shutil.copy(src, to, follow_symlinks=False)
 
     iso = os.path.join(work, "iso")
-    os.makedirs(os.path.join(iso, "boot/grub/i386-pc"))
+    os.makedirs(os.path.join(iso, "boot/grub"))
     os.makedirs(os.path.join(iso, ".disk"))
     shutil.copy(find("boot", "vmlinuz-" + kver), os.path.join(iso, "boot/vmlinuz"))
     os.chmod(os.path.join(iso, "boot/vmlinuz"), 0o644)
@@ -325,17 +375,11 @@ def main():
         f.write("""set timeout=3
 set default=0
 menuentry "better-backup recovery %s" {
-	linux /boot/vmlinuz quiet console=ttyS0,115200 console=tty0 %s
+	linux /boot/vmlinuz quiet console=%s,115200 console=tty0 %s
 	initrd /boot/initrd
 }
-""" % (a.version, placeholder))
+""" % (a.version, "ttyAMA0" if a.arch == "arm64" else "ttyS0", placeholder))
 
-    # BIOS: GRUB's own image, for discs and for USB sticks.
-    pc = "/usr/lib/grub/i386-pc"
-    mods = ["biosdisk", "iso9660", "part_msdos", "part_gpt", "normal", "linux", "configfile", "search", "echo", "test", "serial", "all_video"]
-    run("grub-mkimage", "-O", "i386-pc-eltorito", "-d", pc, "-p", "/boot/grub", "-o", os.path.join(iso, "boot/grub/i386-pc/eltorito.img"), *mods)
-    for f in glob.glob(pc + "/*.mod") + glob.glob(pc + "/*.lst"):
-        shutil.copy(f, os.path.join(iso, "boot/grub/i386-pc"))
     # UEFI: the signed shim and GRUB, in a small FAT image. GRUB finds
     # the disc by its /.disk/info file and reads /boot/grub/grub.cfg.
     efi = os.path.join(work, "efi.img")
@@ -343,24 +387,47 @@ menuentry "better-backup recovery %s" {
         f.truncate(10 << 20)
     run("mformat", "-i", efi, "-v", "BBEFI", "::")
     run("mmd", "-i", efi, "::/EFI", "::/EFI/BOOT")
-    for src, name in (("/usr/lib/shim/shimx64.efi.signed.latest", "BOOTX64.EFI"), ("/usr/lib/grub/x86_64-efi-signed/gcdx64.efi.signed", "grubx64.efi"),
-                      ("/usr/lib/shim/mmx64.efi", "mmx64.efi")):
+    if a.arch == "arm64":
+        loaders = ((find("lib", "shim", "shimaa64.efi.signed.latest"), "BOOTAA64.EFI"),
+                   (find("lib", "grub", "arm64-efi-signed", "gcdaa64.efi.signed"), "grubaa64.efi"),
+                   (find("lib", "shim", "mmaa64.efi"), "mmaa64.efi"))
+    else:
+        loaders = (("/usr/lib/shim/shimx64.efi.signed.latest", "BOOTX64.EFI"), ("/usr/lib/grub/x86_64-efi-signed/gcdx64.efi.signed", "grubx64.efi"),
+                   ("/usr/lib/shim/mmx64.efi", "mmx64.efi"))
+    for src, name in loaders:
         run("mcopy", "-i", efi, src, "::/EFI/BOOT/" + name)
         # Also as plain files, for USB sticks made by copying the disc's
         # files onto a FAT volume.
         os.makedirs(os.path.join(iso, "EFI/BOOT"), exist_ok=True)
         shutil.copy(src, os.path.join(iso, "EFI/BOOT", name))
-    run("xorriso", "-as", "mkisofs", "-r", "-V", VOLUME_ID, "-o", a.out, "-J", "-joliet-long", "-l", "-iso-level", "3",
-        "--grub2-mbr", pc + "/boot_hybrid.img", "-partition_offset", "16", "--mbr-force-bootable",
-        "-append_partition", "2", "28732ac11ff8d211ba4b00a0c93ec93b", efi, "-appended_part_as_gpt",
-        "-iso_mbr_part_type", "a2a0d0ebe5b9334487c068b6b72699c7",
-        "-c", "/boot.catalog", "-b", "/boot/grub/i386-pc/eltorito.img", "-no-emul-boot", "-boot-load-size", "4", "-boot-info-table", "--grub2-boot-info",
-        "-eltorito-alt-boot", "-e", "--interval:appended_partition_2:::", "-no-emul-boot", iso)
+    common = ["xorriso", "-as", "mkisofs", "-r", "-V", VOLUME_ID, "-o", a.out, "-J", "-joliet-long", "-l", "-iso-level", "3"]
+    esp = ["-append_partition", "2", "28732ac11ff8d211ba4b00a0c93ec93b", efi, "-appended_part_as_gpt"]
+    if a.arch == "arm64":
+        # ARM64 machines start by UEFI only.
+        run(*common, "-partition_offset", "16", *esp, "-c", "/boot.catalog",
+            "-e", "--interval:appended_partition_2:::", "-no-emul-boot", iso)
+    else:
+        bios(iso, common, esp)
     with open(a.out, "rb") as f:
         if f.read().count(placeholder.encode()) != 1:
             sys.exit("the placeholder for the server's address is not in the image exactly once")
     shutil.rmtree(work)
     print("wrote", a.out, os.path.getsize(a.out) >> 20, "MiB")
+
+
+def bios(iso, common, esp):
+    """Finishes the x64 disc, which also starts machines by BIOS."""
+    # BIOS: GRUB's own image, for discs and for USB sticks.
+    pc = "/usr/lib/grub/i386-pc"
+    os.makedirs(os.path.join(iso, "boot/grub/i386-pc"))
+    mods = ["biosdisk", "iso9660", "part_msdos", "part_gpt", "normal", "linux", "configfile", "search", "echo", "test", "serial", "all_video"]
+    run("grub-mkimage", "-O", "i386-pc-eltorito", "-d", pc, "-p", "/boot/grub", "-o", os.path.join(iso, "boot/grub/i386-pc/eltorito.img"), *mods)
+    for f in glob.glob(pc + "/*.mod") + glob.glob(pc + "/*.lst"):
+        shutil.copy(f, os.path.join(iso, "boot/grub/i386-pc"))
+    run(*common, "--grub2-mbr", pc + "/boot_hybrid.img", "-partition_offset", "16", "--mbr-force-bootable", *esp,
+        "-iso_mbr_part_type", "a2a0d0ebe5b9334487c068b6b72699c7",
+        "-c", "/boot.catalog", "-b", "/boot/grub/i386-pc/eltorito.img", "-no-emul-boot", "-boot-load-size", "4", "-boot-info-table", "--grub2-boot-info",
+        "-eltorito-alt-boot", "-e", "--interval:appended_partition_2:::", "-no-emul-boot", iso)
 
 
 if __name__ == "__main__":

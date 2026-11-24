@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -40,14 +41,38 @@ func TestRecoveryDisc(t *testing.T) {
 	if iso == "" {
 		t.Skip("set BB_RECOVERY_ISO to a recovery disc image to run this test")
 	}
-	for _, tool := range []string{"qemu-system-x86_64", "sgdisk", "sfdisk", "mke2fs", "mkswap", "mformat", "mcopy", "mmd", "grub-mkstandalone", "grub-mkimage"} {
+	recoveryDisc(t, iso, "amd64", []string{"uefi", "bios"})
+}
+
+// TestRecoveryDiscARM64 does the same with the disc for ARM64 machines,
+// in an emulated ARM64 machine, which starts by UEFI only. Besides the
+// tools above it needs QEMU for ARM64, its UEFI firmware (the package
+// qemu-efi-aarch64) and GRUB's files for ARM64: installed, or unpacked
+// from the package grub-efi-arm64-bin into the folder BB_GRUB_ARM64.
+func TestRecoveryDiscARM64(t *testing.T) {
+	iso := os.Getenv("BB_RECOVERY_ISO_ARM64")
+	if iso == "" {
+		t.Skip("set BB_RECOVERY_ISO_ARM64 to a recovery disc image for ARM64 to run this test")
+	}
+	recoveryDisc(t, iso, "arm64", []string{"uefi"})
+}
+
+// emulator is the QEMU that plays a machine of each kind.
+var emulator = map[string]string{"amd64": "qemu-system-x86_64", "arm64": "qemu-system-aarch64"}
+
+func recoveryDisc(t *testing.T, iso, arch string, firmwares []string) {
+	for _, tool := range []string{emulator[arch], "sgdisk", "sfdisk", "mke2fs", "mkswap", "mformat", "mcopy", "mmd", "grub-mkstandalone", "grub-mkimage"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Fatalf("%s is needed for this test", tool)
 		}
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	data := t.TempDir()
-	srv, err := server.New(server.Config{DataDir: data, Listen: "127.0.0.1:0", Log: log, Tick: 200 * time.Millisecond, RecoveryISO: iso})
+	cfg := server.Config{DataDir: data, Listen: "127.0.0.1:0", Log: log, Tick: 200 * time.Millisecond, RecoveryISO: iso}
+	if arch == "arm64" {
+		cfg.RecoveryISO, cfg.RecoveryISOArm64 = "", iso
+	}
+	srv, err := server.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +132,7 @@ func TestRecoveryDisc(t *testing.T) {
 	// with the address the machine is to use. From inside QEMU's
 	// network the host is 10.0.2.2.
 	var link struct{ URL string }
-	do("POST", "/api/v1/recovery/iso/link", map[string]string{"server": "https://10.0.2.2:" + port}, &link)
+	do("POST", "/api/v1/recovery/iso/link", map[string]string{"server": "https://10.0.2.2:" + port, "arch": arch}, &link)
 	disc := filepath.Join(t.TempDir(), "recovery.iso")
 	insecure := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 	resp, err := insecure.Get(base + link.URL)
@@ -121,13 +146,20 @@ func TestRecoveryDisc(t *testing.T) {
 	resp.Body.Close()
 	df.Close()
 
-	for _, fw := range []string{"uefi", "bios"} {
+	// An emulator that has to work every instruction out itself is slow.
+	slow := time.Duration(1)
+	if f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0); err != nil || arch != runtime.GOARCH {
+		slow = 3
+	} else {
+		f.Close()
+	}
+	for _, fw := range firmwares {
 		t.Run(fw, func(t *testing.T) {
 			dir := t.TempDir()
 			marker := "the " + fw + " machine is alive " + time.Now().Format(time.RFC3339Nano)
 			src := filepath.Join(dir, "source.img")
-			makeMachine(t, fw, src, marker)
-			if out := boot(t, fw, dir, src, "", 5*time.Minute); !strings.Contains(out, marker) {
+			makeMachine(t, arch, fw, src, marker)
+			if out := boot(t, arch, fw, dir, src, "", 5*time.Minute); !strings.Contains(out, marker) {
 				t.Fatalf("the machine built for the test does not start by itself:\n%s", out)
 			}
 
@@ -150,7 +182,7 @@ func TestRecoveryDisc(t *testing.T) {
 			tf.Truncate(96 << 20)
 			tf.Close()
 			serial := filepath.Join(dir, "recovery-serial.log")
-			vm := qemu(t, fw, dir, target, disc, serial)
+			vm := qemu(t, arch, fw, dir, target, disc, serial)
 			if err := vm.Start(); err != nil {
 				t.Fatal(err)
 			}
@@ -176,10 +208,13 @@ func TestRecoveryDisc(t *testing.T) {
 				}
 				t.Fatalf("timed out waiting for %s. The machine's screen:\n%s", what, screen())
 			}
-			until("the machine to announce itself", 10*time.Minute, func(m *api.RecoveryMachine) bool { return m.Hardware != nil })
+			until("the machine to announce itself", 10*time.Minute*slow, func(m *api.RecoveryMachine) bool { return m.Hardware != nil })
 			code := regexp.MustCompile(`Recovery code:\s+([A-Z0-9]{3}-[A-Z0-9]{3})`).FindStringSubmatch(screen())
 			if code == nil || code[1] != m.Code {
 				t.Fatalf("the server knows the machine as %s; its screen says:\n%s", m.Code, screen())
+			}
+			if m.Hardware.Arch != arch {
+				t.Fatalf("the machine says its processor is %q", m.Hardware.Arch)
 			}
 			if m.Hardware.Firmware != fw || len(m.Hardware.Disks) != 1 || m.Hardware.Disks[0].Size != 96<<20 || m.Hardware.Disks[0].Media {
 				t.Fatalf("hardware: %+v", m.Hardware)
@@ -187,7 +222,7 @@ func TestRecoveryDisc(t *testing.T) {
 			do("POST", "/api/v1/recovery/machines/"+m.ID+"/approve", nil, nil)
 			until("the machine to sign on", 2*time.Minute, func(m *api.RecoveryMachine) bool { return m.AgentID != "" })
 			do("POST", "/api/v1/restores", api.RestoreRequest{SnapshotID: snaps[0].ID, AgentID: m.AgentID, Disks: map[string]string{"disk0": m.Hardware.Disks[0].Path}}, &job)
-			if j := wait(job.ID, 10*time.Minute); j.Status != api.StatusSuccess {
+			if j := wait(job.ID, 10*time.Minute*slow); j.Status != api.StatusSuccess {
 				t.Fatalf("restore: %s %s %v\n%s", j.Status, j.Error, j.Warnings, screen())
 			}
 			until("the machine to report its restored disk", time.Minute, func(m *api.RecoveryMachine) bool {
@@ -218,7 +253,7 @@ func TestRecoveryDisc(t *testing.T) {
 					t.Fatalf("sgdisk finds fault with the restored disk: %v\n%s", err, out)
 				}
 			}
-			if out := boot(t, fw, dir, target, "", 5*time.Minute); !strings.Contains(out, marker) {
+			if out := boot(t, arch, fw, dir, target, "", 5*time.Minute); !strings.Contains(out, marker) {
 				t.Fatalf("the restored machine does not start:\n%s", out)
 			}
 		})
@@ -274,7 +309,7 @@ func place(t *testing.T, disk, part string, offset int64) {
 // finds a file on another partition, prints it on the serial port and
 // switches the machine off. That takes a working boot path, partition
 // table and file systems, which is what a restore has to put back.
-func makeMachine(t *testing.T, fw, disk, marker string) {
+func makeMachine(t *testing.T, arch, fw, disk, marker string) {
 	t.Helper()
 	dir := filepath.Dir(disk)
 	const mib = 1 << 20
@@ -297,15 +332,28 @@ func makeMachine(t *testing.T, fw, disk, marker string) {
 	if fw == "uefi" {
 		sh(t, dir, "", "sgdisk", "-n", "1:2048:+20M", "-t", "1:ef00", "-c", "1:EFI system partition", "-n", "2:0:+4M", "-t", "2:8200", "-n", "3:0:0", "-t", "3:8300", disk)
 		d := table(t, disk)
-		sh(t, dir, "", "grub-mkstandalone", "-O", "x86_64-efi", "-o", "bootx64.efi", "--locales=", "--fonts=", "--themes=",
-			"--modules=part_gpt ext2 serial search search_fs_file cat echo halt", "--install-modules=part_gpt ext2 fat serial terminal search search_fs_file cat echo halt normal configfile", "boot/grub/grub.cfg=grub.cfg")
+		loader := "BOOTX64.EFI"
+		if arch == "arm64" {
+			// The firmware's own console is the serial port there.
+			loader = "BOOTAA64.EFI"
+			os.WriteFile(filepath.Join(dir, "grub.cfg"), []byte(strings.SplitN(cfg, "\n", 3)[2]), 0o644)
+			grub := os.Getenv("BB_GRUB_ARM64")
+			if grub == "" {
+				grub = "/usr/lib/grub/arm64-efi"
+			}
+			sh(t, dir, "", "grub-mkstandalone", "-O", "arm64-efi", "-d", grub, "-o", "bootx64.efi", "--locales=", "--fonts=", "--themes=",
+				"--modules=part_gpt ext2 search search_fs_file cat echo halt", "--install-modules=part_gpt ext2 fat terminal search search_fs_file cat echo halt normal configfile", "boot/grub/grub.cfg=grub.cfg")
+		} else {
+			sh(t, dir, "", "grub-mkstandalone", "-O", "x86_64-efi", "-o", "bootx64.efi", "--locales=", "--fonts=", "--themes=",
+				"--modules=part_gpt ext2 serial search search_fs_file cat echo halt", "--install-modules=part_gpt ext2 fat serial terminal search search_fs_file cat echo halt normal configfile", "boot/grub/grub.cfg=grub.cfg")
+		}
 		esp := filepath.Join(dir, "esp.img")
 		ef, _ := os.Create(esp)
 		ef.Truncate(d.Partitions[0].Size)
 		ef.Close()
 		sh(t, dir, "", "mformat", "-i", esp, "::")
 		sh(t, dir, "", "mmd", "-i", esp, "::/EFI", "::/EFI/BOOT")
-		sh(t, dir, "", "mcopy", "-i", esp, "bootx64.efi", "::/EFI/BOOT/BOOTX64.EFI")
+		sh(t, dir, "", "mcopy", "-i", esp, "bootx64.efi", "::/EFI/BOOT/"+loader)
 		place(t, disk, esp, d.Partitions[0].Offset)
 		swap := filepath.Join(dir, "swap.img")
 		sf, _ := os.Create(swap)
@@ -339,38 +387,48 @@ func makeMachine(t *testing.T, fw, disk, marker string) {
 
 // qemu describes a virtual machine with one disk and, if cdrom is set,
 // the recovery disc and a network adapter.
-func qemu(t *testing.T, fw, dir, disk, cdrom, serial string) *exec.Cmd {
+func qemu(t *testing.T, arch, fw, dir, disk, cdrom, serial string) *exec.Cmd {
 	t.Helper()
-	args := []string{"-machine", "q35", "-m", "1536", "-smp", "2", "-display", "none", "-no-reboot", "-serial", "file:" + serial,
+	machine, code, vars0 := "q35", "/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"
+	if arch == "arm64" {
+		machine, code, vars0 = "virt", "/usr/share/AAVMF/AAVMF_CODE.fd", "/usr/share/AAVMF/AAVMF_VARS.fd"
+	}
+	args := []string{"-machine", machine, "-m", "1536", "-smp", "2", "-display", "none", "-no-reboot", "-serial", "file:" + serial,
 		"-drive", "file=" + disk + ",format=raw,if=none,id=d0", "-device", "virtio-scsi-pci", "-device", "scsi-hd,drive=d0,bootindex=1"}
-	if f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0); err == nil {
+	if f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0); err == nil && arch == runtime.GOARCH {
 		f.Close()
 		args = append(args, "-accel", "kvm", "-cpu", "host")
+	} else if arch == "arm64" {
+		args = append(args, "-accel", "tcg,thread=multi", "-cpu", "max")
 	} else {
 		args = append(args, "-accel", "tcg")
 	}
 	if fw == "uefi" {
 		vars := filepath.Join(dir, "vars-"+filepath.Base(disk)+".fd")
-		b, err := os.ReadFile("/usr/share/OVMF/OVMF_VARS_4M.fd")
+		b, err := os.ReadFile(vars0)
 		if err != nil {
-			t.Fatalf("OVMF is needed for this test: %v", err)
+			t.Fatalf("UEFI firmware for the emulator is needed for this test: %v", err)
 		}
 		os.WriteFile(vars, b, 0o644)
-		args = append(args, "-drive", "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd", "-drive", "if=pflash,format=raw,file="+vars)
+		args = append(args, "-drive", "if=pflash,format=raw,readonly=on,file="+code, "-drive", "if=pflash,format=raw,file="+vars)
 	}
 	if cdrom != "" {
+		// romfile=: the adapter needs no network boot program of its own.
 		args = append(args, "-drive", "file="+cdrom+",format=raw,if=none,id=cd,media=cdrom,readonly=on", "-device", "scsi-cd,drive=cd,bootindex=2",
-			"-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0")
+			"-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0,romfile=")
 	}
-	return exec.Command("qemu-system-x86_64", args...)
+	if cdrom == "" && arch == "arm64" {
+		args = append(args, "-net", "none") // no adapter of the emulator's own choosing
+	}
+	return exec.Command(emulator[arch], args...)
 }
 
 // boot starts a machine from its disk and returns what it printed.
-func boot(t *testing.T, fw, dir, disk, cdrom string, limit time.Duration) string {
+func boot(t *testing.T, arch, fw, dir, disk, cdrom string, limit time.Duration) string {
 	t.Helper()
 	serial := filepath.Join(dir, "boot-"+filepath.Base(disk)+".log")
 	os.Remove(serial)
-	vm := qemu(t, fw, dir, disk, cdrom, serial)
+	vm := qemu(t, arch, fw, dir, disk, cdrom, serial)
 	if err := vm.Start(); err != nil {
 		t.Fatal(err)
 	}

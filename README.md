@@ -78,7 +78,7 @@ Everything is built for Intel/AMD (x64) and for ARM64 machines:
 | Linux: programs, `.deb` and `.rpm` packages | yes | yes |
 | macOS: programs, agent installer (`.pkg`) | yes | yes (one installer for both) |
 | Docker images, server and agent | yes | yes (one tag for both) |
-| Bare-metal recovery disc | yes | not yet |
+| Bare-metal recovery disc | yes | yes, for machines that start by UEFI |
 
 Every commit is tested on both kinds of processor on Windows, Linux and
 macOS, and the installers are installed and used on both.
@@ -97,9 +97,14 @@ What to know about ARM64:
 - **Linux on ARM** means 64-bit (`uname -m` prints `aarch64`): a Raspberry
   Pi 4 or 5 with a 64-bit system, an ARM server or cloud machine. There is
   no build for 32-bit ARM systems.
-- **The recovery disc** starts x64 machines only. A whole-machine backup of
-  an ARM64 machine can still be restored as files and disks, and as disk
-  images to attach to a new virtual machine.
+- **The recovery disc for ARM64** starts ARM64 machines that start by UEFI
+  the way a PC does: ARM servers, and ARM virtual machines (on Hyper-V,
+  KVM, VMware Fusion, Parallels, UTM). It does not start a Raspberry Pi,
+  and most ARM laptops (Snapdragon PCs) will not find their disk or
+  network with it. A whole-machine backup of those can still be restored
+  as files and disks, and as disk images to attach to a virtual machine.
+  It has recovered an emulated ARM64 machine; nobody has used it on a real
+  one yet.
 - A server of either kind hands out agent installers for both.
 
 ## Quick start
@@ -804,7 +809,10 @@ file backup costs little extra space.
    The server writes its own address and fingerprint into the image, so check
    the address shown is one the machine can reach. The Docker image carries
    the disc. Other installs download `better-backup-recovery.iso` from the
-   releases page once and upload it on the same page.
+   releases page once and upload it on the same page. For an ARM64 machine
+   use the second button, "Download the disc for ARM64 machines"
+   (`better-backup-recovery-arm64.iso`); see [Processors](#processors) for
+   the machines it starts.
 2. Start the machine from the disc: attach it to a virtual machine as a DVD,
    or write it to a USB stick (`dd`, Rufus in DD mode, balenaEtcher). It
    starts on BIOS and UEFI machines. It gets its address by DHCP; an address
@@ -843,6 +851,8 @@ Things to know:
   "Microsoft Windows" before starting the restored Windows. Physical machines
   trust it as delivered.
 - The recovery disc needs about 1.5 GB of memory.
+- The machine must have the same kind of processor as the original: x64 or
+  ARM64. The page warns when they differ.
 - Windows restored onto very different hardware may lack the driver for its
   new disk controller. Recovering into a virtual machine of the same kind, or
   onto similar hardware, avoids this. Injecting drivers is not built.
@@ -1003,6 +1013,7 @@ make app      # the desktop app, for this machine (needs cgo; on Linux also
 make test
 make docker
 make recovery # the bare-metal recovery disc, in ./bin/recovery.iso
+make recovery-arm64 # the same for ARM64 machines, in ./bin/recovery-arm64.iso
 ```
 
 The macOS installer is built on a Mac by `packaging/macos/build.sh VERSION`.

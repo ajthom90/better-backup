@@ -568,6 +568,7 @@ type RecoverySession struct {
 type RecoveryHardware struct {
 	Product     string         `json:"product,omitempty"`
 	Firmware    string         `json:"firmware,omitempty"` // "uefi" or "bios"
+	Arch        string         `json:"arch,omitempty"`     // "amd64" or "arm64"
 	MemoryBytes int64          `json:"memory_bytes,omitempty"`
 	CPUs        int            `json:"cpus,omitempty"`
 	Disks       []RecoveryDisk `json:"disks"`
@@ -629,13 +630,18 @@ type RecoveryMachine struct {
 
 // RecoveryStatus is everything the recovery page shows.
 type RecoveryStatus struct {
-	// ISO describes the recovery disc image the server can hand out.
-	ISO struct {
-		Available bool      `json:"available"`
-		Size      int64     `json:"size,omitempty"`
-		Modified  time.Time `json:"modified,omitempty"`
-	} `json:"iso"`
+	// ISO describes the recovery disc image the server can hand out
+	// for x64 machines, and ISOArm64 the one for ARM64 machines.
+	ISO      RecoveryISO       `json:"iso"`
+	ISOArm64 RecoveryISO       `json:"iso_arm64"`
 	Machines []RecoveryMachine `json:"machines"`
+}
+
+// RecoveryISO describes a recovery disc image the server holds.
+type RecoveryISO struct {
+	Available bool      `json:"available"`
+	Size      int64     `json:"size,omitempty"`
+	Modified  time.Time `json:"modified,omitempty"`
 }
 
 // MachineBackup is a whole-machine backup inside a snapshot: the disk
@@ -644,6 +650,7 @@ type MachineBackup struct {
 	Hostname string        `json:"hostname"`
 	OS       string        `json:"os"`
 	Firmware string        `json:"firmware,omitempty"`
+	Arch     string        `json:"arch,omitempty"` // "amd64" or "arm64"; empty in older backups
 	Disks    []MachineDisk `json:"disks"`
 }
 

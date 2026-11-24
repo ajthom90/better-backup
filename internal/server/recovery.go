@@ -64,6 +64,7 @@ type recoverySession struct {
 
 type isoLink struct {
 	config  api.RecoveryConfig
+	arch    string
 	expires time.Time
 }
 
@@ -314,12 +315,26 @@ func (s *Server) handleRecoveryForget(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// isoPath finds the recovery disc image.
-func (s *Server) isoPath() string {
-	candidates := []string{s.cfg.RecoveryISO, filepath.Join(s.cfg.DataDir, "recovery.iso"),
-		"/usr/share/better-backup/recovery.iso"}
+// isoFile is the file name of the recovery disc image for a kind of
+// processor: recovery.iso for x64 machines, recovery-arm64.iso for
+// ARM64 ones.
+func isoFile(arch string) string {
+	if arch == "arm64" {
+		return "recovery-arm64.iso"
+	}
+	return "recovery.iso"
+}
+
+// isoPath finds the recovery disc image for x64 ("amd64" or "") or
+// ARM64 ("arm64") machines.
+func (s *Server) isoPath(arch string) string {
+	name := isoFile(arch)
+	candidates := []string{s.cfg.RecoveryISO, filepath.Join(s.cfg.DataDir, name), "/usr/share/better-backup/" + name}
+	if arch == "arm64" {
+		candidates[0] = s.cfg.RecoveryISOArm64
+	}
 	if exe, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "recovery.iso"))
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), name))
 	}
 	for _, c := range candidates {
 		if c == "" {
@@ -335,9 +350,11 @@ func (s *Server) isoPath() string {
 func (s *Server) handleRecovery(w http.ResponseWriter, r *http.Request) {
 	s.expireRecovery()
 	var out api.RecoveryStatus
-	if p := s.isoPath(); p != "" {
-		if fi, err := os.Stat(p); err == nil {
-			out.ISO.Available, out.ISO.Size, out.ISO.Modified = true, fi.Size(), fi.ModTime()
+	for arch, iso := range map[string]*api.RecoveryISO{"amd64": &out.ISO, "arm64": &out.ISOArm64} {
+		if p := s.isoPath(arch); p != "" {
+			if fi, err := os.Stat(p); err == nil {
+				iso.Available, iso.Size, iso.Modified = true, fi.Size(), fi.ModTime()
+			}
 		}
 	}
 	out.Machines = []api.RecoveryMachine{}
@@ -369,8 +386,16 @@ func (s *Server) handleRecovery(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRecoveryLink(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Server string `json:"server"`
+		Arch   string `json:"arch"` // "amd64" (the default) or "arm64"
 	}
 	if !decode(w, r, &req) {
+		return
+	}
+	if req.Arch == "" {
+		req.Arch = "amd64"
+	}
+	if req.Arch != "amd64" && req.Arch != "arm64" {
+		fail(w, http.StatusBadRequest, "there are recovery discs for amd64 and arm64 machines")
 		return
 	}
 	req.Server = strings.TrimRight(strings.TrimSpace(req.Server), "/")
@@ -379,8 +404,8 @@ func (s *Server) handleRecoveryLink(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "the server address must look like https://backup.example.com:8443: it is how the machine being recovered reaches this server")
 		return
 	}
-	if s.isoPath() == "" {
-		fail(w, http.StatusNotFound, "this server has no recovery disc image; upload one first")
+	if s.isoPath(req.Arch) == "" {
+		fail(w, http.StatusNotFound, "this server has no recovery disc image for those machines; upload one first")
 		return
 	}
 	cfg := api.RecoveryConfig{Server: req.Server, Fingerprint: s.fp}
@@ -391,7 +416,7 @@ func (s *Server) handleRecoveryLink(w http.ResponseWriter, r *http.Request) {
 	ticket := keys.RandomHex(16)
 	s.mu.Lock()
 	s.expireRecoveryLocked()
-	s.isoLinks[ticket] = isoLink{config: cfg, expires: time.Now().Add(10 * time.Minute)}
+	s.isoLinks[ticket] = isoLink{config: cfg, arch: req.Arch, expires: time.Now().Add(10 * time.Minute)}
 	s.mu.Unlock()
 	reply(w, http.StatusCreated, map[string]string{"url": "/dl/recovery/" + ticket})
 }
@@ -410,7 +435,7 @@ func (s *Server) handleRecoveryDownload(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "This download link has expired. Go back to the better-backup page and ask for the recovery disc again.", http.StatusNotFound)
 		return
 	}
-	path := s.isoPath()
+	path := s.isoPath(link.arch)
 	if path == "" {
 		http.Error(w, "The server has no recovery disc image.", http.StatusNotFound)
 		return
@@ -427,7 +452,7 @@ func (s *Server) handleRecoveryDownload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-iso9660-image")
-	w.Header().Set("Content-Disposition", `attachment; filename="better-backup-recovery.iso"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="better-backup-`+isoFile(link.arch)+`"`)
 	w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
 	if err := PersonalizeISO(w, f, link.config); err != nil {
 		s.log.Warn("sending the recovery disc image", "err", err)
@@ -485,9 +510,9 @@ func PersonalizeISO(w io.Writer, r io.Reader, c api.RecoveryConfig) error {
 }
 
 // handleRecoveryUpload stores a recovery disc image in the data
-// directory, for servers that were installed without one.
+// directory, for servers that were installed without one. The image
+// itself tells which machines it is for.
 func (s *Server) handleRecoveryUpload(w http.ResponseWriter, r *http.Request) {
-	dest := filepath.Join(s.cfg.DataDir, "recovery.iso")
 	tmp, err := os.CreateTemp(s.cfg.DataDir, ".recovery-*.iso")
 	if err != nil {
 		s.internal(w, err)
@@ -495,9 +520,13 @@ func (s *Server) handleRecoveryUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.Remove(tmp.Name())
 	n, err := io.Copy(tmp, http.MaxBytesReader(w, r.Body, 2<<30))
-	found := false
+	found, arm := false, false
 	if err == nil {
-		found, err = hasPlaceholder(tmp)
+		found, err = holds(tmp, RecoveryPlaceholder)
+	}
+	if err == nil && found {
+		// Only the ARM64 disc carries the ARM64 boot loader.
+		arm, err = holds(tmp, "BOOTAA64.EFI")
 	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
@@ -510,19 +539,25 @@ func (s *Server) handleRecoveryUpload(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "that file is not a better-backup recovery disc image")
 		return
 	}
+	arch := "amd64"
+	if arm {
+		arch = "arm64"
+	}
+	dest := filepath.Join(s.cfg.DataDir, isoFile(arch))
 	if err := os.Rename(tmp.Name(), dest); err != nil {
 		s.internal(w, err)
 		return
 	}
 	s.log.Info("stored a new recovery disc image", "file", dest, "bytes", n)
-	w.WriteHeader(http.StatusNoContent)
+	reply(w, http.StatusOK, map[string]string{"arch": arch})
 }
 
-func hasPlaceholder(f *os.File) (bool, error) {
+// holds reports whether the file contains the text.
+func holds(f *os.File, text string) (bool, error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return false, err
 	}
-	marker := []byte(RecoveryPlaceholder)
+	marker := []byte(text)
 	buf := make([]byte, 1<<20)
 	keep := 0
 	for {
@@ -572,7 +607,7 @@ func (s *Server) handleSnapshotMachine(w http.ResponseWriter, r *http.Request) {
 }
 
 func describeMachine(m *disklayout.Machine, images map[string]*tree.Entry) api.MachineBackup {
-	out := api.MachineBackup{Hostname: m.Hostname, OS: m.OS, Firmware: m.Firmware}
+	out := api.MachineBackup{Hostname: m.Hostname, OS: m.OS, Firmware: m.Firmware, Arch: m.Arch}
 	for i := range m.Disks {
 		d := &m.Disks[i]
 		md := api.MachineDisk{Name: d.Name, Device: d.Device, Model: d.Model, Size: d.Size, SectorSize: d.SectorSize, Style: d.Style, Needs: d.Needs()}

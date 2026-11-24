@@ -76,6 +76,43 @@ jobs:
           path: bin/recovery.iso
           retention-days: 30
 
+  recovery-arm64:
+    # The disc for ARM64 machines, built on an ARM64 runner and used to
+    # recover an emulated ARM64 machine.
+    name: Recovery disc (ARM64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install the disc and emulator tools
+        timeout-minutes: 10
+        run: |
+          apt="sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30"
+          $apt update
+          $apt install -y --no-install-recommends xorriso mtools grub-common grub-efi-arm64-bin kmod zstd busybox-static \
+            cpio file gdisk fdisk e2fsprogs qemu-system-arm qemu-efi-aarch64
+          sudo chmod 666 /dev/kvm || true
+      - name: Keep the downloaded kernel packages
+        uses: actions/cache@v4
+        with:
+          path: bin/recovery-cache
+          key: recovery-packages-arm64-${{ hashFiles('packaging/recovery/build.py') }}
+      - name: Build the recovery disc
+        timeout-minutes: 10
+        run: make recovery-arm64 VERSION="ci-$(git rev-parse --short=12 HEAD)"
+      - name: Recover a machine in an emulator
+        timeout-minutes: 40
+        run: BB_RECOVERY_ISO_ARM64="$PWD/bin/recovery-arm64.iso" go test -count=1 -v -timeout 38m -run TestRecoveryDiscARM64 ./internal/recovery/
+      - name: Upload the recovery disc
+        uses: actions/upload-artifact@v4
+        with:
+          name: better-backup-recovery-arm64-iso
+          path: bin/recovery-arm64.iso
+          retention-days: 30
+
   zfs:
     name: ZFS
     runs-on: ubuntu-latest

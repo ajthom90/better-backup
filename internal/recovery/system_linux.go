@@ -156,8 +156,13 @@ type console struct {
 func openConsole() *console {
 	c := &console{in: make(chan string, 8)}
 	devs := []string{"/dev/tty1"}
-	if strings.Contains(readFile("/proc/cmdline"), "console=ttyS0") {
-		devs = append(devs, "/dev/ttyS0")
+	// A serial port: ttyS0 on a PC, ttyAMA0 on an ARM machine.
+	for _, f := range strings.Fields(readFile("/proc/cmdline")) {
+		if v, ok := strings.CutPrefix(f, "console="); ok {
+			if name, _, _ := strings.Cut(v, ","); strings.HasPrefix(name, "tty") && name != "tty0" {
+				devs = append(devs, "/dev/"+name)
+			}
+		}
 	}
 	if os.Getpid() != 1 {
 		devs = []string{"/dev/tty"}
@@ -432,7 +437,7 @@ func (n *network) configure(c *console) {
 
 // scanHardware describes the machine and the disks a restore can go to.
 func scanHardware() *api.RecoveryHardware {
-	hw := &api.RecoveryHardware{Firmware: disklayout.FirmwareBIOS, CPUs: runtime.NumCPU(), Disks: []api.RecoveryDisk{}}
+	hw := &api.RecoveryHardware{Firmware: disklayout.FirmwareBIOS, Arch: runtime.GOARCH, CPUs: runtime.NumCPU(), Disks: []api.RecoveryDisk{}}
 	if _, err := os.Stat("/sys/firmware/efi"); err == nil {
 		hw.Firmware = disklayout.FirmwareUEFI
 	}
