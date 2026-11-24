@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ajthom90/better-backup/internal/hypervisor"
 	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/tree"
 )
@@ -34,9 +35,12 @@ type Options struct {
 	Target    string
 	Overwrite string
 	// VMName names a restored virtual machine. Default: its old name.
-	VMName   string
-	Progress func(Stats)
-	Warn     func(string)
+	VMName string
+	// Connection reaches the hypervisor a virtual machine is restored
+	// to, for the ones managed over the network.
+	Connection *hypervisor.Connection
+	Progress   func(Stats)
+	Warn       func(string)
 }
 
 // Stats summarizes a restore.

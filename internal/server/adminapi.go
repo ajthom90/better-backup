@@ -145,6 +145,18 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("hypervisor must be empty or one of: " + strings.Join(api.Hypervisors, ", "))
 		return
 	}
+	if p.Hypervisor != "vmware" {
+		p.VMwareServer = ""
+	} else {
+		if s.vmwareServer(p.VMwareServer) == nil {
+			bad("choose the VMware server the machines are on; servers are added under VMware servers")
+			return
+		}
+		if p.VMTracking != "" {
+			bad("machines on VMware are read in full every time; leave vm_tracking empty")
+			return
+		}
+	}
 	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.SystemState && a.OS != "windows" {
 		bad("the system state can only be backed up on a Windows machine")
 		return
@@ -207,7 +219,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMTracking: p.VMTracking, SystemState: p.SystemState, NoSnapshot: p.NoSnapshot}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, SystemState: p.SystemState, NoSnapshot: p.NoSnapshot}}
 	return j, s.enqueue(j)
 }
 
@@ -427,12 +439,21 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "overwrite must be if-changed, always or never")
 		return
 	}
-	if req.Target == "" && a.OS != sn.OS {
+	if req.VMwareServer == "" {
+		req.VMwareServer = s.restoreVMware(sn)
+	} else if s.vmwareServer(req.VMwareServer) == nil {
+		fail(w, http.StatusBadRequest, "vmware_server does not name a VMware server")
+		return
+	}
+	// A machine on VMware does not go onto the agent at all: without a
+	// target it goes back to the datastore it was on.
+	if req.Target == "" && a.OS != sn.OS && req.VMwareServer == "" {
 		fail(w, http.StatusBadRequest, fmt.Sprintf("a %s backup cannot be restored in place on a %s agent; set a target directory", sn.OS, a.OS))
 		return
 	}
 	j := &api.Job{Type: api.JobRestore, AgentID: a.ID, SnapshotID: sn.ID, Restore: &api.RestoreSpec{
-		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName}}
+		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName,
+		VMwareServer: req.VMwareServer}}
 	if err := s.enqueue(j); err != nil {
 		s.internal(w, err)
 		return

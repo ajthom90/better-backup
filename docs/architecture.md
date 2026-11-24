@@ -38,6 +38,8 @@ better-backup has three programs:
 | `internal/hyperv` | Hyper-V driver (PowerShell and WMI) |
 | `internal/libvirt` | KVM driver (libvirt backup jobs and checkpoints through `virsh`) |
 | `internal/proxmox` | Proxmox VE driver (`qm`, `pvesm`, and QEMU's machine protocol) |
+| `internal/vmware` | VMware vSphere driver (snapshots and OVF export and import, through govmomi) |
+| `internal/vmdk` | Reads and writes VMware's stream-optimized disk format |
 | `internal/nbd`, `internal/qemuimg`, `internal/qmp` | NBD client, `qemu-nbd` wrapper and QMP client that read and write QEMU disks |
 
 Data sources other than files (volume images, Hyper-V and other hypervisors,
@@ -144,7 +146,7 @@ one (`Freeze`) into a configuration blob and a set of disks to image, and
 builds a machine again from such a blob (`NewRestore`). A machine is stored as
 an entry of type `vm` holding the configuration as a small file, whose name
 says which driver wrote it (`vm.json` for Hyper-V, `libvirt.json` for KVM,
-`proxmox.json` for Proxmox VE),
+`proxmox.json` for Proxmox VE, `vmware.json` for VMware vSphere),
 and one image per disk. Disks are always stored as their raw contents in
 fixed 1 MiB blocks, whatever the format on the host, so any disk can be
 restored anywhere as a plain image.
@@ -177,6 +179,25 @@ socket, which serves one client at a time, so the driver connects only for
 the moments it needs. After the disks are read the driver checks that every
 job is still running, because QEMU ends a job it cannot keep its promise for
 (a full scratch folder), and then the machine is left out of the backup.
+
+VMware vSphere is reached over its management API rather than from an agent
+on the host, so a policy names a server from a list the better-backup server
+keeps, and the job carries that server's address and account to the agent
+when it is handed over (`hypervisor.Connection`; it is not stored with the
+job). The driver takes a snapshot, asks for an export lease on it
+(`ExportSnapshot`) and downloads each disk as a stream-optimized VMDK, which
+`internal/vmdk` unpacks front to back as the archiver asks for blocks; the
+machine's description is the OVF descriptor the server writes
+(`OvfManager.CreateDescriptor`), kept in the configuration blob with small
+files such as the firmware settings. A restore gives that descriptor back
+(`CreateImportSpec`, `ImportVApp`) and uploads each disk as a stream-optimized
+VMDK written on the fly. Its grains are stored rather than compressed, which
+makes the length of the stream known before the first byte: the upload needs
+that, and the disk never has to be spooled. The lease is kept alive from a
+timer, and after the disks are read the driver checks that every stream ended
+the way the format says and that the lease is still good, or the machine is
+left out. This path reads whole disks; Changed Block Tracking needs random
+reads of a snapshot's disks (NBD through VDDK, or NBDSSL) and is not built.
 
 ## Offsite copy
 

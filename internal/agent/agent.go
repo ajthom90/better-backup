@@ -480,7 +480,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		for _, v := range vms {
 			if v == "*" {
 				var lerr error
-				if vms, lerr = drv.List(jctx); lerr != nil {
+				if vms, lerr = drv.List(jctx, j.Backup.Connection); lerr != nil {
 					warn("could not list the virtual machines on this host: " + lerr.Error())
 				}
 				break
@@ -489,7 +489,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		for _, name := range vms {
 			opts.VMs = append(opts.VMs, backup.VMSource{Name: name, Open: func(vm *backup.VMSource, prev []byte) error {
 				fz, err := drv.Freeze(jctx, vm.Name, hypervisor.Options{Tracking: j.Backup.VMTracking != "", Previous: prev,
-					Tag: j.ID, Scope: j.PolicyID, StateDir: a.dir})
+					Tag: j.ID, Scope: j.PolicyID, StateDir: a.dir, Connection: j.Backup.Connection})
 				if err != nil {
 					return err
 				}
@@ -521,7 +521,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		get := func(id keys.ID) ([]byte, error) { return a.c.Get(jctx, id) }
 		stats, err = restore.Run(jctx, get, restore.Options{
 			Sources: j.Restore.Sources, SourceOS: j.Restore.SourceOS, Include: j.Restore.Include,
-			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName,
+			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName, Connection: j.Restore.Connection,
 			Progress: func(s restore.Stats) { setProgress(s) }, Warn: warn})
 		req.Restore = &stats
 	default:

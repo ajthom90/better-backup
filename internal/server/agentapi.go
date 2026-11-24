@@ -157,6 +157,12 @@ func (s *Server) dispatch(a *api.Agent) (*api.Job, error) {
 		if p := s.parentLocked(a.ID, j.PolicyID); p != nil {
 			j.Backup.Parent = p.Sources
 		}
+		if j.Backup.VMwareServer != "" {
+			j.Backup.Connection = s.vmwareConnection(j.Backup.VMwareServer)
+		}
+	}
+	if j.Restore != nil && j.Restore.VMwareServer != "" {
+		j.Restore.Connection = s.vmwareConnection(j.Restore.VMwareServer)
 	}
 	s.log.Info("job started", "job", j.ID, "type", j.Type, "agent", a.Name)
 	return j, nil
