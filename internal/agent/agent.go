@@ -500,6 +500,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 				for i := range vm.Disks {
 					vm.Disks[i].Verify = j.Backup.VMTracking == "check"
 				}
+				vm.Check = fz.Check
 				vm.Close = func() {
 					if rerr := fz.Release(); rerr != nil {
 						warn("virtual machine " + vm.Name + ": " + rerr.Error())

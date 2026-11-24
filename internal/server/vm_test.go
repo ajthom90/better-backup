@@ -15,6 +15,7 @@ import (
 	"github.com/ajthom90/better-backup/internal/adminclient"
 	"github.com/ajthom90/better-backup/internal/agent"
 	"github.com/ajthom90/better-backup/internal/api"
+	"github.com/ajthom90/better-backup/internal/hypervisor"
 	"github.com/ajthom90/better-backup/internal/server"
 	"github.com/ajthom90/better-backup/internal/tree"
 )
@@ -355,6 +356,24 @@ func TestLibvirt(t *testing.T) {
 	if st.BytesRead < 3<<20 || st.BytesRead > 4<<20 {
 		t.Fatalf("last backup read %d bytes, want the 1 MiB that changed and the raw disk's 2 MiB", st.BytesRead)
 	}
+
+	// A backup job that ends before the disks are read is noticed.
+	drv := hypervisor.ByKind("libvirt")
+	fz, err := drv.Freeze(context.Background(), name, hypervisor.Options{Tag: "check"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fz.Check(); err != nil {
+		t.Fatalf("check of a healthy backup job: %v", err)
+	}
+	virsh("domjobabort", name)
+	if err := fz.Check(); err == nil {
+		t.Fatal("a backup job that ended early went unnoticed")
+	}
+	for _, d := range fz.Disks {
+		d.Close()
+	}
+	fz.Release()
 
 	// 7. With tracking switched off the checkpoints go away.
 	e.do("PUT", "/api/v1/policies/"+pol.ID, api.Policy{Name: "vms", AgentID: agentID, VMs: []string{name}, Enabled: true}, &pol)

@@ -43,6 +43,10 @@ type Frozen struct {
 	// gets in the snapshot.
 	Disks    []backup.ImageSource
 	Warnings []string
+	// Check, if set, is called after the disks were read and before
+	// Release. It returns an error if the frozen view did not hold, in
+	// which case what was read is thrown away.
+	Check func() error
 	// Release lets the machine's disks go: it removes the checkpoint or
 	// ends the backup job. It is called once, after the disks are read.
 	Release func() error

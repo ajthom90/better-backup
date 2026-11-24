@@ -501,6 +501,17 @@ func (driver) freezeLive(ctx context.Context, vm string, o hypervisor.Options, c
 		cleanup()
 		return fmt.Errorf("starting its backup job: %w", err)
 	}
+	// QEMU ends the job by itself if it cannot keep the old contents of
+	// what the machine overwrites, such as when the disk that holds the
+	// scratch files is full. From then on the disks it serves are no
+	// longer the disks as they were, and nothing read is to be trusted.
+	f.Check = func() error {
+		job, err := virsh(ctx, "backup-dumpxml", vm)
+		if err != nil || !strings.Contains(job, socket) {
+			return errors.New("its backup job ended before the disks were read, so what was read may mix old and new contents (is the disk that holds the scratch files full?)")
+		}
+		return nil
+	}
 	f.Release = func() error {
 		_, err := virsh(context.WithoutCancel(ctx), "domjobabort", vm)
 		cleanup()
