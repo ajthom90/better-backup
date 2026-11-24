@@ -91,21 +91,86 @@ a bigger disk or a NAS mount.
 
 ### 2. Enroll a machine
 
-On the server (in Docker: `docker exec better-backup bb token create`):
+Each machine to back up runs the agent. Installing it and connecting it to
+the server ("enrolling") takes one **enrollment code**, which carries the
+server's address, a one-time token and the server's fingerprint. Get a code
+from **Add an agent** in the web UI, or on the server (in Docker:
+`docker exec better-backup bb token create`):
 
 ```sh
-bb token create
+bb token create                                   # valid 24 hours, for one machine
+bb token create --for https://backup.example.com:8443   # name the address agents use
 ```
 
-It prints a command to run on the machine you want to back up:
+The agent runs in the background from the moment it is installed, and waits
+to be enrolled. What it backs up, and when, is then set on the server.
+
+#### macOS
+
+Download `better-backup-agent_VERSION_darwin_universal.pkg` from the
+[releases](https://github.com/ajthom90/better-backup/releases) and open it. It
+installs the agent (a launchd daemon that also runs when nobody is signed in),
+the **Better Backup** app and the `bb-agent` command, for Intel and Apple
+silicon Macs.
+
+The app opens when the installer finishes. Paste the enrollment code into it
+and press **Connect**. Afterwards it shows whether the Mac reaches the server
+and how the last backups went, and has a **Back Up Now** button. Any
+administrator of the Mac can use it.
+
+macOS keeps Mail, Messages, Safari, Photos and other apps' data away from
+programs until you allow it. The app says so and walks you through it: in
+System Settings, Privacy & Security, **Full Disk Access**, add
+`/usr/local/bin/bb-agent`. The agent restarts by itself once it has access.
+Without it backups still run, and leave those folders out with a warning.
+
+- Until the installer is signed with an Apple Developer ID, macOS refuses to
+  open it by double-click: right-click it and choose **Open**, or allow it
+  under System Settings, Privacy & Security, or install it from Terminal with
+  `sudo installer -pkg FILE.pkg -target /`. An unsigned agent also has to be
+  given Full Disk Access again after each update.
+- Without questions (scripts, management tools): put a file `enroll.conf`
+  beside the package holding `code=bb1...` and optionally `name=...`, then run
+  `sudo installer -pkg FILE.pkg -target /`. Or use the script below.
+- Remove it with `sudo bb-agent-uninstall`.
+
+#### Linux
+
+One line installs the `.deb` or `.rpm` package (or, on other systems, the
+plain program as a service) and enrolls the machine:
 
 ```sh
-sudo bb-agent enroll --server https://backup.example.com:8443 --token ... --fingerprint sha256:...
-sudo bb-agent service install
-sudo bb-agent service start
+curl -fsSL https://raw.githubusercontent.com/ajthom90/better-backup/main/packaging/install.sh | sudo sh -s -- CODE
 ```
 
-On Windows, run the same commands without `sudo` from an elevated prompt.
+The same line works on macOS. Or install the package yourself and enroll
+after:
+
+```sh
+sudo apt install ./better-backup-agent_VERSION_linux_amd64.deb   # or: sudo dnf install ./...rpm
+sudo bb-agent enroll          # asks for the code; or: sudo bb-agent enroll CODE
+```
+
+To enroll without anyone at the keyboard, write `code=bb1...` (and optionally
+`name=...`) to `/var/lib/better-backup-agent/enroll.conf`; the agent picks it
+up within seconds, and deletes it.
+
+#### On the machine, afterwards
+
+```sh
+sudo bb-agent status      # connected? what is it doing? how did the last backups go?
+sudo bb-agent backup      # back this machine up now
+sudo bb-agent unenroll    # forget the server
+sudo bb-agent setup       # all of this on a web page, served to this machine only
+```
+
+On Linux these need root, or membership of a group named `better-backup` if
+you create one (`sudo groupadd better-backup`, then restart the agent). On
+macOS, administrators need no `sudo`. The desktop app also builds for Linux
+(`make app`), but is not packaged there yet.
+
+On Windows, run `bb-agent enroll CODE` from an elevated prompt, then
+`bb-agent service install` and `bb-agent service start`.
 
 ### 3. Create a policy and back up
 
@@ -466,8 +531,9 @@ Then use the two commands above, or start a new server with
   restored as its own file). Windows keeps most system files as hard links
   into its component store, so a system state restored in place uses more
   disk space than before.
-- No MSI or `.pkg` installers yet; `service install` does the same job.
-  `.deb` and `.rpm` packages are built on release.
+- No MSI installer yet; `service install` does the same job on Windows.
+- The macOS installer is not signed or notarized until the release workflow is
+  given an Apple Developer ID (see `.github/workflows/release.yml`).
 - The repository itself lives on a local disk or mounted share; S3 is for the
   offsite copy. The copy holds what the repository holds, so a snapshot
   forgotten here is also removed there at the next run.
@@ -491,10 +557,14 @@ storage format.
 Requires Go 1.26 or later.
 
 ```sh
-make build    # binaries in ./bin
+make build    # bb, bb-agent and bb-server in ./bin
+make app      # the desktop app, for this machine (needs cgo; on Linux also
+              # the libgtk-3-dev and libwebkit2gtk-4.1-dev packages)
 make test
 make docker
 ```
+
+The macOS installer is built on a Mac by `packaging/macos/build.sh VERSION`.
 
 ## License
 

@@ -1,0 +1,31 @@
+#!/bin/sh
+# $1 is the package, $3 the volume installed on.
+state="/Library/Application Support/better-backup-agent"
+mkdir -p "$state"
+chown root:wheel "$state"
+chmod 700 "$state"
+chown root:wheel /Library/LaunchDaemons/better-backup-agent.plist /usr/local/bin/bb-agent /usr/local/bin/bb-agent-uninstall
+chmod 644 /Library/LaunchDaemons/better-backup-agent.plist
+chmod 755 /usr/local/bin/bb-agent /usr/local/bin/bb-agent-uninstall
+
+# An enroll.conf beside the package enrolls the Mac without questions:
+# for installs by script or by a management tool. See the README.
+seed="$(dirname "$1")/enroll.conf"
+if [ -f "$seed" ] && [ ! -e "$state/agent.json" ]; then
+    cp "$seed" "$state/enroll.conf"
+    chown root:wheel "$state/enroll.conf"
+    chmod 600 "$state/enroll.conf"
+fi
+
+launchctl bootstrap system /Library/LaunchDaemons/better-backup-agent.plist ||
+    launchctl kickstart -k system/better-backup-agent || true
+
+# Installed by hand, and not connected yet: show the app, which asks for
+# the enrollment code. Not when a script runs the installer.
+user=$(stat -f %Su /dev/console 2>/dev/null)
+if [ -z "$COMMAND_LINE_INSTALL" ] && [ -n "$user" ] && [ "$user" != root ] &&
+    [ ! -e "$state/agent.json" ] && [ ! -e "$state/enroll.conf" ]; then
+    uid=$(id -u "$user")
+    launchctl asuser "$uid" sudo -u "$user" open "/Applications/Better Backup.app" || true
+fi
+exit 0

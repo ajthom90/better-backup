@@ -86,7 +86,7 @@ jobs:
           v="ci-$(git rev-parse --short=12 HEAD)"
           flags="-s -w -X github.com/ajthom90/better-backup/internal/server.Version=$v -X github.com/ajthom90/better-backup/internal/agent.Version=$v"
           for target in windows/amd64 linux/amd64; do
-            CGO_ENABLED=0 GOOS=${target%/*} GOARCH=${target#*/} go build -trimpath -ldflags "$flags" -o "dist/${target%/*}-${target#*/}/" ./cmd/...
+            CGO_ENABLED=0 GOOS=${target%/*} GOARCH=${target#*/} go build -trimpath -ldflags "$flags" -o "dist/${target%/*}-${target#*/}/" ./cmd/bb ./cmd/bb-agent ./cmd/bb-server
           done
       - name: Upload Windows binaries
         uses: actions/upload-artifact@v4
@@ -113,3 +113,83 @@ jobs:
           done
           docker logs bb
           exit 1
+
+  linux-packages:
+    # Builds the .deb and .rpm packages as a release does, then installs
+    # the agent's on this runner and uses it for real: the systemd
+    # service, enrollment, a backup, an upgrade, removal.
+    name: Linux packages (.deb, .rpm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check the scripts
+        run: shellcheck -S error packaging/install.sh packaging/test/agent.sh packaging/scripts/*.sh packaging/macos/build.sh packaging/macos/uninstall.sh packaging/macos/scripts/*
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish
+      - name: Install the agent package and use it
+        run: |
+          mkdir tools
+          CGO_ENABLED=0 go build -o tools/ ./cmd/bb ./cmd/bb-server
+          packaging/test/agent.sh "$(ls dist/better-backup-agent_*_linux_amd64.deb)" tools
+      - name: Install the .rpm on Rocky Linux
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" rockylinux:9 sh -ec '
+            rpm -i /dist/better-backup-agent_*_linux_amd64.rpm
+            bb-agent version
+            test -f /usr/lib/systemd/system/better-backup-agent.service
+            bb-agent status || true
+            rpm -e better-backup-agent'
+      - name: Build the desktop app
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev
+          make app
+          go vet -tags desktop,production,webkit2_41 ./cmd/bb-agent-ui/
+      - name: Upload the packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: better-backup-linux-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+          retention-days: 30
+
+  macos-package:
+    # Builds the macOS installer, installs it on this runner and uses
+    # it for real: the launchd daemon, enrollment, a backup, the app, an
+    # upgrade, a silent install, the uninstaller.
+    name: macOS package (.pkg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build the package
+        run: packaging/macos/build.sh "0.0.0-ci-$(git rev-parse --short=12 HEAD)" dist
+      - name: Install the package and use it
+        run: |
+          mkdir tools
+          go build -o tools/ ./cmd/bb ./cmd/bb-server
+          packaging/test/agent.sh "$(ls dist/*.pkg)" tools shots
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: better-backup-macos-package
+          path: dist/*.pkg
+          retention-days: 30
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-screenshots
+          path: shots/
+          if-no-files-found: ignore
+          retention-days: 14

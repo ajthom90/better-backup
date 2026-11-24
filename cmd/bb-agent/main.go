@@ -9,8 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
@@ -23,7 +21,6 @@ import (
 	"github.com/ajthom90/better-backup/internal/agentui"
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/cli"
-	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/paths"
 	"github.com/ajthom90/better-backup/internal/svc"
 	"github.com/ajthom90/better-backup/internal/tree"
@@ -384,31 +381,17 @@ func setup(noBrowser bool) error {
 	if _, err := ctl.Status(ctx); errors.Is(err, agentctl.ErrDenied) {
 		return denied(err)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return err
-	}
-	key := keys.RandomHex(16)
-	addr := "http://" + ln.Addr().String() + "/?key=" + key
-	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second,
-		Handler: agentui.Handler(agentui.Options{Control: ctl, Key: key, Host: ln.Addr().String()})}
-	go func() {
-		<-ctx.Done()
-		srv.Close()
-	}()
-	fmt.Println("The settings page of the better-backup agent is at:")
-	fmt.Println()
-	fmt.Println("  " + addr)
-	fmt.Println()
-	fmt.Println("It works from this machine only, until you stop this command with Ctrl+C.")
-	// A browser started by root, from sudo, is the wrong user's browser.
-	if !noBrowser && os.Getenv("SUDO_USER") == "" {
-		if agentui.OpenBrowser(addr) == nil {
-			fmt.Println("Opening it in your browser.")
+	return agentui.Local(ctx, ctl, 0, func(addr string) {
+		fmt.Println("The settings page of the better-backup agent is at:")
+		fmt.Println()
+		fmt.Println("  " + addr)
+		fmt.Println()
+		fmt.Println("It works from this machine only, until you stop this command with Ctrl+C.")
+		// A browser started by root, from sudo, is the wrong user's browser.
+		if !noBrowser && os.Getenv("SUDO_USER") == "" {
+			if agentui.OpenBrowser(addr) == nil {
+				fmt.Println("Opening it in your browser.")
+			}
 		}
-	}
-	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
+	})
 }
