@@ -63,6 +63,12 @@
       <Component Id="AgentInstaller" Directory="InstallersFolder">
         <File Id="AgentInstaller" Source="$(AgentMsi)" Name="$(AgentMsiName)" KeyPath="yes" />
       </Component>
+      <!-- The agent installer for the other kind of processor, when it was built. -->
+      <?ifdef AgentMsi2?>
+      <Component Id="AgentInstaller2" Directory="InstallersFolder">
+        <File Id="AgentInstaller2" Source="$(AgentMsi2)" Name="$(AgentMsiName2)" KeyPath="yes" />
+      </Component>
+      <?endif?>
 
       <!-- bb-server reads these at start. -->
       <Component Id="SavedPort" Directory="INSTALLFOLDER">

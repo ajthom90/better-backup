@@ -63,6 +63,11 @@ until_ok 30 "$tools/bb" status || fail "the server did not start"
 step "install with the script, no code"
 sudo env BB_PACKAGE="$pkg" sh "$here/../install.sh" || fail "install.sh failed"
 until_ok 20 service_running || fail "the service is not running after the install"
+case "$(uname -m)" in
+x86_64) cpu=amd64 ;;
+*) cpu=arm64 ;;
+esac
+sudo bb-agent version | grep -q "/$cpu\$" || fail "the installed agent is not built for this machine's processor: $(sudo bb-agent version)"
 until_ok 20 status_has "waiting to be enrolled" || fail "the agent does not say it is waiting to be enrolled"
 sudo bb-agent status
 

@@ -808,7 +808,9 @@ async function addAgentDialog() {
   const known = new Set(before.map(a => a.id));
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
   const address = el("input", { id: "addAddress", value: local && inst.hostname ? "https://" + inst.hostname + ":" + (location.port || "443") : location.origin, spellcheck: false });
-  const system = el("select", { id: "addSystem" }, el("option", { value: "windows", textContent: "Windows" }), el("option", { value: "darwin", textContent: "macOS" }), el("option", { value: "linux", textContent: "Linux" }), el("option", { value: "truenas", textContent: "TrueNAS SCALE" }));
+  const system = el("select", { id: "addSystem" }, el("option", { value: "windows/amd64", textContent: "Windows (x64)" }), el("option", { value: "windows/arm64", textContent: "Windows (ARM64)" }), el("option", { value: "darwin/universal", textContent: "macOS (Intel or Apple silicon)" }), el("option", { value: "linux/amd64", textContent: "Linux (x64)" }), el("option", { value: "linux/arm64", textContent: "Linux (ARM64)" }), el("option", { value: "truenas", textContent: "TrueNAS SCALE" }));
+  const kinds = { deb: " for Debian and Ubuntu", rpm: " for Red Hat, Fedora and SUSE" };
+  const which = { "windows/amd64": "Most Windows PCs and servers are x64. To check, open Settings, System, About and read “System type”.", "windows/arm64": "For Windows on ARM, such as PCs with a Snapdragon processor. To check, open Settings, System, About and read “System type”.", "darwin/universal": "One installer works on every Mac, Intel or Apple silicon.", "linux/amd64": "Most Linux PCs and servers are x64. To check, run uname -m: it prints x86_64.", "linux/arm64": "For ARM machines such as a Raspberry Pi 4 or 5 with a 64-bit system, or an ARM server. To check, run uname -m: it prints aarch64." };
   const folder = el("input", { id: "nasFolder", value: "/mnt/tank/better-backup-agent" });
   const yaml = copyBox("");
   const tag = /^v?\d+\.\d+\.\d+$/.test($("version").textContent.replace("version ", "")) ? "latest" : "edge";
@@ -817,7 +819,7 @@ async function addAgentDialog() {
   const steps = el("div", { id: "addSteps" });
   const arrived = el("div", { id: "addArrived", className: "hint", textContent: "Waiting for the new agent to connect. This updates by itself." });
   const draw = () => {
-    const server = address.value.trim().replace(/\/+$/, ""), c = enrollCode(server, t), os = system.value;
+    const server = address.value.trim().replace(/\/+$/, ""), c = enrollCode(server, t), [os, arch] = system.value.split("/");
     code.set(c);
     if (os === "truenas") {
       // TrueNAS runs the agent as an app, which enrolls itself on first start.
@@ -830,16 +832,16 @@ async function addAgentDialog() {
         el("div", { className: "hint", textContent: "The app is privileged and works in the file system of TrueNAS itself, so policies use the real paths (/mnt/tank/documents), files are read from ZFS snapshots, and a restore can write them back in place." }));
       return;
     }
-    const files = inst.files.filter(f => f.os === os);
+    const files = inst.files.filter(f => f.os === os && f.arch === arch);
     const links = files.length
-      ? files.map(f => el("div", null, el("a", { href: f.url, textContent: f.name, download: f.name }), f.size ? " (" + size(f.size) + ")" : ""))
+      ? files.map(f => el("div", null, el("a", { href: f.url, textContent: f.name, download: f.name }), (kinds[f.format] || "") + (f.size ? " (" + size(f.size) + ")" : "")))
       : [el("div", null, "This server has no installer for this system. Get it from the ", el("a", { href: inst.releases, target: "_blank", rel: "noopener", textContent: "releases page" }), ".")];
     const first = files[0] ? files[0].name : os === "windows" ? "better-backup-agent.msi" : "the agent package";
     const how = os === "windows"
       ? ["Run the installer on the machine and paste the code when it asks for it.", "Or install without any dialogs, from a script or Group Policy:", "msiexec /i " + first + " /qn ENROLL_CODE=" + c]
       : ["Install the agent on the machine, then open “better-backup agent” there and paste the code.", "Or register it from a terminal:", "sudo bb-agent enroll " + c];
     silent.set(how[2]);
-    steps.replaceChildren(el("label", { textContent: "1. Download the agent installer" }), ...links,
+    steps.replaceChildren(el("label", { textContent: "1. Download the agent installer" }), ...links, el("div", { className: "hint", textContent: which[system.value] }),
       el("label", { textContent: "2. Give the agent this enrollment code" }), code.box, el("div", { className: "hint", textContent: how[0] + " The code works " + (t.uses > 1 ? "for " + t.uses + " machines" : "once") + ", until " + when(t.expires) + "." }),
       el("label", { textContent: how[1] }), silent.box);
   };

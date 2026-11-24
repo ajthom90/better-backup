@@ -19,16 +19,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # x64 and ARM64 of each system. On Windows the tests run
+        # elevated, so the ARM64 runner also takes real VSS snapshots.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest, windows-11-arm]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Processor
+        shell: bash
+        run: go env GOOS GOARCH && uname -m
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test -race -count=1 ./...
+        # Go has no race detector for Windows on ARM64.
+        run: go test ${{ matrix.os != 'windows-11-arm' && '-race' || '' }} -count=1 ./...
 
   recovery:
     name: Recovery disc
@@ -127,11 +133,10 @@ jobs:
           cd internal/server
           sudo env BB_TEST_LIBVIRT=/var/lib/libvirt/images /tmp/server.test -test.v -test.run 'TestLibvirt|TestProxmox'
 
-  msi:
-    # Builds the Windows installers and uses them for real: installs the
-    # server, enrolls an agent from an enrollment code, upgrades both and
-    # removes them.
-    name: Windows installers
+  msi-build:
+    # Builds the Windows installers for x64 and ARM64 the way a release
+    # does: both on an x64 runner.
+    name: Windows installers (build)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -141,22 +146,48 @@ jobs:
       - name: Build two versions
         shell: pwsh
         run: |
-          ./packaging/windows/build.ps1 -Version 0.0.0
-          ./packaging/windows/build.ps1 -Version 0.0.${{ github.run_number }}
-      - name: Install, enroll, upgrade, remove
-        shell: pwsh
-        run: ./packaging/windows/test.ps1 -Dir dist -Old 0.0.0 -New 0.0.${{ github.run_number }}
+          ./packaging/windows/build.ps1 -Version 0.0.0 -Arch amd64,arm64
+          ./packaging/windows/build.ps1 -Version 0.0.${{ github.run_number }} -Arch amd64,arm64
       - name: Upload the installers
         uses: actions/upload-artifact@v4
         with:
           name: better-backup-windows-installers
-          path: dist/*_0.0.${{ github.run_number }}_windows_amd64.msi
+          path: dist/*_0.0.${{ github.run_number }}_windows_*.msi
           retention-days: 30
+      - name: Hand both versions to the tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers-for-tests
+          path: dist/*.msi
+          retention-days: 1
+
+  msi:
+    # Uses the installers for real, on an x64 and on an ARM64 Windows:
+    # installs the server, enrolls an agent from an enrollment code,
+    # upgrades both and removes them.
+    name: Windows installers (${{ matrix.arch }})
+    needs: msi-build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, arch: amd64 }
+          - { os: windows-11-arm, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installers-for-tests
+          path: dist
+      - name: Install, enroll, upgrade, remove
+        shell: pwsh
+        run: ./packaging/windows/test.ps1 -Dir dist -Old 0.0.0 -New 0.0.${{ github.run_number }} -Arch ${{ matrix.arch }} -BothAgents
       - name: Upload the installer logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: installer-logs
+          name: installer-logs-${{ matrix.arch }}
           path: dist/*.log
           retention-days: 7
 
@@ -183,7 +214,7 @@ jobs:
         run: |
           v="ci-$(git rev-parse --short=12 HEAD)"
           flags="-s -w -X github.com/ajthom90/better-backup/internal/server.Version=$v -X github.com/ajthom90/better-backup/internal/agent.Version=$v"
-          for target in windows/amd64 linux/amd64; do
+          for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64; do
             CGO_ENABLED=0 GOOS=${target%/*} GOARCH=${target#*/} go build -trimpath -ldflags "$flags" -o "dist/${target%/*}-${target#*/}/" ./cmd/bb ./cmd/bb-agent ./cmd/bb-server
           done
       - name: Upload Windows binaries
@@ -197,6 +228,18 @@ jobs:
         with:
           name: better-backup-linux-amd64
           path: dist/linux-amd64/
+          retention-days: 30
+      - name: Upload Windows ARM64 binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: better-backup-windows-arm64
+          path: dist/windows-arm64/
+          retention-days: 30
+      - name: Upload Linux ARM64 binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: better-backup-linux-arm64
+          path: dist/linux-arm64/
           retention-days: 30
       - name: Build the Docker images
         run: |
@@ -212,12 +255,48 @@ jobs:
           docker logs bb
           exit 1
 
+  docker-arm64:
+    # The same images, built and started on an ARM64 machine.
+    name: Docker on ARM64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      # The recovery disc inside the server image is put together by
+      # x64 tools, which an ARM64 machine runs through an emulator.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: amd64
+      - name: Build the Docker images
+        run: |
+          docker build --target server -t better-backup:ci .
+          docker build --target agent -t better-backup-agent:ci .
+      - name: Start the server image
+        run: |
+          test "$(docker image inspect -f '{{.Architecture}}' better-backup:ci)" = arm64
+          docker run --rm better-backup:ci version | grep linux/arm64
+          docker run --rm better-backup-agent:ci version | grep linux/arm64
+          docker run -d --name bb better-backup:ci
+          for i in $(seq 1 30); do
+            if docker exec bb bb status; then exit 0; fi
+            sleep 1
+          done
+          docker logs bb
+          exit 1
+
   linux-packages:
     # Builds the .deb and .rpm packages as a release does, then installs
     # the agent's on this runner and uses it for real: the systemd
-    # service, enrollment, a backup, an upgrade, removal.
-    name: Linux packages (.deb, .rpm)
-    runs-on: ubuntu-latest
+    # service, enrollment, a backup, an upgrade, removal. Once on x64
+    # and once on ARM64.
+    name: Linux packages (.deb, .rpm, ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: amd64 }
+          - { os: ubuntu-24.04-arm, arch: arm64 }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -226,6 +305,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Check the scripts
+        if: matrix.arch == 'amd64'
         run: shellcheck -S error packaging/install.sh packaging/test/agent.sh packaging/scripts/*.sh packaging/macos/build.sh packaging/macos/uninstall.sh packaging/macos/scripts/*
       - uses: goreleaser/goreleaser-action@v6
         with:
@@ -235,12 +315,12 @@ jobs:
         run: |
           mkdir tools
           CGO_ENABLED=0 go build -o tools/ ./cmd/bb ./cmd/bb-server
-          packaging/test/agent.sh "$(ls dist/better-backup-agent_*_linux_amd64.deb)" tools
+          packaging/test/agent.sh "$(ls dist/better-backup-agent_*_linux_${{ matrix.arch }}.deb)" tools
       - name: Install the .rpm on Rocky Linux
         run: |
           docker run --rm -v "$PWD/dist:/dist:ro" rockylinux:9 sh -ec '
-            rpm -i /dist/better-backup-agent_*_linux_amd64.rpm
-            bb-agent version
+            rpm -i /dist/better-backup-agent_*_linux_${{ matrix.arch }}.rpm
+            bb-agent version | grep linux/${{ matrix.arch }}
             test -f /usr/lib/systemd/system/better-backup-agent.service
             bb-agent status || true
             rpm -e better-backup-agent'
@@ -251,6 +331,7 @@ jobs:
           make app
           go vet -tags desktop,production,webkit2_41 ./cmd/bb-agent-ui/
       - name: Upload the packages
+        if: matrix.arch == 'amd64' # one run builds the packages of both
         uses: actions/upload-artifact@v4
         with:
           name: better-backup-linux-packages
@@ -262,9 +343,16 @@ jobs:
   macos-package:
     # Builds the macOS installer, installs it on this runner and uses
     # it for real: the launchd daemon, enrollment, a backup, the app, an
-    # upgrade, a silent install, the uninstaller.
-    name: macOS package (.pkg)
-    runs-on: macos-latest
+    # upgrade, a silent install, the uninstaller. Once on an Apple
+    # silicon Mac and once on an Intel one; the package is the same.
+    name: macOS package (.pkg, ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, arch: arm64 }
+          - { os: macos-15-intel, arch: amd64 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -278,6 +366,7 @@ jobs:
           go build -o tools/ ./cmd/bb ./cmd/bb-server
           packaging/test/agent.sh "$(ls dist/*.pkg)" tools shots
       - name: Upload the package
+        if: matrix.arch == 'arm64'
         uses: actions/upload-artifact@v4
         with:
           name: better-backup-macos-package
@@ -287,7 +376,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-screenshots
+          name: macos-screenshots-${{ matrix.arch }}
           path: shots/
           if-no-files-found: ignore
           retention-days: 14
