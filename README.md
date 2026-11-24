@@ -7,8 +7,8 @@ appliance's capacity ceiling.
 
 **Status: Phase 2 in progress.** File backup and restore work end to end on
 all three operating systems, and Windows backups read from VSS snapshots.
-Hyper-V and restoring a system state or Active Directory in place are on the
-[roadmap](#roadmap) and not built yet. Do not make this your only
+Newer parts, such as restoring a system state or Active Directory in place,
+have had little testing on real machines; the sections below say which. Do not make this your only
 backup until it has run beside your current one for a while.
 
 ## What works today
@@ -28,8 +28,9 @@ backup until it has run beside your current one for a while.
   on NTFS is skipped.
 - **Windows system state**: the registry, boot and system files, and on a
   domain controller the Active Directory database and SYSVOL, as the
-  system's own VSS writers list them. It can be restored to a folder;
-  restoring it over a running system is not built yet.
+  system's own VSS writers list them. It can be restored to a folder, or
+  over the machine it came from, including Active Directory on a domain
+  controller in Directory Services Restore Mode.
 - **Agents for Windows, macOS and Linux**, enrolled with a one-time token and
   authenticated with per-agent TLS certificates. Agents dial out to the
   server, so only the server needs an open port.
@@ -371,9 +372,70 @@ them from a snapshot. The first run stores several gigabytes of Windows
 files; later runs only store what changed. In a snapshot the files sit under
 "System state", then the drive letter, then their original path.
 
-For now it restores to a folder only. Putting a system state back over a
-running Windows, and the Directory Services Restore Mode steps for a domain
-controller, come next.
+#### Restoring a system state over its machine
+
+```sh
+bb restore SNAPSHOT --system-state-in-place --wait
+```
+
+In the web UI: Restore on the snapshot, then "Put the Windows system state
+back over this machine". It only works on the machine the backup came from.
+
+**This has run only on test machines so far. Try it on a machine you can
+afford to lose, and take a checkpoint or image first.** Microsoft does not
+support replacing the registry of a running Windows Server 2016 or later, and
+this does it anyway, the way backup programs did before; `--no-registry`
+leaves the registry alone.
+
+What happens:
+
+- Files that are not in use are replaced at once. Files in use are written
+  beside the originals and Windows swaps them in at the next restart.
+- The registry hives are restored to `System32\config\bb-restore`, then
+  made the machine's hives for the next start. Before that, the restored
+  SYSTEM hive is given what the running one says a restore must keep (the
+  `KeysNotToRestore` list: disk and volume assignments, drivers and services
+  installed since the backup, and the list of files to swap in).
+- System state backups made before this feature existed lack the registry's
+  log files, and Windows may refuse to load their hives. The job then says
+  the registry was not restored. Take a new system state backup first.
+- Nothing is final until Windows restarts. `--restart` does that when the
+  restore is done; otherwise the job ends with a reminder.
+
+#### Restoring Active Directory on a domain controller
+
+Active Directory cannot be replaced while it runs, so the domain controller
+must be in Directory Services Restore Mode (DSRM). The agent, installed as a
+service, starts there too.
+
+1. On the domain controller, as an administrator: `bcdedit /set safeboot dsrepair`,
+   then restart. Sign in as `.\Administrator` with the DSRM password. In DSRM
+   the machine may not be able to look up names, so if the agent reaches the
+   server by name, make sure that name still resolves (a hosts file entry
+   works).
+2. Start the restore from the web UI or with
+   `bb restore SNAPSHOT --system-state-in-place --restart --wait`.
+3. The restart leaves DSRM (the restore runs `bcdedit /deletevalue safeboot`
+   when it restarts the machine; do that yourself if you restart by hand).
+
+That is a **non-authoritative** restore: the database is put back, Active
+Directory is told it came from a backup, and after the restart the domain
+controller catches up from the others. SYSVOL does the same. It is the right
+choice for a single failed domain controller.
+
+For an **authoritative** restore, which makes the restored objects win over
+the newer ones on the other domain controllers (the way to bring back
+deleted users or OUs), name what to bring back:
+
+```sh
+bb restore SNAPSHOT --system-state-in-place --authoritative "OU=Sales,DC=example,DC=com" --restart --wait
+```
+
+After the files are back, the agent runs `ntdsutil "authoritative restore"`
+for each name. `--authoritative-sysvol` does the same for SYSVOL (group
+policies and scripts): use it only when every domain controller lost SYSVOL.
+A backup older than the forest's tombstone lifetime (180 days by default,
+60 on old forests) must not be restored.
 
 ### Email alerts
 
@@ -449,7 +511,9 @@ Then use the two commands above, or start a new server with
 - VSS backups are "copy" backups: application logs (SQL Server, Exchange) are
   not truncated. Application-aware backup comes in Phase 6.
 - Not yet preserved: NTFS audit entries (SACLs) and EFS encryption, Unix extended attributes and ACLs, hard links (each link is
-  restored as its own file).
+  restored as its own file). Windows keeps most system files as hard links
+  into its component store, so a system state restored in place uses more
+  disk space than before.
 - No MSI or `.pkg` installers yet; `service install` does the same job.
   `.deb` and `.rpm` packages are built on release.
 - The repository itself lives on a local disk or mounted share; S3 is for the
@@ -463,7 +527,7 @@ Then use the two commands above, or start a new server with
 | 1. Foundation (this release) | Server, file agent, dedup store, restore in place, Docker and native services |
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
-| 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. To do: restore in place, DSRM-assisted authoritative and non-authoritative restore |
+| 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. restore over the running system with the registry, non-authoritative and authoritative Active Directory restore in DSRM (little tested on real machines) |
 | 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node), VMware vSphere virtual machines over the network (untested on a real host, full reads only). To do: VMware Changed Block Tracking, Postgres option, user roles |
 | 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |
 

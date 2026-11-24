@@ -45,6 +45,7 @@ textarea { resize:vertical; min-height:64px; }
 .grid small { color:var(--muted); display:block; }
 .two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
 .hint { color:var(--muted); font-size:12px; margin-top:4px; }
+.warn { border:1px solid #d97706; border-left-width:4px; border-radius:6px; padding:8px 10px; margin-top:10px; font-size:13px; }
 td .acts { display:flex; gap:6px; }
 dialog.wide { max-width:min(860px,94vw); width:860px; }
 .crumbs { display:flex; flex-wrap:wrap; gap:4px; align-items:center; margin:10px 0; }
@@ -432,16 +433,45 @@ function restoreDialog(s, path) {
   const vmware = el("select", { id: "restoreVMware" }, el("option", { value: "", textContent: "The one its backup policy names" }), ...vmwareList.map(v => el("option", { value: v.id, textContent: v.name })));
   const vmwareBox = el("div", { hidden: !vmwareList.length }, el("label", { textContent: "VMware server for a restored virtual machine" }), vmware,
     el("div", { className: "hint", textContent: "Only for machines backed up from VMware. Above, “Put it in” then names a datastore; leave it empty for the datastore the machine was on." }));
+  // Putting a system state back over its machine is a restore of its own.
+  const hasState = s.os === "windows" && s.sources.some(x => x.name === "System state");
+  const inPlace = el("input", { type: "checkbox", id: "sysInPlace" });
+  const sysReg = el("input", { type: "checkbox", id: "sysRegistry", checked: true });
+  const sysRestart = el("input", { type: "checkbox", id: "sysRestart" });
+  const sysAuthVol = el("input", { type: "checkbox", id: "sysAuthSysvol" });
+  const sysAuthDN = el("textarea", { id: "sysAuthDN", rows: 2, placeholder: "One distinguished name per line, for example OU=Sales,DC=example,DC=com" });
+  const sysConfirm = el("input", { id: "sysConfirm", placeholder: "Type the machine's name to confirm: " + s.hostname });
+  const sysOpts = el("div", { hidden: true },
+    el("div", { className: "warn", textContent: "This replaces Windows system files, and by default the whole registry, on " + s.hostname + " with their state at the time of this backup. Programs and drivers installed since will stop working. It is finished by a restart and cannot be undone." }),
+    el("label", { className: "check" }, sysReg, "Restore the registry too"),
+    el("label", { className: "check" }, sysRestart, "Restart Windows when the restore is done"),
+    el("div", { className: "hint", textContent: "On a domain controller, start Windows in Directory Services Restore Mode first: Active Directory cannot be replaced while it runs. The agent keeps running there." }),
+    el("label", { className: "check" }, sysAuthVol, "Domain controller: make this SYSVOL the authoritative copy"),
+    el("div", { className: "hint", textContent: "Leave this off unless every domain controller lost SYSVOL. Off, the restored SYSVOL is brought up to date from the other domain controllers." }),
+    el("label", { textContent: "Domain controller: restore these parts of Active Directory authoritatively (optional)" }), sysAuthDN,
+    el("div", { className: "hint", textContent: "Objects under these names, as they were in the backup, replace the newer ones on every domain controller. Use it to bring back deleted objects. Leave empty for an ordinary restore, which catches up from the other domain controllers." }),
+    el("label", { textContent: "Confirm" }), sysConfirm);
+  const fileOpts = el("div");
+  inPlace.onchange = () => { sysOpts.hidden = !inPlace.checked; fileOpts.hidden = inPlace.checked; if (inPlace.checked) agent.value = s.agent_id; agent.disabled = inPlace.checked; };
   const err = el("div", { id: "err" });
   const go = el("button", { className: "primary", textContent: "Start restore" });
   go.onclick = async () => {
     try {
-      const j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: agent.value, target: target.value.trim(), include: only.value.trim() ? [only.value.trim()] : [], overwrite: mode.value, vm_name: vmName.value.trim(), vmware_server: vmware.value });
+      let j;
+      if (inPlace.checked) {
+        if (sysConfirm.value.trim().toLowerCase() !== s.hostname.toLowerCase()) { err.textContent = "Type the machine's name, " + s.hostname + ", to confirm."; return; }
+        j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: s.agent_id,
+          system_state: { registry: sysReg.checked, restart: sysRestart.checked, authoritative_sysvol: sysAuthVol.checked, authoritative_subtrees: lines(sysAuthDN.value) } });
+      } else
+      j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: agent.value, target: target.value.trim(), include: only.value.trim() ? [only.value.trim()] : [], overwrite: mode.value, vm_name: vmName.value.trim(), vmware_server: vmware.value });
       await refresh(); await jobDialog(j.id);
     } catch (e) { err.textContent = e.message; }
   };
   openDialog(false, el("h3", { textContent: "Restore from " + s.hostname + ", " + when(s.time) }),
     el("label", { textContent: "Restore onto" }), agent,
+    hasState && !path ? el("label", { className: "check" }, inPlace, "Put the Windows system state back over this machine") : "",
+    sysOpts, fileOpts);
+  fileOpts.append(
     el("label", { textContent: "Only this file, folder or disk" }), only,
     el("div", { className: "hint", textContent: "The original path. Use Browse on a snapshot to pick one." }),
     el("label", { textContent: "Put it in" }), target,
@@ -449,7 +479,8 @@ function restoreDialog(s, path) {
     el("label", { textContent: "Existing files" }), mode,
     el("label", { textContent: "Name for a restored virtual machine" }), vmName,
     el("div", { className: "hint", textContent: "Only for virtual machines. One is restored as a new machine, switched off, with its disks in the place above. Restore it onto a host of the same kind it was backed up from: Hyper-V, Proxmox VE, or KVM with libvirt (there a folder such as /var/lib/libvirt/images)." }),
-    vmwareBox, err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
+    vmwareBox);
+  $("dlgBody").append(err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
 }
 
 // browseDialog shows what a snapshot holds at a path.

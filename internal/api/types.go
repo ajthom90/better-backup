@@ -158,6 +158,26 @@ type RestoreSpec struct {
 	// VMwareServer and Connection are as in BackupSpec.
 	VMwareServer string                 `json:"vmware_server,omitempty"`
 	Connection   *hypervisor.Connection `json:"connection,omitempty"`
+	// SystemState, if set, restores the system state over the running
+	// system.
+	SystemState *SystemStateRestore `json:"system_state,omitempty"`
+}
+
+// SystemStateRestore asks for a Windows system state to be put back
+// over the running system it came from. Files in use are swapped in
+// when Windows restarts.
+type SystemStateRestore struct {
+	// Registry also replaces the registry at the restart.
+	Registry bool `json:"registry,omitempty"`
+	// AuthoritativeSYSVOL makes a domain controller's restored SYSVOL
+	// the copy its replication partners take over.
+	AuthoritativeSYSVOL bool `json:"authoritative_sysvol,omitempty"`
+	// AuthoritativeSubtrees are distinguished names in Active Directory
+	// whose restored objects win over newer ones on other domain
+	// controllers.
+	AuthoritativeSubtrees []string `json:"authoritative_subtrees,omitempty"`
+	// Restart restarts Windows when the restore is done.
+	Restart bool `json:"restart,omitempty"`
 }
 
 type Job struct {
@@ -198,6 +218,10 @@ type RestoreRequest struct {
 	// VMwareServer is the id of the VMwareServer a VMware machine is
 	// restored to. Default: the one its policy names.
 	VMwareServer string `json:"vmware_server,omitempty"`
+	// SystemState restores the snapshot's system state over the running
+	// system. It needs an empty Target and the machine the backup came
+	// from.
+	SystemState *SystemStateRestore `json:"system_state,omitempty"`
 }
 
 type EnrollToken struct {

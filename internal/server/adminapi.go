@@ -451,9 +451,34 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, fmt.Sprintf("a %s backup cannot be restored in place on a %s agent; set a target directory", sn.OS, a.OS))
 		return
 	}
+	if req.SystemState != nil {
+		has := false
+		for _, e := range sn.Sources {
+			has = has || e.Name == tree.SystemStateName
+		}
+		switch {
+		case !has:
+			fail(w, http.StatusBadRequest, "this snapshot holds no system state")
+			return
+		case req.Target != "":
+			fail(w, http.StatusBadRequest, "a system state is restored in place or to a folder: leave out either system_state or target")
+			return
+		case a.ID != sn.AgentID:
+			fail(w, http.StatusBadRequest, "a system state can only be restored in place on the machine it was backed up from")
+			return
+		}
+		for _, dn := range req.SystemState.AuthoritativeSubtrees {
+			if !strings.Contains(dn, "=") || strings.ContainsAny(dn, "\"\r\n") {
+				fail(w, http.StatusBadRequest, "authoritative_subtrees must be distinguished names such as OU=Sales,DC=example,DC=com")
+				return
+			}
+		}
+		// Nothing else in the snapshot rides along.
+		req.Include = []string{tree.SystemStateName}
+	}
 	j := &api.Job{Type: api.JobRestore, AgentID: a.ID, SnapshotID: sn.ID, Restore: &api.RestoreSpec{
 		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName,
-		VMwareServer: req.VMwareServer}}
+		VMwareServer: req.VMwareServer, SystemState: req.SystemState}}
 	if err := s.enqueue(j); err != nil {
 		s.internal(w, err)
 		return
