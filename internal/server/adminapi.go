@@ -353,7 +353,7 @@ func listPath(get tree.Getter, sn *tree.Snapshot, path string) ([]tree.Entry, er
 		cur := src
 		if rest != "" {
 			for _, name := range strings.Split(rest, sep) {
-				if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM {
+				if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM && cur.Type != tree.TypeMachine {
 					return nil, fmt.Errorf("%s is not a directory in this snapshot", path)
 				}
 				var next *tree.Entry
@@ -378,7 +378,7 @@ func listPath(get tree.Getter, sn *tree.Snapshot, path string) ([]tree.Entry, er
 				cur = next
 			}
 		}
-		if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM {
+		if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM && cur.Type != tree.TypeMachine {
 			return []tree.Entry{*cur}, nil
 		}
 		var all []tree.Entry

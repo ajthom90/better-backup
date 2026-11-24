@@ -47,9 +47,26 @@ func (r *restorer) imageTo(e *tree.Entry, dest string) error {
 	if err != nil {
 		return fmt.Errorf("image %s: %w", e.Name, err)
 	}
+	err = r.writeImage(e, w, fresh)
+	if cerr := done(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("writing %s: %w (the destination now holds part of the image and is not usable)", dest, err)
+	}
+	r.stats.Files++
+	return nil
+}
+
+// writeImage writes an image's blocks to w. fresh says w reads as zeros
+// wherever nothing is written, so holes need no writing.
+func (r *restorer) writeImage(e *tree.Entry, w io.WriterAt, fresh bool) error {
+	if e.BlockSize <= 0 {
+		return fmt.Errorf("image %s has no block size", e.Name)
+	}
 	off := int64(0)
 	var zeros []byte
-	err = tree.EachContent(r.get, e, func(id keys.ID) error {
+	err := tree.EachContent(r.get, e, func(id keys.ID) error {
 		if err := r.ctx.Err(); err != nil {
 			return err
 		}
@@ -68,6 +85,7 @@ func (r *restorer) imageTo(e *tree.Entry, dest string) error {
 				if _, err := w.WriteAt(zeros[:n], off); err != nil {
 					return err
 				}
+				r.progress()
 			}
 		} else {
 			data, err := r.get(id)
@@ -89,14 +107,7 @@ func (r *restorer) imageTo(e *tree.Entry, dest string) error {
 	if err == nil && off != e.Size {
 		err = fmt.Errorf("image %s: restored %d bytes but the backup recorded %d", e.Name, off, e.Size)
 	}
-	if cerr := done(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return fmt.Errorf("writing %s: %w (the destination now holds part of the image and is not usable)", dest, err)
-	}
-	r.stats.Files++
-	return nil
+	return err
 }
 
 // createImageFile makes a sparse file of the image's size.
@@ -116,24 +127,12 @@ func createImageFile(path string, size int64) (io.WriterAt, bool, func() error, 
 // it under the target, and a new machine is built around them. With
 // full false only the disks picked by Include are restored, as images.
 func (r *restorer) vm(e *tree.Entry, orig string, full bool) error {
-	var children []tree.Entry
-	for _, p := range e.Subtree {
-		page, err := tree.ReadPage(r.get, p)
-		if err != nil {
-			return err
-		}
-		children = append(children, page...)
+	children, err := r.children(e)
+	if err != nil {
+		return err
 	}
 	if !full {
-		for i := range children {
-			c := &children[i]
-			if c.Type == tree.TypeImage && r.match(r.join(orig, c.Name)) == matchFull {
-				if err := r.image(c); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		return r.pickedImages(children, orig)
 	}
 	if r.opts.Target == "" {
 		return fmt.Errorf("restoring the virtual machine %s needs a target folder for its files; it is restored as a new machine beside the original", e.Name)
@@ -193,5 +192,32 @@ func (r *restorer) vm(e *tree.Entry, orig string, full bool) error {
 		return fmt.Errorf("%w (its disks were restored to %s)", err, dir)
 	}
 	r.stats.Files++
+	return nil
+}
+
+// children reads every entry under a virtual machine or whole machine.
+func (r *restorer) children(e *tree.Entry) ([]tree.Entry, error) {
+	var children []tree.Entry
+	for _, p := range e.Subtree {
+		page, err := tree.ReadPage(r.get, p)
+		if err != nil {
+			return nil, err
+		}
+		children = append(children, page...)
+	}
+	return children, nil
+}
+
+// pickedImages restores the images among children that Include names,
+// each as an image on its own.
+func (r *restorer) pickedImages(children []tree.Entry, orig string) error {
+	for i := range children {
+		c := &children[i]
+		if c.Type == tree.TypeImage && r.match(r.join(orig, c.Name)) == matchFull {
+			if err := r.image(c); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }

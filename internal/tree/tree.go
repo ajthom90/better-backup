@@ -23,6 +23,13 @@ const (
 	// TypeVM is a virtual machine. Like a directory it has a subtree: a
 	// configuration file and one image per virtual disk.
 	TypeVM = "vm"
+	// TypeMachine is a whole machine: the layout of the disks it starts
+	// from and an image of each of their partitions, kept in Subtree.
+	// It is what a bare-metal restore puts back.
+	TypeMachine = "machine"
+
+	// MachineName is the name of the source that holds a whole machine.
+	MachineName = "Whole machine"
 
 	// SystemStateName is the name of the source entry that holds a
 	// Windows system state: a folder with one folder per drive ("C"),
@@ -267,7 +274,7 @@ func Mark(get Getter, entries []Entry, seen map[keys.ID]struct{}, mark func(keys
 			if err != nil {
 				return err
 			}
-		case TypeDir, TypeVM:
+		case TypeDir, TypeVM, TypeMachine:
 			for _, p := range e.Subtree {
 				if _, ok := seen[p]; ok {
 					continue

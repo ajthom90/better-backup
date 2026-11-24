@@ -34,7 +34,13 @@ type Options struct {
 	Target    string
 	Overwrite string
 	// VMName names a restored virtual machine. Default: its old name.
-	VMName   string
+	// With a whole machine it asks for a new Hyper-V machine of that
+	// name to be built around the restored disks.
+	VMName string
+	// Disks says where the disks of a whole machine go: the name a disk
+	// has in the backup ("disk0") to a disk device or a file to create.
+	// Empty puts them in files under Target.
+	Disks    map[string]string
 	Progress func(Stats)
 	Warn     func(string)
 }
@@ -73,7 +79,7 @@ func Run(ctx context.Context, get tree.Getter, opts Options) (Stats, error) {
 	default:
 		return r.stats, fmt.Errorf("unknown overwrite policy %q", opts.Overwrite)
 	}
-	if opts.Target == "" && opts.SourceOS != runtime.GOOS {
+	if opts.Target == "" && len(opts.Disks) == 0 && opts.SourceOS != runtime.GOOS {
 		return r.stats, fmt.Errorf("cannot restore a %s backup in place on %s; choose a target directory", opts.SourceOS, runtime.GOOS)
 	}
 	for i, inc := range r.opts.Include {
@@ -231,6 +237,8 @@ func (r *restorer) entry(e *tree.Entry, orig, dest string, full bool) error {
 		return r.image(e)
 	case tree.TypeVM:
 		return r.vm(e, orig, full)
+	case tree.TypeMachine:
+		return r.machine(e, orig, full)
 	case tree.TypeSymlink:
 		if _, err := os.Lstat(dest); err == nil {
 			if r.opts.Overwrite == OverwriteNever {
