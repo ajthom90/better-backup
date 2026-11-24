@@ -3,7 +3,10 @@
 // not shift every later chunk boundary.
 package chunker
 
-import "io"
+import (
+	"io"
+	"sync"
+)
 
 const (
 	MinSize = 512 << 10
@@ -37,11 +40,27 @@ type Chunker struct {
 	buf        []byte
 	start, end int
 	eof        bool
+	pooled     *[]byte
 }
 
-// New returns a Chunker reading from r.
+// buffers holds the read buffers of chunkers that are done. A buffer is
+// 32 MB, and making a new one for every file costs far more than
+// reading a small file does.
+var buffers = sync.Pool{New: func() any { b := make([]byte, 4*MaxSize); return &b }}
+
+// New returns a Chunker reading from r. Call Release when done with it.
 func New(r io.Reader) *Chunker {
-	return &Chunker{r: r, buf: make([]byte, 4*MaxSize)}
+	b := buffers.Get().(*[]byte)
+	return &Chunker{r: r, buf: *b, pooled: b}
+}
+
+// Release hands the Chunker's buffer back for the next one. The
+// Chunker, and the last chunk it returned, must not be used afterwards.
+func (c *Chunker) Release() {
+	if c.pooled != nil {
+		buffers.Put(c.pooled)
+		c.pooled, c.buf, c.start, c.end, c.eof = nil, nil, 0, 0, true
+	}
 }
 
 // Next returns the next chunk. The slice is only valid until the following
