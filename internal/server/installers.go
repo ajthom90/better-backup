@@ -64,7 +64,7 @@ func (s *Server) handleInstallers(w http.ResponseWriter, r *http.Request) {
 		for _, f := range out.Files {
 			have[f.OS+"/"+f.Arch+"/"+f.Format] = true
 		}
-		for _, t := range []string{"windows/amd64/msi", "windows/arm64/msi", "linux/amd64/deb", "linux/arm64/deb", "linux/amd64/rpm", "linux/arm64/rpm"} {
+		for _, t := range []string{"windows/amd64/msi", "windows/arm64/msi", "linux/amd64/deb", "linux/arm64/deb", "linux/amd64/rpm", "linux/arm64/rpm", "darwin/universal/pkg"} {
 			if have[t] {
 				continue
 			}

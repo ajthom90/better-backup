@@ -80,7 +80,7 @@ jobs:
           ./packaging/windows/build.ps1 -Version 0.0.${{ github.run_number }}
       - name: Install, enroll, upgrade, remove
         shell: pwsh
-        run: ./packaging/windows/test.ps1 -Dir dist -Old 0.0.0 -New 0.0.${{ github.run_number }} -NoAgent
+        run: ./packaging/windows/test.ps1 -Dir dist -Old 0.0.0 -New 0.0.${{ github.run_number }}
       - name: Upload the installers
         uses: actions/upload-artifact@v4
         with:

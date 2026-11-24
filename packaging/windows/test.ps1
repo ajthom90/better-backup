@@ -7,7 +7,7 @@
 
   Dir holds the installers of two versions built by build.ps1.
 #>
-param([string] $Dir = 'dist', [string] $Old = '0.0.1', [string] $New = '0.0.2', [int] $Port = 18443, [switch] $NoAgent)
+param([string] $Dir = 'dist', [string] $Old = '0.0.1', [string] $New = '0.0.2', [int] $Port = 18443)
 $ErrorActionPreference = 'Stop'
 $Dir = Resolve-Path $Dir
 $repo = 'C:\bb-test-repo'
@@ -61,8 +61,6 @@ Invoke-WebRequest "https://localhost:$Port$($file.url)" -SkipCertificateCheck -O
 Check ((Get-FileHash "$Dir\downloaded-agent.msi").Hash -eq (Get-FileHash "$Dir\$($file.name)").Hash) 'the downloaded agent installer is the one that was built'
 Check ((& "$env:ProgramFiles\better-backup\Server\bb.exe" status | Out-String) -match 'version') 'the bb command reaches the server'
 
-if ($NoAgent) { Write-Host 'Server checks passed; agent checks skipped.'; return }
-
 # --- the agent, from the installer the server handed out -----------------
 $t = Api '/api/v1/enroll-tokens' 'POST' @{ ttl = '1h'; uses = 1 }
 $json = @{ s = "https://localhost:$Port"; t = $t.token; f = $t.fingerprint } | ConvertTo-Json -Compress
@@ -71,6 +69,9 @@ Msi @('/i', "`"$Dir\downloaded-agent.msi`"", "ENROLL_CODE=$code", 'AGENT_NAME=ms
 Check (Running 'better-backup-agent') 'the agent service is running'
 Wait { (Api '/api/v1/agents' | Where-Object { $_.name -eq 'msi-test' -and $_.online -and $_.version -eq $Old }) } 'the agent enrolled and is online'
 Check (-not (Test-Path "$state\enroll.conf")) 'the used enrollment code was deleted'
+$status = & "$env:ProgramFiles\better-backup\Agent\bb-agent.exe" status | Out-String
+Write-Host $status
+Check ($LASTEXITCODE -eq 0 -and $status -match 'msi-test') 'bb-agent status reaches the service over its local control channel'
 Check (-not ((Readers $state) -match 'Users')) "ordinary users cannot read $state"
 Check (-not (Select-String -Path "$Dir\msi-install-the-agent-with-an-enrollment-code.log" -Pattern $t.token -Quiet)) 'the token is not in the installer log'
 Check (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SafeBoot\Network\better-backup-agent') 'the agent may start in safe mode'

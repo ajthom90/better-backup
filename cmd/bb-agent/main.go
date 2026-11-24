@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -70,7 +71,8 @@ func main() {
 		cmd = pos[0]
 	}
 	spec := svc.Spec{Name: "better-backup-agent", DisplayName: "better-backup agent",
-		Description: "better-backup agent: backs up and restores this machine.", Args: []string{"run", "--dir", dir}}
+		Description: "better-backup agent: backs up and restores this machine.", Args: []string{"run", "--dir", dir},
+		LogFile: filepath.Join(dir, "agent.log")}
 	ctl = agentctl.Dial(agentctl.SocketPath(dir))
 	given := req.Code != "" || (req.Server != "" && req.Token != "" && req.Fingerprint != "")
 
