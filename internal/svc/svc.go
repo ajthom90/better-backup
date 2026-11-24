@@ -72,6 +72,7 @@ func Run(spec Spec, run func(context.Context) error) error {
 	if err != nil {
 		return err
 	}
+	safeBoot(spec.Name, true) // for services installed by an older version
 	return s.Run()
 }
 
@@ -91,7 +92,18 @@ func Control(spec Spec, action string) error {
 	}
 	for _, a := range service.ControlAction {
 		if a == action {
-			return service.Control(s, action)
+			if err := service.Control(s, action); err != nil {
+				return err
+			}
+			switch action {
+			case "install":
+				if err := safeBoot(spec.Name, true); err != nil {
+					fmt.Fprintln(os.Stderr, "warning: the service will not start in safe mode or Directory Services Restore Mode:", err)
+				}
+			case "uninstall":
+				safeBoot(spec.Name, false)
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("unknown service action %q (use install, uninstall, start, stop, restart or status)", action)

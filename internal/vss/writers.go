@@ -152,6 +152,18 @@ func SystemState(writers []Writer) (files, excludes []FileSpec, names []string) 
 		for _, c := range w.Components {
 			files = append(files, c.Files...)
 			n += len(c.Files)
+			if !strings.EqualFold(strings.TrimSpace(w.Name), "Registry Writer") {
+				continue
+			}
+			// The registry writer lists the hives but not their logs,
+			// and a hive copied from a snapshot can hold changes that
+			// are only complete with its logs. Windows refuses to load
+			// such a hive on its own, so the logs come along.
+			for _, f := range c.Files {
+				if f.Spec != "" && !strings.ContainsAny(f.Spec, "*?") && !f.Recursive {
+					files = append(files, FileSpec{Path: f.Path, Spec: f.Spec + ".LOG*"})
+				}
+			}
 		}
 		if n > 0 {
 			names = append(names, w.Name)

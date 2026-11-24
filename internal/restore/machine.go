@@ -252,7 +252,7 @@ func (r *restorer) disk(d *disklayout.Disk, images map[string]*tree.Entry, dest 
 			}
 			continue
 		}
-		if err := r.writeImage(images[p.Image], offsetWriter{t.w, p.Offset}, t.fresh); err != nil {
+		if err := r.writeBlocks(images[p.Image], offsetWriter{t.w, p.Offset}, t.fresh); err != nil {
 			return err
 		}
 	}

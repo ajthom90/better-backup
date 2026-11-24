@@ -7,8 +7,8 @@ appliance's capacity ceiling.
 
 **Status: Phase 2 in progress.** File backup and restore work end to end on
 all three operating systems, and Windows backups read from VSS snapshots.
-Hyper-V and restoring a system state or Active Directory in place are on the
-[roadmap](#roadmap) and not built yet. Do not make this your only
+Newer parts, such as restoring a system state or Active Directory in place,
+have had little testing on real machines; the sections below say which. Do not make this your only
 backup until it has run beside your current one for a while.
 
 ## What works today
@@ -28,8 +28,9 @@ backup until it has run beside your current one for a while.
   on NTFS is skipped.
 - **Windows system state**: the registry, boot and system files, and on a
   domain controller the Active Directory database and SYSVOL, as the
-  system's own VSS writers list them. It can be restored to a folder;
-  restoring it over a running system is not built yet.
+  system's own VSS writers list them. It can be restored to a folder, or
+  over the machine it came from, including Active Directory on a domain
+  controller in Directory Services Restore Mode.
 - **Bare-metal recovery**: a policy can back up the whole machine (the disk
   layout and every partition, including the hidden boot partitions). Start a
   blank machine or a new virtual machine from the recovery disc, approve it
@@ -169,7 +170,7 @@ bb restore SNAPSHOT --path web01 --target D:\Restored --name web01-restored --wa
 bb restore SNAPSHOT --path 'web01\disk-scsi-0-0.vhdx' --target D:\Restored\disk.vhdx --wait
 ```
 
-The web UI does the same: list the machines under "Hyper-V virtual machines" when you
+The web UI does the same: list the machines under "Virtual machines" when you
 add a policy, and give the new machine a name in the restore dialog.
 
 Each machine is backed up while it runs. The agent takes a checkpoint (a
@@ -211,6 +212,161 @@ Known gaps: a machine cannot yet be restored over the original, and
 pass-through disks, shared disks, virtual TPMs and other device settings are
 not carried over.
 
+### KVM virtual machines (libvirt)
+
+Install the agent on the KVM host. It needs `virsh` and `qemu-utils`
+(`qemu-img` on Fedora and RHEL), which a libvirt host normally has, and it
+runs as root. The same commands and the same fields in the web UI apply:
+
+```sh
+bb policy add --name vms --agent kvm01 --vm web01 --vm db01 --vm-tracking check --daily-at 23:00
+bb policy add --name all-vms --agent kvm01 --vm '*' --daily-at 23:00
+bb restore SNAPSHOT --path web01 --target /var/lib/libvirt/images --name web01-restored --wait
+bb restore SNAPSHOT --path web01/disk-vda --target /tmp/vda.img --wait
+```
+
+The agent works out by itself whether its host runs Hyper-V, Proxmox VE or
+libvirt; a policy can also say so (`--hypervisor libvirt`, "Hypervisor" in
+the web UI). VMware is different: see below.
+
+A running machine is backed up through a libvirt backup job (libvirt 7.2 and
+QEMU 4.2 or later): QEMU serves every disk as it was when the job began while
+the machine keeps writing. If the guest runs the QEMU guest agent, its file
+systems are flushed and frozen for that moment; otherwise the backup holds
+what a power cut would leave. A machine that is switched off is read from its
+disk files, and cannot be started until that backup has finished. Parts of a
+disk that hold no data are neither read nor stored. The machine's definition
+and, for UEFI machines, its firmware settings are stored with the disks.
+
+`--vm-tracking on` makes a libvirt checkpoint with every backup, so the next
+one asks QEMU which parts of each disk were written since and reads only
+those. Only qcow2 disks can be tracked; raw files and block devices are read
+in full every time, as is every disk after the machine was backed up while
+switched off. As with Hyper-V, run with `--vm-tracking check` first.
+
+A restore defines a new machine, switched off, from the saved definition, so
+every device setting comes back. Its disks are written as qcow2 files into a
+folder named after the machine under the target, whatever they were before.
+If the original machine is gone the new one keeps its identity (UUID);
+beside the original it gets a new one but the same network (MAC) addresses.
+
+The automated tests run all of this against a real libvirt and QEMU on every
+change: full, tracked and switched-off backups of a machine with qcow2 and
+raw disks and UEFI firmware, and restores that are compared with the
+originals. Not covered by them, and so untested: guests with the guest agent,
+disks on block devices (LVM, for which the scratch file goes to
+`/var/lib/libvirt/images` or `BB_SCRATCH_DIR`), hosts with SELinux, and
+real workloads writing during a backup.
+
+Known gaps: network disks (Ceph RBD, iSCSI), pass-through and shared disks
+are skipped with a warning, the contents of an emulated TPM are not backed
+up, and a machine cannot yet be restored over the original.
+
+### Proxmox VE virtual machines
+
+Install the agent on each Proxmox VE node (the Linux package, running as
+root). It uses the node's own tools and needs nothing else installed. The
+commands and the web UI are the same as for the other hypervisors; a machine
+is named by its name or by its id:
+
+```sh
+bb policy add --name vms --agent pve01 --vm web01 --vm 105 --vm-tracking check --daily-at 23:00
+bb policy add --name all-vms --agent pve01 --vm '*' --daily-at 23:00
+bb restore SNAPSHOT --path web01 --name web01-restored --wait
+bb restore SNAPSHOT --path web01 --target local-lvm --name web01-restored --wait
+bb restore SNAPSHOT --path web01/disk-scsi0 --target /tmp/scsi0.img --wait
+```
+
+A policy covers the machines of the node its agent is on, so a cluster needs
+an agent and a policy per node; a machine that migrates to another node is
+picked up by that node's `'*'` policy and read in full the first time.
+Containers (LXC) are not covered.
+
+A running machine is backed up through its QEMU, the way Proxmox's own
+backup does it but with standard QEMU commands: a backup job keeps the old
+contents of whatever the machine overwrites, so every disk is read as it was
+at one instant, on any kind of storage. What the machine overwrites during
+the backup is kept in `/var/tmp` until the backup ends (set
+`BB_SCRATCH_DIR` in the agent's environment to use another folder); a busy
+machine needs room there. If the guest agent is enabled for the machine, its
+file systems are flushed and frozen for that instant. A machine that is
+switched off is read from its volumes. Disks marked "no backup" in Proxmox
+are left out, as Proxmox's own backup leaves them out.
+
+`--vm-tracking on` keeps a dirty bitmap in the running QEMU, like Proxmox
+Backup Server does, so the next backup reads only what was written since.
+It works on every kind of storage. The record lives in QEMU's memory: after
+a machine is stopped and started, or migrated, its next backup reads the
+disks in full again (and still stores only what changed).
+
+A restore creates a new machine, switched off, with the saved settings and
+its disks as new volumes on the storage named as the target, or with no
+target on the storages they were on. The machine gets its old id if that is
+free again and the next free id otherwise. It keeps its network (MAC)
+addresses and its SMBIOS identity and gets a new VM generation id, as with
+Proxmox's own restore.
+
+**This has not run on a real Proxmox VE node.** The automated tests run a
+real QEMU set up the way Proxmox sets its machines up, so reading running
+and stopped machines, the change tracking and the restored disks are tested
+for real on every change. Proxmox's own tools (`qm`, `pvesm`, `pvesh`) are
+replaced by stand-ins in those tests, so whether the real tools accept every
+call, LVM volume activation, Ceph storage, and Proxmox VE 9's new disk
+naming are untested. Try it on a machine that does not matter first, and
+check a restore.
+
+Known gaps: the contents of a TPM are not backed up, disks passed through
+from the host are skipped with a warning, cloud-init passwords have to be set
+again, and a machine cannot yet be restored over the original.
+
+### VMware vSphere virtual machines (ESXi and vCenter)
+
+VMware is the one hypervisor that is backed up over the network: no agent
+goes on the ESXi host. Tell the server about the vCenter Server or the ESXi
+host ("VMware servers" in the web UI, or `bb vmware add`), then make a policy
+that names it and any agent that can reach its management address on port
+443. With a vCenter Server the disks come from the ESXi hosts themselves, so
+the agent has to reach those on port 443 as well. The agent reads the disks
+and sends them on, so pick one close to the hosts.
+
+```sh
+BB_VMWARE_PASSWORD=... bb vmware add --name lab --url vcenter.example.com --user backup@vsphere.local
+bb policy add --name vmware --agent files01 --hypervisor vmware --vmware-server lab --vm web01 --vm db01 --daily-at 23:00
+bb restore SNAPSHOT --path web01 --name web01-restored --wait
+bb restore SNAPSHOT --path web01 --name web01-restored --target datastore2 --vmware-server lab --wait
+```
+
+Most servers present a certificate they made themselves. Leave the
+thumbprint empty at first: the first backup then fails with the SHA-256
+thumbprint the server shows. Compare it with what the server itself displays
+and save it with the server (`--thumbprint`), and from then on only that
+certificate is accepted. The password is stored on the better-backup server
+and handed to the agent with each job; it is not written to the agent's disk
+and the API never returns it.
+
+A backup takes a snapshot of the machine (quiesced through VMware Tools when
+they are running), downloads the snapshot's disks the way "Export OVF
+template" does, and removes the snapshot. A restore imports the machine again
+as a new one, switched off, with thin disks, on the datastore named as the
+target or else the one it was on, on a host that has that datastore, in its
+old folder and resource pool if they are still there. Its network adapters
+are connected to the networks of the same names and get new MAC addresses.
+
+**This has not run on a real ESXi host or vCenter Server.** The automated
+tests run against the vSphere simulator of VMware's own Go library, which
+answers the management calls but holds no real disks, and the disk format is
+checked both ways against QEMU. What that leaves untested: whether a real
+host accepts the disks this program uploads on restore, what a real server
+puts in a machine's description, vSAN and other special datastores, and
+speed. Try it on a machine that does not matter first, and check a restore.
+
+Known gaps: every backup downloads the disks in full (only what changed is
+stored, but Changed Block Tracking is not used yet, so backups of large
+machines are slow); the free ESXi license does not allow backups at all;
+independent disks and physical-mode raw device mappings are left out with a
+warning; encrypted machines and virtual TPMs cannot be exported; and a
+machine cannot yet be restored over the original.
+
 ### Windows system state
 
 ```sh
@@ -225,9 +381,70 @@ them from a snapshot. The first run stores several gigabytes of Windows
 files; later runs only store what changed. In a snapshot the files sit under
 "System state", then the drive letter, then their original path.
 
-For now it restores to a folder only. Putting a system state back over a
-running Windows, and the Directory Services Restore Mode steps for a domain
-controller, come next.
+#### Restoring a system state over its machine
+
+```sh
+bb restore SNAPSHOT --system-state-in-place --wait
+```
+
+In the web UI: Restore on the snapshot, then "Put the Windows system state
+back over this machine". It only works on the machine the backup came from.
+
+**This has run only on test machines so far. Try it on a machine you can
+afford to lose, and take a checkpoint or image first.** Microsoft does not
+support replacing the registry of a running Windows Server 2016 or later, and
+this does it anyway, the way backup programs did before; `--no-registry`
+leaves the registry alone.
+
+What happens:
+
+- Files that are not in use are replaced at once. Files in use are written
+  beside the originals and Windows swaps them in at the next restart.
+- The registry hives are restored to `System32\config\bb-restore`, then
+  made the machine's hives for the next start. Before that, the restored
+  SYSTEM hive is given what the running one says a restore must keep (the
+  `KeysNotToRestore` list: disk and volume assignments, drivers and services
+  installed since the backup, and the list of files to swap in).
+- System state backups made before this feature existed lack the registry's
+  log files, and Windows may refuse to load their hives. The job then says
+  the registry was not restored. Take a new system state backup first.
+- Nothing is final until Windows restarts. `--restart` does that when the
+  restore is done; otherwise the job ends with a reminder.
+
+#### Restoring Active Directory on a domain controller
+
+Active Directory cannot be replaced while it runs, so the domain controller
+must be in Directory Services Restore Mode (DSRM). The agent, installed as a
+service, starts there too.
+
+1. On the domain controller, as an administrator: `bcdedit /set safeboot dsrepair`,
+   then restart. Sign in as `.\Administrator` with the DSRM password. In DSRM
+   the machine may not be able to look up names, so if the agent reaches the
+   server by name, make sure that name still resolves (a hosts file entry
+   works).
+2. Start the restore from the web UI or with
+   `bb restore SNAPSHOT --system-state-in-place --restart --wait`.
+3. The restart leaves DSRM (the restore runs `bcdedit /deletevalue safeboot`
+   when it restarts the machine; do that yourself if you restart by hand).
+
+That is a **non-authoritative** restore: the database is put back, Active
+Directory is told it came from a backup, and after the restart the domain
+controller catches up from the others. SYSVOL does the same. It is the right
+choice for a single failed domain controller.
+
+For an **authoritative** restore, which makes the restored objects win over
+the newer ones on the other domain controllers (the way to bring back
+deleted users or OUs), name what to bring back:
+
+```sh
+bb restore SNAPSHOT --system-state-in-place --authoritative "OU=Sales,DC=example,DC=com" --restart --wait
+```
+
+After the files are back, the agent runs `ntdsutil "authoritative restore"`
+for each name. `--authoritative-sysvol` does the same for SYSVOL (group
+policies and scripts): use it only when every domain controller lost SYSVOL.
+A backup older than the forest's tombstone lifetime (180 days by default,
+60 on old forests) must not be restored.
 
 ### Bare-metal recovery
 
@@ -380,7 +597,9 @@ Then use the two commands above, or start a new server with
 - VSS backups are "copy" backups: application logs (SQL Server, Exchange) are
   not truncated. Application-aware backup comes in Phase 6.
 - Not yet preserved: NTFS audit entries (SACLs) and EFS encryption, Unix extended attributes and ACLs, hard links (each link is
-  restored as its own file).
+  restored as its own file). Windows keeps most system files as hard links
+  into its component store, so a system state restored in place uses more
+  disk space than before.
 - No MSI or `.pkg` installers yet; `service install` does the same job.
   `.deb` and `.rpm` packages are built on release.
 - The repository itself lives on a local disk or mounted share; S3 is for the
@@ -394,8 +613,8 @@ Then use the two commands above, or start a new server with
 | 1. Foundation (this release) | Server, file agent, dedup store, restore in place, Docker and native services |
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
-| 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. To do: restore in place, DSRM-assisted authoritative and non-authoritative restore |
-| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. To do: Proxmox and KVM providers, Postgres option, user roles |
+| 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. restore over the running system with the registry, non-authoritative and authoritative Active Directory restore in DSRM (little tested on real machines) |
+| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node), VMware vSphere virtual machines over the network (untested on a real host, full reads only). To do: VMware Changed Block Tracking, Postgres option, user roles |
 | 6. Full recovery (in progress) | Done: whole-machine backup, bare-metal recovery disc, restore as a new Hyper-V machine. To do: driver injection for different hardware, SQL Server and Exchange writers, object-level AD restore |
 
 See [docs/architecture.md](docs/architecture.md) for the design and the

@@ -30,7 +30,8 @@ import (
 
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/backup"
-	"github.com/ajthom90/better-backup/internal/hyperv"
+	"github.com/ajthom90/better-backup/internal/hypervisor"
+	_ "github.com/ajthom90/better-backup/internal/hypervisor/all"
 	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/restore"
 	"github.com/ajthom90/better-backup/internal/tree"
@@ -511,10 +512,18 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 			opts.Images = append(opts.Images, src)
 		}
 		vms := j.Backup.VMs
+		var drv hypervisor.Driver
+		if len(vms) > 0 {
+			var derr error
+			if drv, derr = hypervisor.For(j.Backup.Hypervisor); derr != nil {
+				warn("the virtual machines were not backed up: " + derr.Error())
+				vms = nil
+			}
+		}
 		for _, v := range vms {
 			if v == "*" {
 				var lerr error
-				if vms, lerr = hyperv.List(); lerr != nil {
+				if vms, lerr = drv.List(jctx, j.Backup.Connection); lerr != nil {
 					warn("could not list the virtual machines on this host: " + lerr.Error())
 				}
 				break
@@ -522,44 +531,25 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		}
 		for _, name := range vms {
 			opts.VMs = append(opts.VMs, backup.VMSource{Name: name, Open: func(vm *backup.VMSource, prev []byte) error {
-				ho := hyperv.Options{Tracking: j.Backup.VMTracking != "", StateDir: a.dir}
-				if p := new(hyperv.Config); len(prev) > 0 && json.Unmarshal(prev, p) == nil {
-					ho.Previous = p
-				}
-				cp, err := hyperv.Prepare(vm.Name, "job "+j.ID, ho)
+				fz, err := drv.Freeze(jctx, vm.Name, hypervisor.Options{Tracking: j.Backup.VMTracking != "", Previous: prev,
+					Tag: j.ID, Scope: j.PolicyID, StateDir: a.dir, Connection: j.Backup.Connection})
 				if err != nil {
 					return err
 				}
-				release := func() {
-					if rerr := cp.Release(); rerr != nil {
-						warn("virtual machine " + vm.Name + ": removing the backup checkpoint failed; remove it in Hyper-V Manager: " + rerr.Error())
-					}
-				}
-				for _, w := range cp.Warnings {
+				for _, w := range fz.Warnings {
 					warn(w)
 				}
-				vm.ConfigName = hyperv.ConfigFile
-				if vm.Config, err = json.Marshal(cp.Config); err != nil {
-					release()
-					return err
+				vm.ConfigName, vm.Config, vm.Disks = drv.ConfigFile(), fz.Config, fz.Disks
+				for i := range vm.Disks {
+					vm.Disks[i].Verify = j.Backup.VMTracking == "check"
 				}
-				for _, d := range cp.Config.Disks {
-					src, err := backup.OpenImage(d.File, d.Path)
-					if err != nil {
-						for _, o := range vm.Disks {
-							o.Close()
-						}
-						release()
-						return fmt.Errorf("opening its disk %s: %w", d.Path, err)
+				vm.Check = fz.Check
+				vm.Close = func() {
+					if rerr := fz.Release(); rerr != nil {
+						warn("virtual machine " + vm.Name + ": " + rerr.Error())
 					}
-					src.Tracked, src.Verify = d.Tracked, j.Backup.VMTracking == "check"
-					for _, r := range d.Changed {
-						src.Changed = append(src.Changed, backup.Extent{Off: r.Off, Len: r.Len})
-					}
-					vm.Disks = append(vm.Disks, src)
 				}
-				vm.Close = release
-				log.Info("virtual machine checkpoint created", "vm", vm.Name, "disks", len(vm.Disks))
+				log.Info("virtual machine frozen for backup", "vm", vm.Name, "hypervisor", drv.Kind(), "disks", len(vm.Disks))
 				return nil
 			}})
 		}
@@ -579,9 +569,14 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 	case j.Type == api.JobRestore && j.Restore != nil:
 		var stats restore.Stats
 		get := func(id keys.ID) ([]byte, error) { return a.c.Get(jctx, id) }
-		stats, err = restore.Run(jctx, get, restore.Options{
+		var sys *restore.SystemState
+		if s := j.Restore.SystemState; s != nil {
+			sys = &restore.SystemState{Registry: s.Registry, AuthoritativeSYSVOL: s.AuthoritativeSYSVOL,
+				AuthoritativeSubtrees: s.AuthoritativeSubtrees, Restart: s.Restart}
+		}
+		stats, err = restore.Run(jctx, get, restore.Options{SystemState: sys,
 			Sources: j.Restore.Sources, SourceOS: j.Restore.SourceOS, Include: j.Restore.Include,
-			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName, Disks: j.Restore.Disks,
+			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName, Disks: j.Restore.Disks, Connection: j.Restore.Connection,
 			Progress: func(s restore.Stats) { setProgress(s) }, Warn: warn})
 		req.Restore = &stats
 	default:

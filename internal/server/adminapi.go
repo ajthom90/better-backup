@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -147,6 +148,22 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad(`vm_tracking must be empty, "on" or "check"`)
 		return
 	}
+	if p.Hypervisor != "" && !slices.Contains(api.Hypervisors, p.Hypervisor) {
+		bad("hypervisor must be empty or one of: " + strings.Join(api.Hypervisors, ", "))
+		return
+	}
+	if p.Hypervisor != "vmware" {
+		p.VMwareServer = ""
+	} else {
+		if s.vmwareServer(p.VMwareServer) == nil {
+			bad("choose the VMware server the machines are on; servers are added under VMware servers")
+			return
+		}
+		if p.VMTracking != "" {
+			bad("machines on VMware are read in full every time; leave vm_tracking empty")
+			return
+		}
+	}
 	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.SystemState && a.OS != "windows" {
 		bad("the system state can only be backed up on a Windows machine")
 		return
@@ -209,7 +226,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, VMTracking: p.VMTracking, SystemState: p.SystemState, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, SystemState: p.SystemState, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot}}
 	return j, s.enqueue(j)
 }
 
@@ -446,12 +463,46 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "a machine started from the recovery disc can only receive a whole machine onto its disks")
 		return
 	}
-	if req.Target == "" && len(req.Disks) == 0 && a.OS != sn.OS {
+	if req.VMwareServer == "" {
+		req.VMwareServer = s.restoreVMware(sn)
+	} else if s.vmwareServer(req.VMwareServer) == nil {
+		fail(w, http.StatusBadRequest, "vmware_server does not name a VMware server")
+		return
+	}
+	// A machine on VMware does not go onto the agent at all: without a
+	// target it goes back to the datastore it was on.
+	if req.Target == "" && len(req.Disks) == 0 && a.OS != sn.OS && req.VMwareServer == "" {
 		fail(w, http.StatusBadRequest, fmt.Sprintf("a %s backup cannot be restored in place on a %s agent; set a target directory", sn.OS, a.OS))
 		return
 	}
+	if req.SystemState != nil {
+		has := false
+		for _, e := range sn.Sources {
+			has = has || e.Name == tree.SystemStateName
+		}
+		switch {
+		case !has:
+			fail(w, http.StatusBadRequest, "this snapshot holds no system state")
+			return
+		case req.Target != "":
+			fail(w, http.StatusBadRequest, "a system state is restored in place or to a folder: leave out either system_state or target")
+			return
+		case a.ID != sn.AgentID:
+			fail(w, http.StatusBadRequest, "a system state can only be restored in place on the machine it was backed up from")
+			return
+		}
+		for _, dn := range req.SystemState.AuthoritativeSubtrees {
+			if !strings.Contains(dn, "=") || strings.ContainsAny(dn, "\"\r\n") {
+				fail(w, http.StatusBadRequest, "authoritative_subtrees must be distinguished names such as OU=Sales,DC=example,DC=com")
+				return
+			}
+		}
+		// Nothing else in the snapshot rides along.
+		req.Include = []string{tree.SystemStateName}
+	}
 	j := &api.Job{Type: api.JobRestore, AgentID: a.ID, SnapshotID: sn.ID, Restore: &api.RestoreSpec{
-		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName, Disks: req.Disks}}
+		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName, Disks: req.Disks,
+		VMwareServer: req.VMwareServer, SystemState: req.SystemState}}
 	if err := s.enqueue(j); err != nil {
 		s.internal(w, err)
 		return

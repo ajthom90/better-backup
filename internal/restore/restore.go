@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ajthom90/better-backup/internal/hypervisor"
 	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/tree"
 )
@@ -40,9 +41,14 @@ type Options struct {
 	// Disks says where the disks of a whole machine go: the name a disk
 	// has in the backup ("disk0") to a disk device or a file to create.
 	// Empty puts them in files under Target.
-	Disks    map[string]string
-	Progress func(Stats)
-	Warn     func(string)
+	Disks map[string]string
+	// Connection reaches the hypervisor a virtual machine is restored
+	// to, for the ones managed over the network.
+	Connection *hypervisor.Connection
+	// SystemState, if set, lets a system state be restored in place.
+	SystemState *SystemState
+	Progress    func(Stats)
+	Warn        func(string)
 }
 
 // Stats summarizes a restore.
@@ -64,6 +70,8 @@ type restorer struct {
 	last  time.Time
 	// imageDest is set once an image was written to the target itself.
 	imageDest bool
+	// sys is set while a system state is restored in place.
+	sys *sysRun
 }
 
 // Run performs the restore.
@@ -96,7 +104,13 @@ func Run(ctx context.Context, get tree.Getter, opts Options) (Stats, error) {
 		}
 		matched = true
 		if e.Name == tree.SystemStateName && e.Type == tree.TypeDir && opts.Target == "" {
-			r.warn("the system state was not restored: it cannot be restored over a running system yet. Restore it to a folder instead")
+			if opts.SystemState == nil {
+				r.warn("the system state was not restored: restoring it over the running system must be asked for explicitly")
+				continue
+			}
+			if err := r.systemState(e, m == matchFull); err != nil {
+				return r.stats, err
+			}
 			continue
 		}
 		if err := r.entry(e, e.Name, r.dest(e.Name), m == matchFull); err != nil {
@@ -196,6 +210,10 @@ func (r *restorer) entry(e *tree.Entry, orig, dest string, full bool) error {
 			r.warn("%s exists and is not a directory; skipped", dest)
 			return nil
 		}
+		var names map[string]bool
+		if r.sys != nil {
+			names = map[string]bool{}
+		}
 		for _, p := range e.Subtree {
 			children, err := tree.ReadPage(r.get, p)
 			if err != nil {
@@ -203,6 +221,9 @@ func (r *restorer) entry(e *tree.Entry, orig, dest string, full bool) error {
 			}
 			for i := range children {
 				c := &children[i]
+				if names != nil {
+					names[strings.ToLower(c.Name)] = true
+				}
 				if c.Name == "" || c.Name == "." || c.Name == ".." || strings.ContainsAny(c.Name, `/\`) {
 					r.warn("skipped entry with unsafe name %q in %s", c.Name, orig)
 					continue
@@ -218,6 +239,9 @@ func (r *restorer) entry(e *tree.Entry, orig, dest string, full bool) error {
 					return err
 				}
 			}
+		}
+		if r.sys != nil && full {
+			r.sys.afterDir(dest, names)
 		}
 		if full || created {
 			if err := r.streams(dest, e); err != nil {
@@ -265,7 +289,17 @@ func (r *restorer) entry(e *tree.Entry, orig, dest string, full bool) error {
 }
 
 func (r *restorer) file(e *tree.Entry, dest string) error {
-	if fi, err := os.Lstat(dest); err == nil {
+	final := dest
+	if r.sys != nil {
+		var skip bool
+		if dest, skip = r.sys.place(dest); skip {
+			r.stats.Skipped++
+			return nil
+		}
+	}
+	// A system state is always written out: its databases can change
+	// without their size or time changing.
+	if fi, err := os.Lstat(dest); err == nil && r.sys == nil {
 		switch {
 		case fi.IsDir():
 			r.warn("%s exists and is a directory; skipped", dest)
@@ -319,13 +353,20 @@ func (r *restorer) file(e *tree.Entry, dest string) error {
 				err = os.Rename(tmp.Name(), dest)
 			}
 		}
+		if err != nil && r.sys != nil {
+			// In use: Windows swaps it in at the restart.
+			if lerr := r.sys.later(tmp.Name(), dest); lerr == nil {
+				r.stats.Files++
+				return nil
+			}
+		}
 	}
 	if err != nil {
 		os.Remove(tmp.Name())
 		if cerr := r.ctx.Err(); cerr != nil {
 			return cerr
 		}
-		r.warn("%s: %v", dest, err)
+		r.warn("%s: %v", final, err)
 		return nil
 	}
 	r.stats.Files++

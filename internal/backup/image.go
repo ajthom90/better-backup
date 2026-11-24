@@ -165,6 +165,11 @@ type VMSource struct {
 	// job starts, keeps each machine's checkpoint short-lived.
 	// prev is the Config of the machine's previous backup, or nil.
 	Open func(vm *VMSource, prev []byte) error
+	// Check, if set, is called after the disks were read and before
+	// Close. An error means what was read cannot be trusted, such as
+	// when the hypervisor's frozen view of the disks broke half way;
+	// the machine is then left out of the backup.
+	Check func() error
 	// Close, if set, is called when the machine has been read. It is
 	// where a checkpoint is released.
 	Close func()
@@ -236,6 +241,12 @@ func (a *archiver) vm(src *VMSource, parent *tree.Entry) (*tree.Entry, error) {
 	if failed {
 		a.warn("virtual machine %s was not backed up because one of its disks could not be read", src.Name)
 		return nil, nil
+	}
+	if src.Check != nil {
+		if err := src.Check(); err != nil {
+			a.warn("virtual machine %s was not backed up: %v", src.Name, err)
+			return nil, nil
+		}
 	}
 	pages, err := pw.Finish()
 	if err != nil {

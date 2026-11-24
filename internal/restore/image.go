@@ -1,16 +1,15 @@
 package restore
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
-	"github.com/ajthom90/better-backup/internal/hyperv"
+	"github.com/ajthom90/better-backup/internal/hypervisor"
+	_ "github.com/ajthom90/better-backup/internal/hypervisor/all"
 	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/tree"
 )
@@ -47,7 +46,13 @@ func (r *restorer) imageTo(e *tree.Entry, dest string) error {
 	if err != nil {
 		return fmt.Errorf("image %s: %w", e.Name, err)
 	}
-	err = r.writeImage(e, w, fresh)
+	return r.writeImage(e, dest, w, fresh, done)
+}
+
+// writeImage writes an image's blocks to w. fresh says w already reads
+// as zeros; done is called after the last write.
+func (r *restorer) writeImage(e *tree.Entry, dest string, w io.WriterAt, fresh bool, done func() error) error {
+	err := r.writeBlocks(e, w, fresh)
 	if cerr := done(); err == nil {
 		err = cerr
 	}
@@ -58,9 +63,9 @@ func (r *restorer) imageTo(e *tree.Entry, dest string) error {
 	return nil
 }
 
-// writeImage writes an image's blocks to w. fresh says w reads as zeros
+// writeBlocks writes an image's blocks to w. fresh says w reads as zeros
 // wherever nothing is written, so holes need no writing.
-func (r *restorer) writeImage(e *tree.Entry, w io.WriterAt, fresh bool) error {
+func (r *restorer) writeBlocks(e *tree.Entry, w io.WriterAt, fresh bool) error {
 	if e.BlockSize <= 0 {
 		return fmt.Errorf("image %s has no block size", e.Name)
 	}
@@ -123,8 +128,8 @@ func createImageFile(path string, size int64) (io.WriterAt, bool, func() error, 
 	return f, true, f.Close, nil
 }
 
-// vm restores a virtual machine: its disks go into a folder named after
-// it under the target, and a new machine is built around them. With
+// vm restores a virtual machine: the driver of the hypervisor that was
+// backed up says where its disks go and builds a new machine around them. With
 // full false only the disks picked by Include are restored, as images.
 func (r *restorer) vm(e *tree.Entry, orig string, full bool) error {
 	children, err := r.children(e)
@@ -134,62 +139,71 @@ func (r *restorer) vm(e *tree.Entry, orig string, full bool) error {
 	if !full {
 		return r.pickedImages(children, orig)
 	}
-	if r.opts.Target == "" {
-		return fmt.Errorf("restoring the virtual machine %s needs a target folder for its files; it is restored as a new machine beside the original", e.Name)
-	}
 	name := r.opts.VMName
 	if name == "" {
 		name = e.Name
 	}
-	var cfg hyperv.Config
+	var drv hypervisor.Driver
+	var config []byte
 	var disks []*tree.Entry
 	for i := range children {
 		c := &children[i]
 		switch {
 		case c.Type == tree.TypeImage && c.Name == filepath.Base(c.Name):
 			disks = append(disks, c)
-		case c.Type == tree.TypeFile && c.Name == hyperv.ConfigFile:
-			var raw []byte
+		case c.Type == tree.TypeFile && drv == nil && hypervisor.ByConfigFile(c.Name) != nil:
+			drv = hypervisor.ByConfigFile(c.Name)
 			err := tree.EachContent(r.get, c, func(id keys.ID) error {
 				b, err := r.get(id)
-				raw = append(raw, b...)
+				config = append(config, b...)
 				return err
 			})
-			if err == nil {
-				err = json.Unmarshal(raw, &cfg)
-			}
 			if err != nil {
 				return fmt.Errorf("virtual machine %s: reading its configuration: %w", e.Name, err)
 			}
 		}
 	}
-	if cfg.Generation == 0 {
-		return fmt.Errorf("virtual machine %s has no configuration in this snapshot", e.Name)
+	if drv == nil {
+		return fmt.Errorf("virtual machine %s has no configuration in this snapshot that this agent version understands; restore its disks one at a time with --path", e.Name)
 	}
-	if runtime.GOOS != "windows" {
-		return fmt.Errorf("the virtual machine %s can only be rebuilt on a Hyper-V host; elsewhere restore its disks one at a time with --path", e.Name)
+	if err := drv.Available(); err != nil {
+		return fmt.Errorf("the virtual machine %s can only be rebuilt on a %s host; elsewhere restore its disks one at a time with --path", e.Name, drv.Label())
 	}
-	safe := strings.Map(func(c rune) rune {
-		if strings.ContainsRune(`/\:*?"<>|`, c) {
-			return '_'
+	rs, err := drv.NewRestore(r.ctx, config, hypervisor.Target{Place: r.opts.Target, Name: name, OpenFile: openImageTarget, Connection: r.opts.Connection})
+	if err != nil {
+		return fmt.Errorf("virtual machine %s: %w", e.Name, err)
+	}
+	abort := func() {
+		if a, ok := rs.(hypervisor.Aborter); ok {
+			a.Abort()
 		}
-		return c
-	}, name)
-	dir := filepath.Join(r.opts.Target, safe)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
 	}
 	for _, d := range disks {
-		if err := r.imageTo(d, filepath.Join(dir, d.Name)); err != nil {
+		spec := hypervisor.DiskSpec{Name: d.Name, Size: d.Size, BlockSize: d.BlockSize}
+		err := tree.EachContent(r.get, d, func(id keys.ID) error {
+			spec.Data = append(spec.Data, id != keys.ID{})
+			return nil
+		})
+		if err != nil {
+			abort()
+			return fmt.Errorf("virtual machine %s: its disk %s: %w", e.Name, d.Name, err)
+		}
+		w, fresh, done, err := rs.Disk(spec)
+		if err != nil {
+			abort()
+			return fmt.Errorf("virtual machine %s: its disk %s: %w", e.Name, d.Name, err)
+		}
+		if err := r.writeImage(d, d.Name+" of "+name, w, fresh, done); err != nil {
+			abort()
 			return err
 		}
 	}
-	warnings, err := hyperv.Create(cfg, dir, name)
+	warnings, err := rs.Finish()
 	for _, w := range warnings {
 		r.warn("%s: %s", name, w)
 	}
 	if err != nil {
-		return fmt.Errorf("%w (its disks were restored to %s)", err, dir)
+		return fmt.Errorf("creating the virtual machine %s: %w (its disks were restored to %s)", name, err, rs.Where())
 	}
 	r.stats.Files++
 	return nil
