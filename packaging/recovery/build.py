@@ -46,7 +46,7 @@ UNWANTED = ["drivers/scsi/qla4xxx", "drivers/scsi/lpfc", "drivers/scsi/bfa", "dr
             "drivers/net/usb/hso", "drivers/input/keyboard/applespi"]
 # Firmware some common server network and storage adapters cannot work
 # without.
-FIRMWARE = ["bnx2", "bnx2x", "tigon", "e100", "rtl_nic", "qed", "ql2*", "cxgb3", "ene-ub6250", "intel/ice/ddp/ice.pkg*"]
+FIRMWARE = ["bnx2", "bnx2x", "tigon", "e100", "rtl_nic", "qed", "ql2*", "cxgb3", "ene-ub6250", "intel/ice/ddp"]
 
 UDHCPC = r"""#!/bin/sh
 # Applies what the DHCP client learned.
@@ -229,6 +229,8 @@ def main():
         f.write("hid_generic usbhid hv_vmbus dm_mod\n")
     if a.firmware:
         fw = find("lib", "firmware")
+        if not any(glob.glob(os.path.join(fw, pat)) for pat in FIRMWARE):
+            sys.exit("the linux-firmware package holds none of the firmware asked for")
         for pat in FIRMWARE:
             for src in glob.glob(os.path.join(fw, pat)):
                 to = os.path.join(root, "lib/firmware", os.path.relpath(src, fw))
@@ -275,6 +277,10 @@ menuentry "better-backup recovery %s" {
     for src, name in (("/usr/lib/shim/shimx64.efi.signed.latest", "BOOTX64.EFI"), ("/usr/lib/grub/x86_64-efi-signed/gcdx64.efi.signed", "grubx64.efi"),
                       ("/usr/lib/shim/mmx64.efi", "mmx64.efi")):
         run("mcopy", "-i", efi, src, "::/EFI/BOOT/" + name)
+        # Also as plain files, for USB sticks made by copying the disc's
+        # files onto a FAT volume.
+        os.makedirs(os.path.join(iso, "EFI/BOOT"), exist_ok=True)
+        shutil.copy(src, os.path.join(iso, "EFI/BOOT", name))
     run("xorriso", "-as", "mkisofs", "-r", "-V", VOLUME_ID, "-o", a.out, "-J", "-joliet-long", "-l", "-iso-level", "3",
         "--grub2-mbr", pc + "/boot_hybrid.img", "-partition_offset", "16", "--mbr-force-bootable",
         "-append_partition", "2", "28732ac11ff8d211ba4b00a0c93ec93b", efi, "-appended_part_as_gpt",

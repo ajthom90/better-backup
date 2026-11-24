@@ -30,6 +30,13 @@ backup until it has run beside your current one for a while.
   domain controller the Active Directory database and SYSVOL, as the
   system's own VSS writers list them. It can be restored to a folder;
   restoring it over a running system is not built yet.
+- **Bare-metal recovery**: a policy can back up the whole machine (the disk
+  layout and every partition, including the hidden boot partitions). Start a
+  blank machine or a new virtual machine from the recovery disc, approve it
+  in the web UI, and the backup is put back onto its disks so that it starts
+  like the original. A whole machine can also be restored as virtual disks,
+  with a new Hyper-V machine built around them. Tested in emulators; a
+  restored Windows server has not been started on real hardware yet.
 - **Agents for Windows, macOS and Linux**, enrolled with a one-time token and
   authenticated with per-agent TLS certificates. Agents dial out to the
   server, so only the server needs an open port.
@@ -129,7 +136,8 @@ bb restore SNAPSHOT --agent other-machine --target /srv/restore --wait
 
 Everything can be done in the web UI at `https://your-server:8443/`: add and
 revoke agents, create and edit policies, start backups, browse a snapshot and
-restore a file, a folder, a disk or all of it, follow jobs and read their
+restore a file, a folder, a disk or all of it, rebuild a whole machine from
+the recovery disc, follow jobs and read their
 warnings, forget snapshots, verify the repository, reclaim space and set up
 email alerts. The `bb` command line does the same things for scripts. Sign in with the admin token
 from `admin.json` in the data directory. Your browser will warn about the
@@ -146,7 +154,8 @@ bb restore SNAPSHOT --target /srv/d.img --agent linux-box --wait
 
 Restoring over a volume replaces everything on it. The volume must not be in
 use: Windows refuses to lock a volume with open files, and the system volume
-cannot be restored from the running system (recovery media comes in Phase 6).
+cannot be restored from the running system (see
+[bare-metal recovery](#bare-metal-recovery)).
 The target must be at least as large as the original volume.
 
 ### Hyper-V virtual machines
@@ -219,6 +228,83 @@ files; later runs only store what changed. In a snapshot the files sit under
 For now it restores to a folder only. Putting a system state back over a
 running Windows, and the Directory Services Restore Mode steps for a domain
 controller, come next.
+
+### Bare-metal recovery
+
+Bare-metal recovery rebuilds a whole machine on blank hardware, or in a new
+virtual machine, when the original is gone.
+
+**Back up.** Tick "Back up the whole machine" on the machine's policy in the
+web UI, or:
+
+```sh
+bb policy add --name fs01-machine --agent fs01 --whole-machine --daily-at 01:00
+```
+
+This saves the partition table of the disk the system starts from and an
+image of every partition on it: the EFI system partition, the recovery
+partition and the Windows or Linux volumes. On Windows the volumes are read
+from a VSS snapshot and free space on NTFS is skipped. Other disks are added
+with `--machine-disk` (or the field under the tick box): disk numbers on
+Windows, such as `0` and `1`; devices on Linux, such as `/dev/sda`. Data that
+is already backed up as files is stored once, so a machine backup next to a
+file backup costs little extra space.
+
+**Recover.**
+
+1. In the web UI choose "Bare-metal recovery" and download the recovery disc.
+   The server writes its own address and fingerprint into the image, so check
+   the address shown is one the machine can reach. The Docker image carries
+   the disc. Other installs download `better-backup-recovery.iso` from the
+   releases page once and upload it on the same page.
+2. Start the machine from the disc: attach it to a virtual machine as a DVD,
+   or write it to a USB stick (`dd`, Rufus in DD mode, balenaEtcher). It
+   starts on BIOS and UEFI machines. It gets its address by DHCP; an address
+   can be typed in on its console.
+3. The machine shows a six-character recovery code and appears on the
+   "Bare-metal recovery" page. Approve it there if the codes match.
+4. Choose "Restore a backup onto it", pick the backup and which of the
+   machine's disks each disk of the backup goes onto, and start. Everything
+   on the chosen disks is erased.
+5. When the restore is finished, remove the disc and restart the machine from
+   the same page.
+
+The partition tables are written back with their identifiers, so Windows
+finds its boot files, drive letters and recovery partition as before.
+
+**As a virtual machine, without the disc.** Restore the "Whole machine" entry
+of a snapshot into a folder to get the disks as files (`.vhdx` on a Windows
+agent, `.img` elsewhere). Give a machine name as well, on an agent that runs
+on a Hyper-V host, and a new virtual machine is built around the disks,
+switched off and not connected to the network:
+
+```sh
+bb restore SNAPSHOT --path "Whole machine" --agent hyperv01 --target D:\Recovered --name fs01-recovered --wait
+```
+
+Things to know:
+
+- The target disk must be at least as large as the original and have the
+  same sector size (512 bytes on nearly every disk and on every virtual disk
+  made here). Extra space is left unused.
+- The machine must start the way the original did: UEFI (Hyper-V generation
+  2) or BIOS (generation 1). The page warns when they differ.
+- With Secure Boot on, the recovery disc needs the "Microsoft UEFI
+  Certificate Authority" to be trusted. On a Hyper-V generation 2 machine
+  choose that template under Security while recovering, then switch back to
+  "Microsoft Windows" before starting the restored Windows. Physical machines
+  trust it as delivered.
+- The recovery disc needs about 1.5 GB of memory.
+- Windows restored onto very different hardware may lack the driver for its
+  new disk controller. Recovering into a virtual machine of the same kind, or
+  onto similar hardware, avoids this. Injecting drivers is not built.
+- On Linux the partitions are read while in use, without a snapshot, so a
+  busy system can leave its file systems needing a check at first start.
+  LVM and software RAID members are copied as they are.
+- BitLocker volumes, dynamic disks and Storage Spaces are untested.
+- A recovery code only lets a machine ask; it receives nothing until an
+  administrator approves it. An approved machine may read backups until it
+  restarts or has been silent for two minutes.
 
 ### Email alerts
 
@@ -310,7 +396,7 @@ Then use the two commands above, or start a new server with
 | 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. To do: restore in place, DSRM-assisted authoritative and non-authoritative restore |
 | 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. To do: Proxmox and KVM providers, Postgres option, user roles |
-| 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |
+| 6. Full recovery (in progress) | Done: whole-machine backup, bare-metal recovery disc, restore as a new Hyper-V machine. To do: driver injection for different hardware, SQL Server and Exchange writers, object-level AD restore |
 
 See [docs/architecture.md](docs/architecture.md) for the design and the
 storage format.
@@ -323,7 +409,11 @@ Requires Go 1.26 or later.
 make build    # binaries in ./bin
 make test
 make docker
+make recovery # the bare-metal recovery disc, in ./bin/recovery.iso
 ```
+
+`make recovery` needs an Ubuntu 24.04 machine with the tools named at the top
+of `packaging/recovery/build.py`.
 
 ## License
 

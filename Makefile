@@ -1,7 +1,7 @@
 VERSION ?= dev
 LDFLAGS := -s -w -X github.com/ajthom90/better-backup/internal/server.Version=$(VERSION) -X github.com/ajthom90/better-backup/internal/agent.Version=$(VERSION)
 
-.PHONY: build test docker
+.PHONY: build test docker recovery
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/ ./cmd/...
 
@@ -12,3 +12,9 @@ test:
 docker:
 	docker build --build-arg VERSION=$(VERSION) --target server -t better-backup:$(VERSION) .
 	docker build --build-arg VERSION=$(VERSION) --target agent -t better-backup-agent:$(VERSION) .
+
+# The bare-metal recovery disc. Needs the tools listed in
+# packaging/recovery/build.py; the result goes to bin/recovery.iso.
+recovery:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/recovery/bb-agent ./cmd/bb-agent
+	python3 packaging/recovery/build.py --agent bin/recovery/bb-agent --out bin/recovery.iso --firmware --version $(VERSION)
