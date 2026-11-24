@@ -362,7 +362,7 @@ func backupXML(cfg, prev *Config, socket, incremental, scratchDir string) string
 			// libvirt puts the scratch file, which holds what the
 			// machine overwrites during the backup, beside the disk's
 			// file. A block device has no such place.
-			b.WriteString("<scratch" + attr("file", filepath.Join(scratchDir, "bb-scratch-"+clean(cfg.Name)+"-"+clean(d.Target)+".qcow2")) + "/>")
+			b.WriteString("<scratch" + attr("file", scratchDir+"/bb-scratch-"+clean(cfg.Name)+"-"+clean(d.Target)+".qcow2") + "/>")
 		}
 		b.WriteString("</disk>")
 	}
