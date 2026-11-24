@@ -264,7 +264,12 @@ func Begin(ctx context.Context, o Options) (s *Session, warnings []string, err e
 		// fails half way can still leave the clone behind, and the
 		// snapshot cannot be removed while it is there.
 		s.clones = append(s.clones, clone)
-		if _, cerr := run(ctx, "clone", "-o", Property+"="+o.Agent, "-o", "volmode=dev", "-o", "readonly=on", name+"@"+o.Tag, clone); cerr != nil {
+		// The clone is not made read-only. Setting that property in the
+		// clone command makes ZFS mark a disk read-only that it has not
+		// created yet, which crashed the kernel now and then (OpenZFS
+		// 2.4.1, a NULL pointer in zvol_os_set_disk_ro). Nothing writes
+		// to the clone anyway: it is opened for reading and destroyed.
+		if _, cerr := run(ctx, "clone", "-o", Property+"="+o.Agent, "-o", "volmode=dev", name+"@"+o.Tag, clone); cerr != nil {
 			warn("volume %s was not backed up: %v", v, cerr)
 			s.failed[v] = true
 			continue
