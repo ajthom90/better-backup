@@ -109,3 +109,20 @@ func TestSelection(t *testing.T) {
 		}
 	}
 }
+
+// TestRegistryLogs checks that a hive's logs are backed up with it.
+func TestRegistryLogs(t *testing.T) {
+	w := Writer{Name: "Registry Writer", Usage: "BOOTABLE_SYSTEM_STATE", Components: []Component{{Name: "Registry",
+		Files: []FileSpec{{Path: `C:\Windows\System32\config`, Spec: "SYSTEM"}}}}}
+	files, excludes, _ := SystemState([]Writer{w})
+	sel := NewSelection(files, excludes)
+	for path, want := range map[string]bool{
+		`C:\Windows\System32\config\SYSTEM`: true, `C:\Windows\System32\config\SYSTEM.LOG1`: true,
+		`C:\Windows\System32\config\system.log2`: true, `C:\Windows\System32\config\SOFTWARE.LOG1`: false,
+		`C:\Windows\System32\config\SYSTEMX`: false,
+	} {
+		if sel.Match(path, false) != want {
+			t.Errorf("Match(%s) = %v", path, !want)
+		}
+	}
+}
