@@ -32,7 +32,7 @@ function Api([string] $path, [string] $method = 'GET', $body = $null) {
   $token = (Get-Content "$data\admin.json" | ConvertFrom-Json).token
   $a = @{ Uri = "https://localhost:$Port$path"; Method = $method; Headers = @{ Authorization = "Bearer $token" }; SkipCertificateCheck = $true }
   if ($body) { $a.Body = ($body | ConvertTo-Json); $a.ContentType = 'application/json' }
-  Invoke-RestMethod @a
+  Invoke-RestMethod @a | ForEach-Object { $_ } # a list comes back as one object; hand on its items
 }
 function Wait([scriptblock] $until, [string] $what, [int] $seconds = 90) {
   $end = (Get-Date).AddSeconds($seconds)
