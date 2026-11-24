@@ -57,6 +57,15 @@ Usage:
                                          without --target, restores in place;
                                          a virtual machine is restored as a new
                                          machine with its files under --target
+  bb restore SNAPSHOT --system-state-in-place [--no-registry] [--restart]
+        [--authoritative-sysvol] [--authoritative DN ...] [--wait]
+                                         put a Windows system state back over
+                                         the machine it came from; finished by
+                                         a restart. A domain controller must be
+                                         in Directory Services Restore Mode.
+                                         --authoritative makes restored Active
+                                         Directory objects under DN win over
+                                         the other domain controllers
   bb gc [--wait]                         reclaim space from forgotten snapshots
   bb verify [--wait]                     read and check every stored chunk
   bb alerts                              show the email alert settings
@@ -118,6 +127,11 @@ var (
 	fWait    = fs.Bool("wait", false, "")
 	fSysSt   = fs.Bool("system-state", false, "")
 	fTrueNAS = fs.Bool("truenas-config", false, "")
+	fSysRest = fs.Bool("system-state-in-place", false, "")
+	fNoReg   = fs.Bool("no-registry", false, "")
+	fAuthSys = fs.Bool("authoritative-sysvol", false, "")
+	fRestart = fs.Bool("restart", false, "")
+	fAuthDN  cli.Multi
 	fVMTrack = fs.String("vm-tracking", "", "")
 	fNoSnap  = fs.Bool("no-snapshot", false, "")
 	fSMTP    = fs.String("smtp", "", "")
@@ -286,6 +300,7 @@ func main() {
 	fs.Var(&fTo, "to", "")
 	fs.Var(&fVols, "volume", "")
 	fs.Var(&fVMs, "vm", "")
+	fs.Var(&fAuthDN, "authoritative", "")
 	fs.IntVar(&fKeep.KeepLast, "keep-last", 0, "")
 	fs.IntVar(&fKeep.KeepDaily, "keep-daily", 0, "")
 	fs.IntVar(&fKeep.KeepWeekly, "keep-weekly", 0, "")
@@ -458,6 +473,11 @@ func main() {
 	case "restore":
 		need(pos, 2, "bb restore SNAPSHOT")
 		req := api.RestoreRequest{SnapshotID: pos[1], Include: fPaths, Target: *fTarget, Overwrite: *fOver, VMName: *fName}
+		if *fSysRest {
+			req.SystemState = &api.SystemStateRestore{Registry: !*fNoReg, AuthoritativeSYSVOL: *fAuthSys, AuthoritativeSubtrees: fAuthDN, Restart: *fRestart}
+		} else if *fNoReg || *fAuthSys || len(fAuthDN) > 0 || *fRestart {
+			cli.Fatal(errors.New("--no-registry, --authoritative-sysvol, --authoritative and --restart only go with --system-state-in-place"))
+		}
 		if *fAgent != "" {
 			req.AgentID = agentID(*fAgent)
 		}
