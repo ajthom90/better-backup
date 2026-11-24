@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -123,7 +124,7 @@ func volumeExtent(dev string) (disk uint32, off int64, ok bool) {
 // disk that holds Windows.
 func PlanMachine(disks []string) (*MachinePlan, error) {
 	host, _ := os.Hostname()
-	p := &MachinePlan{Layout: disklayout.Machine{Hostname: host, OS: "windows"}}
+	p := &MachinePlan{Layout: disklayout.Machine{Hostname: host, OS: "windows", Arch: runtime.GOARCH}}
 	var fw uint32
 	if procGetFirmwareType.Find() == nil {
 		if r, _, _ := procGetFirmwareType.Call(uintptr(unsafe.Pointer(&fw))); r != 0 {

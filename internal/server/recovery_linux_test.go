@@ -228,8 +228,37 @@ func TestBareMetalRecovery(t *testing.T) {
 	if c := put(rnd(9, 2*mib)); c != http.StatusBadRequest {
 		t.Fatalf("uploading something that is no recovery disc: status %d", c)
 	}
-	if c := put(iso); c != http.StatusNoContent {
+	if c := put(iso); c != http.StatusOK {
 		t.Fatalf("uploading the recovery disc: status %d", c)
+	}
+	// The disc for ARM64 machines is told apart by its boot loader, and
+	// kept beside the other.
+	arm := append(append([]byte{}, iso...), "EFI/BOOT/BOOTAA64.EFI"...)
+	var rs api.RecoveryStatus
+	e.do("GET", "/api/v1/recovery", nil, &rs)
+	if !rs.ISO.Available || rs.ISO.Size != int64(len(iso)) || rs.ISOArm64.Available {
+		t.Fatalf("after uploading the x64 disc: %+v %+v", rs.ISO, rs.ISOArm64)
+	}
+	if err := admin.Do("POST", "/api/v1/recovery/iso/link", map[string]string{"server": "https://backup.example.com:8443", "arch": "arm64"}, nil); err == nil {
+		t.Fatal("a link to an ARM64 disc the server does not have was made")
+	}
+	if c := put(arm); c != http.StatusOK {
+		t.Fatalf("uploading the ARM64 recovery disc: status %d", c)
+	}
+	e.do("GET", "/api/v1/recovery", nil, &rs)
+	if rs.ISO.Size != int64(len(iso)) || !rs.ISOArm64.Available || rs.ISOArm64.Size != int64(len(arm)) {
+		t.Fatalf("after uploading both discs: %+v %+v", rs.ISO, rs.ISOArm64)
+	}
+	var armLink struct{ URL string }
+	e.do("POST", "/api/v1/recovery/iso/link", map[string]string{"server": "https://backup.example.com:8443", "arch": "arm64"}, &armLink)
+	if resp, err := insecure.Get(base + armLink.URL); err != nil {
+		t.Fatal(err)
+	} else {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if len(body) != len(arm) || !bytes.HasSuffix(body, []byte("BOOTAA64.EFI")) || !strings.Contains(resp.Header.Get("Content-Disposition"), "better-backup-recovery-arm64.iso") {
+			t.Fatalf("downloaded ARM64 image: %d bytes (want %d), %s", len(body), len(arm), resp.Header.Get("Content-Disposition"))
+		}
 	}
 	var link struct{ URL string }
 	if err := admin.Do("POST", "/api/v1/recovery/iso/link", map[string]string{"server": "http://x"}, &link); err == nil {

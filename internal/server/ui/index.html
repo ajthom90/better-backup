@@ -458,6 +458,7 @@ async function offsiteDialog() {
     msg, el("div", { className: "row" }, test, run, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
 }
 
+const cpuName = a => ({ amd64: "x64", arm64: "ARM64" })[a] || a;
 // Bare-metal recovery: the recovery disc, the machines started from it,
 // and restoring a whole machine onto their disks.
 let recoveryTimer;
@@ -474,23 +475,33 @@ async function recoveryDialog() {
   const addr = el("input", { id: "recServer", value: sessionStorage.getItem("bb-rec-server") || location.origin });
   const msg = el("div", { id: "err" });
   kids.push(el("label", { textContent: "Recovery disc" }));
-  if (r.iso.available) {
-    const dl = el("button", { className: "primary", id: "recDownload", textContent: "Download the recovery disc (" + size(r.iso.size) + ")" });
-    dl.onclick = async () => {
-      msg.textContent = "";
-      try {
-        sessionStorage.setItem("bb-rec-server", addr.value.trim());
-        const l = await call("POST", "/api/v1/recovery/iso/link", { server: addr.value.trim() });
-        location.href = l.url;
-      } catch (e) { msg.textContent = e.message; }
-    };
-    kids.push(el("div", { className: "two" }, addr, dl),
+  const discs = [["amd64", r.iso, "recDownload", "Download the recovery disc"], ["arm64", r.iso_arm64 || {}, "recDownloadArm64", "Download the disc for ARM64 machines"]];
+  const have = discs.filter(d => d[1].available);
+  if (have.length) {
+    const row = el("div", { style: "display:flex;gap:8px;flex-wrap:wrap;margin-top:8px" });
+    for (const [arch, iso, id, text] of have) {
+      const dl = el("button", { className: arch === "amd64" ? "primary" : "", id, textContent: text + " (" + size(iso.size) + ")" });
+      dl.onclick = async () => {
+        msg.textContent = "";
+        try {
+          sessionStorage.setItem("bb-rec-server", addr.value.trim());
+          const l = await call("POST", "/api/v1/recovery/iso/link", { server: addr.value.trim(), arch });
+          location.href = l.url;
+        } catch (e) { msg.textContent = e.message; }
+      };
+      row.append(dl);
+    }
+    kids.push(addr, row,
       el("div", { className: "hint", textContent: "The address the machine being recovered will reach this server at. It is written into the disc, together with the server's fingerprint, so the machine finds the right server by itself. The disc holds no password or key. It starts on BIOS and UEFI machines; with Secure Boot it needs the “Microsoft UEFI Certificate Authority” to be trusted, which on a Hyper-V machine is a choice in its Security settings (or switch Secure Boot off while recovering)." }));
+    if (r.iso.available) kids.push(el("div", { className: "hint", textContent: r.iso_arm64 && r.iso_arm64.available
+      ? "Nearly every PC, server and virtual machine takes the first disc. The disc for ARM64 machines starts ARM servers and ARM virtual machines by UEFI; it does not start a Raspberry Pi or most ARM laptops."
+      : "This disc is for x64 machines, which is nearly every PC, server and virtual machine. For ARM64 servers and virtual machines, upload better-backup-recovery-arm64.iso from the project's releases page below." }));
+    else kids.push(el("div", { className: "hint", textContent: "This server has only the disc for ARM64 machines. For x64 machines, upload better-backup-recovery.iso from the project's releases page below." }));
   } else {
-    kids.push(el("div", { className: "hint", textContent: "This server was installed without a recovery disc image. The server's Docker image includes one. Otherwise download better-backup-recovery.iso from the project's releases page and upload it here once." }));
+    kids.push(el("div", { className: "hint", textContent: "This server was installed without a recovery disc image. The server's Docker image includes one. Otherwise download better-backup-recovery.iso (or better-backup-recovery-arm64.iso for ARM64 machines) from the project's releases page and upload it here once." }));
   }
   const file = el("input", { type: "file", id: "recUpload", accept: ".iso" });
-  const up = el("button", { textContent: r.iso.available ? "Replace the disc image" : "Upload the disc image" });
+  const up = el("button", { textContent: "Upload the disc image" });
   up.onclick = async () => {
     if (!file.files.length) { msg.textContent = "Choose the .iso file first."; return; }
     msg.textContent = "Uploading…"; msg.style.color = "var(--good)";
@@ -500,7 +511,7 @@ async function recoveryDialog() {
       await recoveryDialog();
     } catch (e) { msg.style.color = ""; msg.textContent = e.message; }
   };
-  kids.push(el("details", null, el("summary", { className: "hint", textContent: r.iso.available ? "Use another disc image" : "Upload a disc image" }), el("div", { className: "two" }, file, up)), msg);
+  kids.push(el("details", null, el("summary", { className: "hint", textContent: have.length ? "Upload another disc image (x64 or ARM64; it replaces the one of its kind)" : "Upload a disc image" }), el("div", { className: "two" }, file, up)), msg);
 
   kids.push(el("label", { textContent: "Machines started from the recovery disc" }));
   if (!r.machines.length) kids.push(el("div", { className: "empty", textContent: "No machine is waiting. A machine appears here a minute or so after it starts from the recovery disc." }));
@@ -521,7 +532,7 @@ async function recoveryDialog() {
     if (!busy) acts.append(confirmButton("Forget", "Click again to forget this machine", async () => { await call("DELETE", "/api/v1/recovery/machines/" + m.id); await recoveryDialog(); }));
     const dl = el("dl");
     const add = (k, v) => { if (v) dl.append(el("dt", { textContent: k }), el("dd", { textContent: v })); };
-    add("Machine", [hw.product, hw.firmware ? "starts through " + hw.firmware.toUpperCase() : "", hw.memory_bytes ? size(hw.memory_bytes) + " memory" : ""].filter(Boolean).join(", "));
+    add("Machine", [hw.product, hw.arch ? cpuName(hw.arch) + " processor" : "", hw.firmware ? "starts through " + hw.firmware.toUpperCase() : "", hw.memory_bytes ? size(hw.memory_bytes) + " memory" : ""].filter(Boolean).join(", "));
     add("Address", m.remote.replace(/:\d+$/, ""));
     add("Disks", hw.disks.filter(d => !d.media).map(d => d.path + ", " + size(d.size) + (d.model ? ", " + d.model : "") + (d.contents ? " (now: " + d.contents + ")" : "")).join("\n") || "none found");
     add("Status", m.status);
@@ -558,6 +569,8 @@ async function machineRestoreDialog(m) {
     const b = await call("GET", "/api/v1/snapshots/" + snap.value + "/machine");
     picks = {};
     const kids = [];
+    if (b.arch && m.hardware && m.hardware.arch && b.arch !== m.hardware.arch)
+      kids.push(el("div", { className: "warnbox", textContent: "The backup is of a machine with an " + cpuName(b.arch) + " processor, and this machine has an " + cpuName(m.hardware.arch) + " processor. The restored system will not start on it." }));
     if (b.firmware && m.hardware && m.hardware.firmware && b.firmware !== m.hardware.firmware)
       kids.push(el("div", { className: "warnbox", textContent: "The backup is of a machine that starts through " + b.firmware.toUpperCase() + ", and this machine was started through " + m.hardware.firmware.toUpperCase() + ". A restored system only starts the way the original did: change the machine's firmware setting (on Hyper-V, generation 2 is UEFI and generation 1 is BIOS) before restarting it." }));
     const taken = new Set();

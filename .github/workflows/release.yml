@@ -40,7 +40,10 @@ jobs:
           flags="-s -w -X github.com/ajthom90/better-backup/internal/server.Version=$GITHUB_REF_NAME -X github.com/ajthom90/better-backup/internal/agent.Version=$GITHUB_REF_NAME"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$flags" -o "$out/bb-agent" ./cmd/bb-agent
           python3 packaging/recovery/build.py --agent "$out/bb-agent" --out "$out/better-backup-recovery.iso" --firmware --version "$GITHUB_REF_NAME"
-          gh release upload "$GITHUB_REF_NAME" "$out/better-backup-recovery.iso" --clobber
+          # And the disc for ARM64 machines.
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$flags" -o "$out/arm64/bb-agent" ./cmd/bb-agent
+          python3 packaging/recovery/build.py --arch arm64 --agent "$out/arm64/bb-agent" --out "$out/better-backup-recovery-arm64.iso" --firmware --version "$GITHUB_REF_NAME"
+          gh release upload "$GITHUB_REF_NAME" "$out/better-backup-recovery.iso" "$out/better-backup-recovery-arm64.iso" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-qemu-action@v3

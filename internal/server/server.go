@@ -52,6 +52,9 @@ type Config struct {
 	// RecoveryISO is the recovery disc image to hand out. Default:
 	// DataDir/recovery.iso, then the copy installed with the server.
 	RecoveryISO string
+	// RecoveryISOArm64 is the recovery disc image for ARM64 machines.
+	// Default: DataDir/recovery-arm64.iso, then the installed copy.
+	RecoveryISOArm64 string
 
 	// Tick is how often schedules and timeouts are checked.
 	Tick time.Duration

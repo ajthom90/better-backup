@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,7 +23,7 @@ import (
 // mounted root and boot file systems.
 func PlanMachine(disks []string) (*MachinePlan, error) {
 	host, _ := os.Hostname()
-	p := &MachinePlan{Layout: disklayout.Machine{Hostname: host, OS: "linux", Firmware: disklayout.FirmwareBIOS}}
+	p := &MachinePlan{Layout: disklayout.Machine{Hostname: host, OS: "linux", Firmware: disklayout.FirmwareBIOS, Arch: runtime.GOARCH}}
 	if _, err := os.Stat("/sys/firmware/efi"); err == nil {
 		p.Layout.Firmware = disklayout.FirmwareUEFI
 	}

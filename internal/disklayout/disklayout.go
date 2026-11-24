@@ -45,7 +45,10 @@ type Machine struct {
 	OS       string `json:"os"`
 	// Firmware is how the machine was started: "uefi" or "bios".
 	Firmware string `json:"firmware,omitempty"`
-	Disks    []Disk `json:"disks"`
+	// Arch is the machine's kind of processor: "amd64" or "arm64".
+	// Backups made before this was recorded leave it empty.
+	Arch  string `json:"arch,omitempty"`
+	Disks []Disk `json:"disks"`
 }
 
 // Disk is one disk and its partition table.
