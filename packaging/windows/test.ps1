@@ -41,6 +41,8 @@ function Wait([scriptblock] $until, [string] $what, [int] $seconds = 90) {
     Start-Sleep 2
   }
   foreach ($f in "$data\server.log", "$state\agent.log") { if (Test-Path $f) { Write-Host "--- $f"; Get-Content $f -Tail 40 | Write-Host } }
+  try { Write-Host '--- agents'; Api '/api/v1/agents' | ConvertTo-Json | Write-Host } catch { Write-Host $_ }
+  try { Write-Host '--- bb-agent status'; & "$env:ProgramFiles\better-backup\Agent\bb-agent.exe" status | Write-Host } catch { Write-Host $_ }
   throw "FAILED: $what (waited $seconds seconds)"
 }
 function Running([string] $name) { (Get-Service $name -ErrorAction SilentlyContinue).Status -eq 'Running' }
