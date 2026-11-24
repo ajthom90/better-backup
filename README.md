@@ -160,7 +160,7 @@ bb restore SNAPSHOT --path web01 --target D:\Restored --name web01-restored --wa
 bb restore SNAPSHOT --path 'web01\disk-scsi-0-0.vhdx' --target D:\Restored\disk.vhdx --wait
 ```
 
-The web UI does the same: list the machines under "Hyper-V virtual machines" when you
+The web UI does the same: list the machines under "Virtual machines" when you
 add a policy, and give the new machine a name in the restore dialog.
 
 Each machine is backed up while it runs. The agent takes a checkpoint (a
@@ -201,6 +201,55 @@ only if no such warning appears.
 Known gaps: a machine cannot yet be restored over the original, and
 pass-through disks, shared disks, virtual TPMs and other device settings are
 not carried over.
+
+### KVM virtual machines (libvirt)
+
+Install the agent on the KVM host. It needs `virsh` and `qemu-utils`
+(`qemu-img` on Fedora and RHEL), which a libvirt host normally has, and it
+runs as root. The same commands and the same fields in the web UI apply:
+
+```sh
+bb policy add --name vms --agent kvm01 --vm web01 --vm db01 --vm-tracking check --daily-at 23:00
+bb policy add --name all-vms --agent kvm01 --vm '*' --daily-at 23:00
+bb restore SNAPSHOT --path web01 --target /var/lib/libvirt/images --name web01-restored --wait
+bb restore SNAPSHOT --path web01/disk-vda --target /tmp/vda.img --wait
+```
+
+The agent works out by itself whether its host runs Hyper-V or libvirt; a
+policy can also say so (`--hypervisor libvirt`, "Hypervisor" in the web UI).
+
+A running machine is backed up through a libvirt backup job (libvirt 7.2 and
+QEMU 4.2 or later): QEMU serves every disk as it was when the job began while
+the machine keeps writing. If the guest runs the QEMU guest agent, its file
+systems are flushed and frozen for that moment; otherwise the backup holds
+what a power cut would leave. A machine that is switched off is read from its
+disk files, and cannot be started until that backup has finished. Parts of a
+disk that hold no data are neither read nor stored. The machine's definition
+and, for UEFI machines, its firmware settings are stored with the disks.
+
+`--vm-tracking on` makes a libvirt checkpoint with every backup, so the next
+one asks QEMU which parts of each disk were written since and reads only
+those. Only qcow2 disks can be tracked; raw files and block devices are read
+in full every time, as is every disk after the machine was backed up while
+switched off. As with Hyper-V, run with `--vm-tracking check` first.
+
+A restore defines a new machine, switched off, from the saved definition, so
+every device setting comes back. Its disks are written as qcow2 files into a
+folder named after the machine under the target, whatever they were before.
+If the original machine is gone the new one keeps its identity (UUID);
+beside the original it gets a new one but the same network (MAC) addresses.
+
+The automated tests run all of this against a real libvirt and QEMU on every
+change: full, tracked and switched-off backups of a machine with qcow2 and
+raw disks and UEFI firmware, and restores that are compared with the
+originals. Not covered by them, and so untested: guests with the guest agent,
+disks on block devices (LVM, for which the scratch file goes to
+`/var/lib/libvirt/images` or `BB_SCRATCH_DIR`), hosts with SELinux, and
+real workloads writing during a backup.
+
+Known gaps: network disks (Ceph RBD, iSCSI), pass-through and shared disks
+are skipped with a warning, the contents of an emulated TPM are not backed
+up, and a machine cannot yet be restored over the original.
 
 ### Windows system state
 
@@ -309,7 +358,7 @@ Then use the two commands above, or start a new server with
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. To do: restore in place, DSRM-assisted authoritative and non-authoritative restore |
-| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. To do: Proxmox and KVM providers, Postgres option, user roles |
+| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt. To do: Proxmox and VMware providers, Postgres option, user roles |
 | 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |
 
 See [docs/architecture.md](docs/architecture.md) for the design and the

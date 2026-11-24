@@ -34,6 +34,10 @@ better-backup has three programs:
 | `internal/api` | Wire types and the pinned-TLS client configuration |
 | `internal/vss` | Windows Volume Shadow Copy requester and backup privileges |
 | `internal/svc` | Windows service, systemd and launchd integration |
+| `internal/hypervisor` | What virtual machine hosts have in common: the driver interface |
+| `internal/hyperv` | Hyper-V driver (PowerShell and WMI) |
+| `internal/libvirt` | KVM driver (libvirt backup jobs and checkpoints through `virsh`) |
+| `internal/nbd`, `internal/qemuimg` | NBD client and `qemu-nbd` wrapper that read and write QEMU disks |
 
 Data sources other than files (volume images, Hyper-V and other hypervisors,
 system state) will plug in beside `internal/backup`: each produces entries and
@@ -131,6 +135,31 @@ On restore the DACL is applied first and the owner second, because setting
 another account as owner needs the restore privilege. A file that inherited
 its permissions inherits again from the folder it is restored into; a file
 with inheritance blocked keeps its exact permissions.
+
+## Virtual machines
+
+A hypervisor is a `hypervisor.Driver`: it lists the host's machines, freezes
+one (`Freeze`) into a configuration blob and a set of disks to image, and
+builds a machine again from such a blob (`NewRestore`). A machine is stored as
+an entry of type `vm` holding the configuration as a small file, whose name
+says which driver wrote it (`vm.json` for Hyper-V, `libvirt.json` for KVM),
+and one image per disk. Disks are always stored as their raw contents in
+fixed 1 MiB blocks, whatever the format on the host, so any disk can be
+restored anywhere as a plain image.
+
+Change tracking is the driver's business up to one point: it hands the
+archiver a list of byte ranges written since the previous backup, and the
+archiver takes every other block from that backup without reading it. The
+driver learns what the previous backup was from its configuration blob, which
+the archiver passes back, so the state that matters (a Hyper-V reference
+point, a libvirt checkpoint name) travels with the snapshot it belongs to. A
+backup that fails leaves the previous checkpoint in place for the next try.
+
+The KVM driver reads running machines through libvirt's pull-mode backup
+job: QEMU exports each disk over NBD on a unix socket inside the machine's
+private folder, as of the moment the job began, and `internal/nbd` reads the
+allocation map, the dirty bitmap and the data from there. Stopped machines
+and restores go through `qemu-nbd`, which handles the image formats.
 
 ## Offsite copy
 

@@ -30,6 +30,33 @@ jobs:
       - name: Test
         run: go test -race -count=1 ./...
 
+  kvm:
+    # Backs up and restores a real virtual machine through libvirt and
+    # QEMU: full, by change tracking, switched off, and as a new machine.
+    name: KVM (libvirt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install QEMU and libvirt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients ovmf
+          # Let QEMU use the runner's hardware virtualization.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          sudo systemctl restart libvirtd
+          sudo virsh -c qemu:///system version
+      - name: Test
+        run: |
+          go test -c -o /tmp/server.test ./internal/server/
+          go test -c -o /tmp/qemuimg.test ./internal/qemuimg/
+          sudo /tmp/qemuimg.test -test.v
+          sudo env BB_TEST_LIBVIRT=/var/lib/libvirt/images /tmp/server.test -test.v -test.run 'TestLibvirt'
+
   build:
     name: Lint, cross-compile, Docker
     runs-on: ubuntu-latest

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -140,6 +141,10 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad(`vm_tracking must be empty, "on" or "check"`)
 		return
 	}
+	if p.Hypervisor != "" && !slices.Contains(api.Hypervisors, p.Hypervisor) {
+		bad("hypervisor must be empty or one of: " + strings.Join(api.Hypervisors, ", "))
+		return
+	}
 	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.SystemState && a.OS != "windows" {
 		bad("the system state can only be backed up on a Windows machine")
 		return
@@ -202,7 +207,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, VMTracking: p.VMTracking, SystemState: p.SystemState, NoSnapshot: p.NoSnapshot}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMTracking: p.VMTracking, SystemState: p.SystemState, NoSnapshot: p.NoSnapshot}}
 	return j, s.enqueue(j)
 }
 
