@@ -1,9 +1,18 @@
 VERSION ?= dev
 LDFLAGS := -s -w -X github.com/ajthom90/better-backup/internal/server.Version=$(VERSION) -X github.com/ajthom90/better-backup/internal/agent.Version=$(VERSION)
 
-.PHONY: build test docker
+.PHONY: build app test docker
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/ ./cmd/...
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/ ./cmd/bb ./cmd/bb-agent ./cmd/bb-server
+
+# The desktop app for this machine. It shows a web view, so it needs cgo
+# and, on Linux, the GTK 3 and WebKitGTK 4.1 development packages.
+APP_TAGS := desktop,production
+ifeq ($(shell go env GOOS),linux)
+APP_TAGS := $(APP_TAGS),webkit2_41
+endif
+app:
+	CGO_ENABLED=1 go build -trimpath -tags $(APP_TAGS) -ldflags "$(LDFLAGS)" -o bin/ ./cmd/bb-agent-ui
 
 test:
 	go vet ./...

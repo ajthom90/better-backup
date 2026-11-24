@@ -9,16 +9,22 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ajthom90/better-backup/internal/agent"
 	"github.com/ajthom90/better-backup/internal/agentctl"
+	"github.com/ajthom90/better-backup/internal/agentui"
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/cli"
+	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/paths"
 	"github.com/ajthom90/better-backup/internal/svc"
 	"github.com/ajthom90/better-backup/internal/tree"
@@ -31,6 +37,7 @@ Usage:
   bb-agent status [--json]               what the agent is doing
   bb-agent backup                        back this machine up now
   bb-agent unenroll                      forget the server
+  bb-agent setup                         do all of that on a web page instead
   bb-agent run                           run in the foreground (the default command)
   bb-agent service ACTION                install, uninstall, start, stop, restart, status
   bb-agent version
@@ -65,6 +72,7 @@ func main() {
 	fs.StringVar(&req.Fingerprint, "fingerprint", os.Getenv("BB_FINGERPRINT"), "")
 	fs.StringVar(&req.Name, "name", os.Getenv("BB_AGENT_NAME"), "")
 	asJSON := fs.Bool("json", false, "")
+	noBrowser := fs.Bool("no-browser", false, "")
 	pos := cli.Parse(fs, os.Args[1:])
 	cmd := "run"
 	if len(pos) > 0 {
@@ -90,6 +98,13 @@ func main() {
 		err = backup()
 	case "unenroll":
 		err = unenroll()
+	case "setup":
+		err = setup(*noBrowser)
+	case "fda-check":
+		// Run by the agent itself on macOS: see watchFullDiskAccess.
+		if ok := agent.FullDiskAccess(); ok == nil || !*ok {
+			os.Exit(1)
+		}
 	case "run":
 		// Containers enroll on first start from environment variables.
 		if !agent.Enrolled(dir) && given {
@@ -358,5 +373,44 @@ func unenroll() error {
 	}
 	fmt.Println("This machine is no longer enrolled. Its backups stay on the server; remove the")
 	fmt.Println("machine there, in the web UI, if it is not coming back. Enroll again with: bb-agent enroll")
+	return nil
+}
+
+// setup serves the settings page on a local port and opens it in the
+// browser: the same page the desktop app shows, for machines that have
+// no app. The address carries a key, so that nobody else on the machine
+// can use the page.
+func setup(noBrowser bool) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if _, err := ctl.Status(ctx); errors.Is(err, agentctl.ErrDenied) {
+		return denied(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	key := keys.RandomHex(16)
+	addr := "http://" + ln.Addr().String() + "/?key=" + key
+	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second,
+		Handler: agentui.Handler(agentui.Options{Control: ctl, Key: key, Host: ln.Addr().String()})}
+	go func() {
+		<-ctx.Done()
+		srv.Close()
+	}()
+	fmt.Println("The settings page of the better-backup agent is at:")
+	fmt.Println()
+	fmt.Println("  " + addr)
+	fmt.Println()
+	fmt.Println("It works from this machine only, until you stop this command with Ctrl+C.")
+	// A browser started by root, from sudo, is the wrong user's browser.
+	if !noBrowser && os.Getenv("SUDO_USER") == "" {
+		if agentui.OpenBrowser(addr) == nil {
+			fmt.Println("Opening it in your browser.")
+		}
+	}
+	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
 	return nil
 }
