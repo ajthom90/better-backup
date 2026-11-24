@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -40,7 +41,10 @@ func TestReadWrite(t *testing.T) {
 	if back, _, _ := Read(dst); len(back) != 2 || !bytes.Equal(back["user.big"], big) {
 		t.Fatal("attributes differ after writing them back")
 	}
-	if failed, err := Write(dst, map[string][]byte{"user.ok": {1}, "nonsense": {1}}); err == nil || len(failed) != 1 || failed[0] != "nonsense" {
-		t.Fatal(failed, err)
+	// Linux refuses a name outside its namespaces; macOS takes any name.
+	if runtime.GOOS == "linux" {
+		if failed, err := Write(dst, map[string][]byte{"user.ok": {1}, "nonsense": {1}}); err == nil || len(failed) != 1 || failed[0] != "nonsense" {
+			t.Fatal(failed, err)
+		}
 	}
 }
