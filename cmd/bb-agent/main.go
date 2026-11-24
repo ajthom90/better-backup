@@ -9,8 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -24,7 +22,6 @@ import (
 	"github.com/ajthom90/better-backup/internal/agentui"
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/cli"
-	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/paths"
 	"github.com/ajthom90/better-backup/internal/svc"
 	"github.com/ajthom90/better-backup/internal/tree"
@@ -49,6 +46,11 @@ three parts of a code can also be given one by one:
 
 Flags:
   --dir DIR   agent state directory (default %s, or $BB_AGENT_DIR)
+
+In a container that should back up its host (an app on TrueNAS SCALE, for
+example), set BB_HOST_ROOT=/proc/1/root and run it privileged with the host's
+process ids. The agent then works in the host's file system, and --dir is a
+folder on the host.
 
 The installed agent runs as root (Linux, macOS) or as a service (Windows)
 so that it can read every file; these commands talk to it, and need root
@@ -85,6 +87,11 @@ func main() {
 	given := req.Code != "" || (req.Server != "" && req.Token != "" && req.Fingerprint != "")
 
 	var err error
+	if root := os.Getenv("BB_HOST_ROOT"); root != "" && cmd != "version" && cmd != "service" && cmd != "fda-check" {
+		if err := agent.EnterHostRoot(root); err != nil {
+			cli.Fatal(err)
+		}
+	}
 	switch cmd {
 	case "enroll":
 		if len(pos) > 1 {
@@ -386,31 +393,17 @@ func setup(noBrowser bool) error {
 	if _, err := ctl.Status(ctx); errors.Is(err, agentctl.ErrDenied) {
 		return denied(err)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return err
-	}
-	key := keys.RandomHex(16)
-	addr := "http://" + ln.Addr().String() + "/?key=" + key
-	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second,
-		Handler: agentui.Handler(agentui.Options{Control: ctl, Key: key, Host: ln.Addr().String()})}
-	go func() {
-		<-ctx.Done()
-		srv.Close()
-	}()
-	fmt.Println("The settings page of the better-backup agent is at:")
-	fmt.Println()
-	fmt.Println("  " + addr)
-	fmt.Println()
-	fmt.Println("It works from this machine only, until you stop this command with Ctrl+C.")
-	// A browser started by root, from sudo, is the wrong user's browser.
-	if !noBrowser && os.Getenv("SUDO_USER") == "" {
-		if agentui.OpenBrowser(addr) == nil {
-			fmt.Println("Opening it in your browser.")
+	return agentui.Local(ctx, ctl, 0, func(addr string) {
+		fmt.Println("The settings page of the better-backup agent is at:")
+		fmt.Println()
+		fmt.Println("  " + addr)
+		fmt.Println()
+		fmt.Println("It works from this machine only, until you stop this command with Ctrl+C.")
+		// A browser started by root, from sudo, is the wrong user's browser.
+		if !noBrowser && os.Getenv("SUDO_USER") == "" {
+			if agentui.OpenBrowser(addr) == nil {
+				fmt.Println("Opening it in your browser.")
+			}
 		}
-	}
-	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
+	})
 }

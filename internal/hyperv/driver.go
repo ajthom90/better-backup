@@ -30,7 +30,7 @@ func (driver) Available() error {
 	return nil
 }
 
-func (driver) List(context.Context) ([]string, error) { return List() }
+func (driver) List(context.Context, *hypervisor.Connection) ([]string, error) { return List() }
 
 func (driver) Freeze(_ context.Context, vm string, o hypervisor.Options) (*hypervisor.Frozen, error) {
 	ho := Options{Tracking: o.Tracking, StateDir: o.StateDir}
@@ -97,8 +97,8 @@ type restore struct {
 
 func (r *restore) Where() string { return r.dir }
 
-func (r *restore) Disk(name string, size int64) (io.WriterAt, bool, func() error, error) {
-	return r.t.OpenFile(filepath.Join(r.dir, name), size)
+func (r *restore) Disk(d hypervisor.DiskSpec) (io.WriterAt, bool, func() error, error) {
+	return r.t.OpenFile(filepath.Join(r.dir, d.Name), d.Size)
 }
 
 func (r *restore) Finish() ([]string, error) { return Create(r.cfg, r.dir, r.t.Name) }

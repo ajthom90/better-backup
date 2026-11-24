@@ -124,7 +124,7 @@ func lines(s string) []string {
 	return out
 }
 
-func (driver) List(ctx context.Context) ([]string, error) {
+func (driver) List(ctx context.Context, _ *hypervisor.Connection) ([]string, error) {
 	out, err := virsh(ctx, "list", "--all", "--name")
 	if err != nil {
 		return nil, err

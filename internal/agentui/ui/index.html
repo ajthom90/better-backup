@@ -73,8 +73,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 <header>
   <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
     <rect width="44" height="44" rx="10" fill="#0a66d8"/>
-    <path d="M22 10a12 12 0 1 0 11.3 16" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/>
-    <path d="M27.5 9.5 33 15l-6.2 2.2z" fill="#fff" transform="rotate(38 31 14)"/>
+    <path d="M28 11.6A12 12 0 1 0 33.3 26.1" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M32.4 14.1 29.2 7.6 24.9 14.4z" fill="#fff"/>
     <path d="M22 16v6.5l4.2 2.6" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
   <div>
@@ -340,6 +340,9 @@ let drawn = "", drawnAt = 0;
 draw();
 refresh();
 setInterval(() => { if (!busy && !document.hidden) refresh(); }, 2000);
+// A hidden page still asks now and then: in a browser, whatever serves
+// this page stops when no page has asked for a while.
+setInterval(() => { if (!busy && document.hidden) refresh(); }, 30000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden && !busy) refresh(); });
 </script>
 </body>

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Stop the agent of an earlier version, so its program can be replaced.
+launchctl bootout system/better-backup-agent 2>/dev/null || true
+# The app too: a running copy would keep showing the old page.
+pkill -x better-backup 2>/dev/null || true
+exit 0

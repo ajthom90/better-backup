@@ -11,10 +11,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -33,6 +35,18 @@ func main() {
 		fmt.Println("bb-agent-ui", agent.Version, runtime.GOOS+"/"+runtime.GOARCH)
 		return
 	}
+	ctl := agentctl.Dial(agentctl.SocketPath(""))
+	// Without a web view to show the page in (Windows Server 2016 and
+	// 2019 have none), show it in the browser instead. This program
+	// then stays, unseen, for as long as the page is open.
+	if !webviewAvailable() {
+		err := agentui.Local(context.Background(), ctl, 10*time.Minute, func(addr string) { agentui.OpenBrowser(addr) })
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	// The web view keeps its cache here; nothing of ours is in it.
 	data := ""
 	if dir, err := os.UserCacheDir(); err == nil {
@@ -45,7 +59,7 @@ func main() {
 		MinWidth:  440,
 		MinHeight: 480,
 		AssetServer: &assetserver.Options{
-			Handler: agentui.Handler(agentui.Options{Control: agentctl.Dial(agentctl.SocketPath("")), App: true}),
+			Handler: agentui.Handler(agentui.Options{Control: ctl, App: true}),
 		},
 		// Opening the app again brings the window forward.
 		SingleInstanceLock: &options.SingleInstanceLock{UniqueId: "com.github.ajthom90.better-backup.agent-ui"},

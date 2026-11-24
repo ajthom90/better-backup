@@ -137,7 +137,7 @@ func machines(ctx context.Context) ([]machine, error) {
 
 // List names the machines on this node. A machine whose name another
 // one shares, or that has none, is listed by its id.
-func (driver) List(ctx context.Context) ([]string, error) {
+func (driver) List(ctx context.Context, _ *hypervisor.Connection) ([]string, error) {
 	ms, err := machines(ctx)
 	if err != nil {
 		return nil, err
