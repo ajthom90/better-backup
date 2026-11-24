@@ -84,6 +84,11 @@ header h1 { min-width:140px; }
 .front hr { border:0; border-top:1px solid var(--line); margin:18px 0; }
 .banner { border:1px solid #d97706; border-left-width:4px; border-radius:8px; background:var(--card); padding:10px 14px; margin-bottom:18px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
 .banner span { flex:1; min-width:240px; }
+.banner.alarm { border-color:var(--bad); }
+.suspicious { color:var(--bad); } .locked { color:var(--muted); }
+table.loose td { white-space:normal; overflow-wrap:anywhere; vertical-align:top; padding:8px 10px; } table.loose th { padding:8px 10px; } table.loose td:last-child { white-space:nowrap; overflow-wrap:normal; }
+table.loose .sub { word-break:normal; } td.reasons { min-width:240px; } td.reasons ul { margin:0; padding-left:18px; } td.holds { min-width:150px; }
+.pending { border:1px solid #d97706; border-left-width:4px; border-radius:6px; padding:10px 12px; margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; } .pending span { flex:1; min-width:220px; }
 progress { width:100%; height:14px; }
 body.role-viewer .need-operator, body.role-viewer .need-admin, body.role-operator .need-admin { display:none !important; }
 h4 { margin:18px 0 4px; }
@@ -93,9 +98,10 @@ h4 { margin:18px 0 4px; }
 <body>
 <div id="front" class="front" hidden></div>
 <div id="app" hidden>
-<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="recovery" class="need-operator">Bare-metal recovery</button><button id="vmware" class="need-admin">VMware servers</button><button id="m365" class="need-admin">Microsoft 365</button><button id="offsite" class="need-operator">Offsite copy</button><button id="alerts" class="need-admin">Alerts and reports</button><button id="users" class="need-admin">Users</button><button id="activity" class="need-admin">Activity log</button><button id="settings" class="need-admin">Settings</button><span id="whoami"></span><button id="account">My password</button><button id="logout">Sign out</button></header>
+<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="recovery" class="need-operator">Bare-metal recovery</button><button id="vmware" class="need-admin">VMware servers</button><button id="m365" class="need-admin">Microsoft 365</button><button id="protect">Ransomware protection</button><button id="offsite" class="need-operator">Offsite copy</button><button id="alerts" class="need-admin">Alerts and reports</button><button id="users" class="need-admin">Users</button><button id="activity" class="need-admin">Activity log</button><button id="settings" class="need-admin">Settings</button><span id="whoami"></span><button id="account">My password</button><button id="logout">Sign out</button></header>
 <main>
   <div class="banner need-admin" id="keyBanner" hidden><span><b>Keep a copy of the repository key.</b> Without it, neither the backups on this server nor the offsite copy can be read. Download it and keep it somewhere other than this server.</span><button class="primary" id="keyBannerBtn">Download the key</button></div>
+  <div class="banner alarm" id="susBanner" hidden><span id="susText"></span><button class="primary" id="susBtn">Look at it</button></div>
   <section><h2><span>Health</span><span id="healthState" style="flex:none;white-space:nowrap"></span></h2><ul class="issues" id="issues" hidden></ul><div class="scroll" id="health"></div></section>
   <section><h2><span>Repository</span><button id="runVerify" class="need-operator">Verify all data</button><button id="runGC" class="need-operator">Reclaim space</button></h2><div class="stats" id="stats"></div><div class="usage" id="usage" hidden></div></section>
   <section><h2><span>Agents</span><button id="newToken" class="need-operator">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
@@ -117,8 +123,8 @@ let m365List = [];
 let jobLimit = 15;
 let me = null; // the signed-in user
 
-async function call(method, path, body) {
-  const r = await fetch(path, { method, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+async function call(method, path, body, headers) {
+  const r = await fetch(path, { method, headers: Object.assign({ Authorization: "Bearer " + token, "Content-Type": "application/json" }, headers || {}), body: body ? JSON.stringify(body) : undefined });
   if (r.status === 401) { signOut(); throw new Error("You are signed out. Sign in again."); }
   const text = await r.text();
   const data = text ? JSON.parse(text) : null;
@@ -143,10 +149,17 @@ function notice(title, text) {
 }
 
 async function refresh() {
-  const [st, allAgents, policies, jobs, snaps, off, vmw, health, m365] = await Promise.all([
+  const [st, allAgents, policies, jobs, snaps, off, vmw, health, m365, prot, sus] = await Promise.all([
     call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
-    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers"), call("GET", "/api/v1/health"), call("GET", "/api/v1/m365-tenants")]);
+    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers"), call("GET", "/api/v1/health"), call("GET", "/api/v1/m365-tenants"),
+    call("GET", "/api/v1/protection"), call("GET", "/api/v1/suspicions")]);
   m365List = m365;
+  const open = sus.filter(x => !x.reviewed);
+  const suspect = new Set(open.map(x => x.snapshot_id));
+  $("susBanner").hidden = !open.length;
+  if (open.length) $("susText").replaceChildren(el("b", { textContent: open.length === 1 ? "A backup of " + (open[0].agent || "a machine") + " looks like ransomware. " : open.length + " backups look like ransomware. " }),
+    "Older backups of " + (open.length === 1 ? "that policy" : "those policies") + " are kept, whatever the retention rules say, until an administrator has looked.");
+  $("protect").textContent = "Ransomware protection" + (prot.deleted ? " (" + prot.deleted + " deleted)" : "");
   showHealth(health);
   vmwareList = vmw;
   $("version").textContent = "version " + st.version;
@@ -177,8 +190,9 @@ async function refresh() {
       el("div", { className: "acts" }, button("Details", async () => jobDialog(j.id)), cancelButton(j, refresh))]),
     "No jobs have run yet.");
   table("snapshots", ["Time", "Host", "Paths", "Files", "Size", "New data", ""],
-    snaps.slice(0, 50).map(s => [when(s.time), s.hostname, s.sources.map(x => x.name).join(", "), s.stats.files, size(s.stats.bytes), size(s.stats.bytes_uploaded),
-      el("div", { className: "acts" }, button("Browse", async () => browseDialog(s, "")), can("operator") ? button("Restore", async () => restoreDialog(s, "")) : "")]),
+    snaps.slice(0, 50).map(s => [suspect.has(s.id) ? el("span", null, when(s.time) + " ", el("span", { className: "pill suspicious", textContent: "looks like ransomware" })) : when(s.time),
+      s.hostname, s.sources.map(x => x.name).join(", "), s.stats.files, size(s.stats.bytes), size(s.stats.bytes_uploaded),
+      el("div", { className: "acts" }, button("Browse", async () => browseDialog(s, "")), can("operator") ? button("Restore", async () => restoreDialog(s, "")) : "", can("admin") ? deleteButton(s, prot) : "")]),
     "No snapshots yet.");
 }
 
@@ -441,6 +455,111 @@ async function alertsDialog() {
   $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
 }
 // offsiteSummary says in a few words how the second copy is doing.
+// lockEnd is when the retention lock lets go of a snapshot, or null.
+function lockEnd(s, prot) {
+  if (!prot.lock_days) return null;
+  const end = new Date(new Date(s.time).getTime() + prot.lock_days * 86400000);
+  return end > new Date() ? end : null;
+}
+function deleteButton(s, prot) {
+  const end = lockEnd(s, prot);
+  if (end) return el("span", { className: "pill locked", title: "The retention lock keeps every snapshot for " + prot.lock_days + " days.", textContent: "Locked until " + day(end) });
+  const b = el("button", { className: "danger", textContent: "Delete" });
+  b.onclick = () => withPassword("Delete this snapshot", "The snapshot of " + s.hostname + " from " + when(s.time) + " will be deleted. " +
+    (prot.delete_delay_days ? "It can be brought back under “Ransomware protection” for " + prot.delete_delay_days + (prot.delete_delay_days === 1 ? " day" : " days") + "; after that its data is given up." : "It is gone at once and cannot be brought back, because deleted snapshots are kept for 0 days.") +
+    " Everyone who gets alerts is told.", "Delete the snapshot", async password => {
+      await call("DELETE", "/api/v1/snapshots/" + s.id, null, { "X-BB-Password": password });
+      $("dlg").close(); await refresh();
+    });
+  return b;
+}
+const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
+function protectionSays(p) {
+  return (p.lock_days ? "Snapshots are locked for " + plural(p.lock_days, "day", "days") : "No retention lock") + "; " +
+    (p.delete_delay_days ? "deleted snapshots are kept " + plural(p.delete_delay_days, "day", "days") : "deleted snapshots are gone at once") + "; " +
+    (p.detect ? "backups are checked for ransomware." : "backups are not checked for ransomware.");
+}
+async function protectionDialog() {
+  const [p, sus, gone, off] = await Promise.all([call("GET", "/api/v1/protection"), call("GET", "/api/v1/suspicions"), call("GET", "/api/v1/deleted-snapshots"), call("GET", "/api/v1/offsite")]);
+  const again = () => protectionDialog();
+  const kids = [el("h3", { textContent: "Ransomware protection" }),
+    el("div", { className: "hint", textContent: "Ransomware goes for the backups first. These settings keep backups from being deleted, by a program on a backed-up machine or by someone who has stolen a password, and make the server notice when a machine's files look encrypted. Agents can never delete anything on the server." })];
+
+  // Backups that look wrong.
+  const open = sus.filter(x => !x.reviewed), seen = sus.filter(x => x.reviewed);
+  kids.push(el("h4", { textContent: "Backups that look like ransomware" }));
+  if (!open.length) kids.push(el("div", { className: "hint", id: "susNone", textContent: p.detect ? "None. Every backup is compared with the one before it: files replaced by copies with a new ending, ransom notes, most files changed at once, or a burst of data that does not compress." : "Backups are not being checked." }));
+  else {
+    const box = el("div", { className: "scroll", id: "susList" });
+    kids.push(box);
+    const t = el("table", { className: "loose" }, el("tr", null, ...["Backup", "What was found", ""].map(h => el("th", { textContent: h }))));
+    for (const x of open) {
+      const good = snapList.find(s => s.id === x.last_good);
+      const acts = el("div", { className: "acts", style: "flex-direction:column;align-items:flex-start" });
+      if (good) acts.append(button("Browse the backup before it", async () => browseDialog(good, "")));
+      if (good && can("operator")) acts.append(button("Restore from the backup before it", async () => restoreDialog(good, "")));
+      if (can("admin")) { const ok = confirmButton("This was expected", "Click again: retention goes on", async () => { await call("POST", "/api/v1/suspicions/" + x.snapshot_id + "/review"); await refresh(); await again(); }); ok.className = ""; acts.append(ok); }
+      t.append(el("tr", null, el("td", null, el("div", { textContent: (x.agent || x.agent_id) + ", " + when(x.time) }), el("div", { className: "sub", textContent: "Policy " + (x.policy || x.policy_id) + (good ? ". The backup before it: " + when(good.time) : "") })),
+        el("td", { className: "reasons" }, el("ul", null, ...x.reasons.map(r => el("li", { textContent: r })))), el("td", null, acts)));
+    }
+    box.append(t);
+    kids.push(el("div", { className: "hint", textContent: "Look at the machine before anything else. Until someone chooses “This was expected”, no older backup of the policy is forgotten and nothing deleted from it is given up. If the files really were encrypted, restore from the backup before, then delete the bad one." }));
+  }
+  if (seen.length) kids.push(el("details", null, el("summary", { textContent: "Looked at in the last 90 days (" + seen.length + ")" }),
+    el("ul", null, ...seen.map(x => el("li", { textContent: (x.agent || x.agent_id) + ", " + when(x.time) + ": " + x.reasons.join(" ") + " Looked at by " + x.reviewed_by + ", " + when(x.reviewed) + "." })))));
+
+  // Deleted snapshots.
+  kids.push(el("h4", { textContent: "Deleted snapshots" }));
+  if (!gone.length) kids.push(el("div", { className: "hint", id: "goneNone", textContent: p.delete_delay_days ? "None. A snapshot that someone deletes, or that a policy's retention rules forget, stays here for " + plural(p.delete_delay_days, "day", "days") + " and can be brought back." : "Deleted snapshots are not kept: they are gone at once." }));
+  else {
+    const box = el("div", { className: "scroll", id: "goneList" });
+    kids.push(box);
+    const t = el("table", { className: "loose" }, el("tr", null, ...["Taken", "Machine", "Holds", "Deleted", "Gone for good", ""].map(h => el("th", { textContent: h }))));
+    for (const d of gone) t.append(el("tr", null, el("td", { textContent: when(d.time) }), el("td", { textContent: d.hostname }),
+      el("td", { className: "holds", textContent: d.paths.join(", ") + " (" + size(d.bytes) + ")" }),
+      el("td", { textContent: when(d.deleted) + (d.by === "retention" ? ", by the retention rules" + (d.policy ? " of " + d.policy : "") : ", by " + d.by) }),
+      el("td", { textContent: when(d.purge) + (d.held ? ", or later: kept while a backup of the policy looks like ransomware" : "") }),
+      el("td", null, can("operator") ? button("Bring back", async () => { await call("POST", "/api/v1/deleted-snapshots/" + d.id + "/restore"); await refresh(); await again(); }) : "")));
+    box.append(t);
+    kids.push(el("div", { className: "hint", textContent: "Their data still takes up space until they are gone for good. There is no way to empty this list early; that is what protects it." }));
+  }
+
+  // Settings.
+  kids.push(el("h4", { textContent: "Settings" }));
+  const lock = el("input", { type: "number", id: "protLock", min: 0, max: 3650, value: p.lock_days, disabled: !can("admin") });
+  const delay = el("input", { type: "number", id: "protDelay", min: 0, max: 3650, value: p.delete_delay_days, disabled: !can("admin") });
+  const detect = el("input", { type: "checkbox", id: "protDetect", checked: p.detect, disabled: !can("admin") });
+  const msg = el("div", { className: "msg", id: "err" });
+  if (p.pending) {
+    const cancel = el("button", { id: "protCancel", textContent: "Cancel the change" });
+    cancel.onclick = async () => { try { await call("DELETE", "/api/v1/protection/pending"); await refresh(); await again(); } catch (e) { msg.textContent = e.message; } };
+    kids.push(el("div", { className: "pending", id: "protPending" }, el("span", null, el("b", { textContent: "A weaker setting is waiting. " }),
+      "From " + when(p.pending_at) + ", as " + p.pending_by + " asked: " + protectionSays(p.pending)), can("admin") ? cancel : ""));
+  }
+  kids.push(el("label", { textContent: "Retention lock: no snapshot can be deleted until it is this many days old" }), lock,
+    el("div", { className: "hint", textContent: "0 turns the lock off. While a snapshot is locked nobody can delete it, not an administrator and not a policy's retention rules, so a policy may hold more snapshots than its rules say. Choose a number the disk has room for." }),
+    el("label", { textContent: "Keep deleted snapshots this many days before their data is given up" }), delay,
+    el("div", { className: "hint", textContent: "Applies to snapshots deleted by hand and to those the retention rules forget, which is what protects against a policy whose rules were changed to keep nothing. Space is reclaimed that many days later." }),
+    el("label", { className: "check" }, detect, "Check every backup for signs of ransomware, and stop forgetting older backups when one is found"),
+    el("div", { className: "hint", textContent: "A change that makes the protection stronger applies at once. One that makes it weaker applies after " + (p.wait_hours >= 24 ? plural(Math.round(p.wait_hours / 24), "day", "days") : plural(p.wait_hours, "hour", "hours")) + ", everyone who gets alerts is told right away, and it can be cancelled until then. That way a stolen password cannot switch the protection off and delete the backups in one visit." }));
+  const offLocked = off.kind === "s3" && off.enabled && off.lock_days > 0;
+  kids.push(el("h4", { textContent: "If the server itself is taken over" }),
+    el("div", { className: "hint", id: "protOffsite", textContent: offLocked ? "The offsite copy is locked for " + plural(off.lock_days, "day", "days") + " with S3 Object Lock" + (off.locked_until ? " (everything in it until at least " + day(off.locked_until) + ")" : "") + ". Not even this server can delete it before then."
+      : "Everything above is enforced by this server. Someone who controls the server's own disk can still erase it. What survives that is an offsite copy in S3 storage with Object Lock, which nobody can delete before its time, not even this server. " + (off.kind ? "The offsite copy is not locked. " : "There is no offsite copy. ") + "Set it up under “Offsite copy”." }));
+  const save = el("button", { className: "primary", id: "protSave", textContent: "Save" });
+  save.onclick = () => {
+    const want = { lock_days: parseInt(lock.value, 10) || 0, delete_delay_days: parseInt(delay.value, 10) || 0, detect: detect.checked };
+    const weaker = want.lock_days < p.lock_days || want.delete_delay_days < p.delete_delay_days || (p.detect && !want.detect);
+    withPassword("Change the ransomware protection", protectionSays(want) + (weaker && p.wait_hours ? " What is weaker than now applies from " + when(new Date(Date.now() + p.wait_hours * 3600000).toISOString()) + "." : ""), "Save", async password => {
+      await call("PUT", "/api/v1/protection", Object.assign({ password }, want)); await refresh(); await again();
+    }, again);
+  };
+  kids.push(msg, el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), can("admin") ? save : ""));
+  openDialog(true, ...kids);
+}
+$("protect").onclick = () => protectionDialog().catch(e => notice("Something went wrong", e.message));
+$("susBtn").onclick = () => protectionDialog().catch(e => notice("Something went wrong", e.message));
+
 function offsiteSummary(o) {
   if (!o.kind) return "not set up";
   const j = o.last_job;
@@ -463,12 +582,18 @@ async function offsiteDialog() {
   const access = el("input", { id: "offAccess", value: o.access_key || "", placeholder: "Access key", autocomplete: "off" });
   const secret = el("input", { id: "offSecret", type: "password", placeholder: o.secret_key_set ? "Saved. Type to replace it." : "Secret key", autocomplete: "new-password" });
   const vhost = el("input", { type: "checkbox", checked: !!o.virtual_host });
+  const lockDays = el("input", { type: "number", id: "offLockDays", min: 0, max: 3650, value: o.lock_days || 0 });
+  const lockMode = el("select", { id: "offLockMode" }, el("option", { value: "compliance", textContent: "Compliance: nobody can lift the lock" }),
+    el("option", { value: "governance", textContent: "Governance: an account with a special permission can" }));
+  lockMode.value = o.lock_mode || "compliance";
   const at = el("input", { type: "time", value: o.kind ? (o.daily_at || "") : "03:00" });
   const s3Box = el("div", null,
     el("label", { textContent: "Service address and region" }), el("div", { className: "two" }, endpoint, region),
     el("label", { textContent: "Bucket" }), el("div", { className: "two" }, bucket, prefix),
     el("label", { textContent: "Access key and secret key" }), el("div", { className: "two" }, access, secret),
-    el("label", { className: "check" }, vhost, "Address the bucket as bucket.host (rarely needed)"));
+    el("label", { className: "check" }, vhost, "Address the bucket as bucket.host (rarely needed)"),
+    el("label", { textContent: "Lock the copy against deletion for this many days (S3 Object Lock)" }), el("div", { className: "two" }, lockDays, lockMode),
+    el("div", { className: "hint", textContent: "0 means no lock. With a lock, nothing in the copy can be deleted or overwritten before its time, not by this server and not by someone who has its storage keys, and a lost server can be recovered from the copy as it was on an earlier day. The lock is renewed for as long as the copy is kept up to date. The bucket must have been created with Object Lock switched on (Amazon S3, Backblaze B2, Wasabi and MinIO can). Data stays in the bucket, and is paid for, at least this long after the backups it belongs to were forgotten. With Compliance the lock cannot be undone, so start with a small number." }));
   const folderBox = el("div", null, el("label", { textContent: "Folder on the server" }), folder,
     el("div", { className: "hint", textContent: "The folder must already exist. If the disk or share is not connected, the copy fails instead of writing somewhere else." }));
   const show = () => { s3Box.hidden = kind.value !== "s3"; folderBox.hidden = kind.value !== "folder"; };
@@ -477,7 +602,8 @@ async function offsiteDialog() {
   const say = (text, good) => { msg.textContent = text; msg.style.color = good ? "var(--good)" : ""; };
   const body = () => ({ enabled: enabled.checked, kind: kind.value, folder: folder.value.trim(), endpoint: endpoint.value.trim(), region: region.value.trim(),
     bucket: bucket.value.trim(), prefix: prefix.value.trim(), access_key: access.value.trim(), secret_key: secret.value,
-    secret_key_set: !secret.value && !!o.secret_key_set, virtual_host: vhost.checked, daily_at: at.value });
+    secret_key_set: !secret.value && !!o.secret_key_set, virtual_host: vhost.checked, daily_at: at.value,
+    lock_days: kind.value === "s3" ? parseInt(lockDays.value, 10) || 0 : 0, lock_mode: lockMode.value });
   const saved = s => { o.secret_key_set = s.secret_key_set; secret.value = ""; if (s.secret_key_set) secret.placeholder = "Saved. Type to replace it."; };
   const save = el("button", { className: "primary", textContent: "Save" });
   save.onclick = async () => { try { await call("PUT", "/api/v1/offsite", body()); $("dlg").close(); await refresh(); } catch (e) { say(e.message); } };
@@ -487,7 +613,7 @@ async function offsiteDialog() {
     try {
       saved(await call("PUT", "/api/v1/offsite", body()));
       const t = await call("POST", "/api/v1/offsite/test");
-      say("It works: the location can be read and written. It holds " + t.objects + " files (" + size(t.bytes) + ").", true);
+      say("It works: the location can be read and written" + (t.locks ? ", and the bucket can lock what is stored in it" : "") + ". It holds " + t.objects + " files (" + size(t.bytes) + ").", true);
     } catch (e) { say(e.message); }
   };
   const run = el("button", { textContent: "Save and copy now" });
@@ -497,6 +623,7 @@ async function offsiteDialog() {
   const state = el("dl");
   if (o.kind) {
     state.append(el("dt", { textContent: "Last complete copy" }), el("dd", { textContent: o.last_success ? when(o.last_success) : "never" }));
+    if (o.lock_days) state.append(el("dt", { textContent: "Locked" }), el("dd", { id: "offLocked", textContent: o.locked_until ? "Everything in the copy until at least " + day(o.locked_until) : "From the next copy on" }));
     if (o.last_job && o.last_job.status === "failed") state.append(el("dt", { textContent: "Last run failed" }), el("dd", { textContent: when(o.last_job.created) + ": " + o.last_job.error }));
   }
   openDialog(false, el("h3", { textContent: "Offsite copy" }),
@@ -956,12 +1083,13 @@ async function browseDialog(s, path, trail) {
 const labels = { files: "Files", dirs: "Folders", bytes: "Size", files_changed: "Files changed", bytes_read: "Data read", bytes_uploaded: "New data stored",
   chunks_new: "New chunks", warnings: "Warnings", skipped: "Already up to date", packs_removed: "Pack files removed", packs_rewritten: "Pack files rewritten",
   bytes_freed: "Space freed", chunks_removed: "Chunks removed", chunks: "Chunks checked", packs: "Pack files checked", errors: "Errors",
-  uploaded: "Files copied", uploaded_bytes: "Data copied", deleted: "Files removed from the copy", objects: "Files in the copy" };
+  uploaded: "Files copied", uploaded_bytes: "Data copied", deleted: "Files removed from the copy", objects: "Files in the copy",
+  relocked: "Files locked for longer", pruned: "Old versions removed after their lock ran out", locked_until: "Everything locked until" };
 function facts(dl, obj) {
   for (const k in obj || {}) {
     const v = obj[k];
     if (v == null || typeof v === "object" && !Array.isArray(v)) continue;
-    const text = Array.isArray(v) ? v.join("\n") : /bytes/.test(k) ? size(v) : String(v);
+    const text = Array.isArray(v) ? v.join("\n") : /bytes/.test(k) ? size(v) : k === "locked_until" ? day(v) : String(v);
     if (text === "") continue;
     dl.append(el("dt", { textContent: labels[k] || k.replace(/_/g, " ") }), el("dd", { textContent: text }));
   }
@@ -1163,10 +1291,14 @@ function recoverPage(st) {
   const access = el("input", { id: "recAccess", placeholder: "Access key", autocomplete: "off" });
   const secret = el("input", { id: "recSecret", type: "password", placeholder: "Secret key", autocomplete: "new-password" });
   const vhost = el("input", { type: "checkbox" });
+  const asOf = el("input", { type: "datetime-local", id: "recAsOf" });
   const s3 = el("div", null, el("label", { textContent: "Service address and region" }), el("div", { className: "two" }, endpoint, region),
     el("label", { textContent: "Bucket" }), el("div", { className: "two" }, bucket, prefix),
     el("label", { textContent: "Access key and secret key" }), el("div", { className: "two" }, access, secret),
-    el("label", { className: "check", style: "font-weight:400;display:flex;gap:8px;align-items:center" }, vhost, "The bucket name goes in the host name (needed by a few services)"));
+    el("label", { className: "check", style: "font-weight:400;display:flex;gap:8px;align-items:center" }, vhost, "The bucket name goes in the host name (needed by a few services)"),
+    el("details", null, el("summary", { textContent: "The copy was damaged or deleted too" }),
+      el("label", { textContent: "Take the copy as it was at" }), asOf,
+      el("div", { className: "hint", textContent: "For a bucket with Object Lock. Choose a time before the damage was done: the copy is read as it was then, whatever was deleted or overwritten since. Leave empty to take the copy as it is now." })));
   vhost.style.width = "auto";
   const dir = el("div", { hidden: true }, ...field("Folder on this server", folder));
   kind.onchange = () => { s3.hidden = kind.value !== "s3"; dir.hidden = kind.value !== "folder"; };
@@ -1177,7 +1309,8 @@ function recoverPage(st) {
     msg.textContent = ""; go.disabled = true;
     try {
       await pub("POST", "/api/v1/setup/recover", { key: k.key.value.trim(), offsite: { kind: kind.value, folder: folder.value.trim(), endpoint: endpoint.value.trim(),
-        region: region.value.trim(), bucket: bucket.value.trim(), prefix: prefix.value.trim(), access_key: access.value.trim(), secret_key: secret.value, virtual_host: vhost.checked } });
+        region: region.value.trim(), bucket: bucket.value.trim(), prefix: prefix.value.trim(), access_key: access.value.trim(), secret_key: secret.value, virtual_host: vhost.checked },
+        as_of: kind.value === "s3" && asOf.value ? new Date(asOf.value).toISOString() : undefined });
       await boot();
     } catch (e) { msg.textContent = e.message; go.disabled = false; }
   };

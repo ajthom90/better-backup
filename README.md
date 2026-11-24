@@ -62,6 +62,10 @@ backup until it has run beside your current one for a while.
 - **Offsite copy**: a second copy of every backup in S3-compatible storage
   (Amazon S3, Backblaze B2, Wasabi, MinIO) or on another disk or share,
   brought up to date every day. It is encrypted like the original.
+- **Ransomware protection**: deleted snapshots can be brought back for a
+  week, a retention lock, backups that look encrypted are noticed and the
+  older ones kept, and the offsite copy can be locked with S3 Object Lock.
+  See [Ransomware protection](#ransomware-protection).
 - **Disaster recovery**: `bb-server restore` reads a repository directly and
   needs only the repository folder and its key.
 - **Runs in Docker or natively** as a systemd unit, launchd daemon or Windows
@@ -960,6 +964,77 @@ is not part of it. **Keep `repo.key` somewhere other than the server**, or
 the offsite copy cannot be used after the server is gone. The S3 secret key is
 kept in the server's database, like the SMTP password.
 
+### Ransomware protection
+
+Ransomware goes for the backups before it shows itself. There are three ways
+it, or the person behind it, can reach them, and the server guards each.
+Everything here is under "Ransomware protection" in the web UI.
+
+**From a backed-up machine.** An agent can only add to the repository. Its
+API has no call that deletes anything, and it can read only chunks it already
+knows. What a taken-over machine can do is back up its encrypted files, so
+that the retention rules push the good backups out. So the server compares
+every backup with the one before it and looks for:
+
+- files replaced by files of the same name with a new ending
+  (`report.docx` gone, `report.docx.locked` in its place),
+- the same new file with a name like a ransom note's in many folders,
+- half the files changed or gone, or a quarter when the new data does not
+  compress, as encrypted data does not,
+- a burst of data that does not compress, five times what the policy's
+  backups usually add. This is what an encrypted disk looks like in an image
+  or virtual machine backup.
+
+The server measures this on what it receives; it does not take the machine's
+word. A backup that looks wrong is still kept, finishes with warnings, shows
+at the top of the page and goes out as an alert. From then on **nothing older
+of that policy is forgotten**, whatever its retention rules say, until an
+administrator chooses "This was expected" or deletes the bad backup. Each of
+these signs also has honest causes (a big reorganisation, converting a photo
+library), which is why a person decides.
+
+**With a stolen password.** Someone signed in as an administrator could
+delete snapshots or set a policy to keep nothing.
+
+- A deleted snapshot is only set aside, for 7 days unless you change it, and
+  "Bring back" restores it. This holds for snapshots deleted by hand and for
+  those the retention rules forget. Their disk space is freed when the days
+  are over, and there is no way to empty the list early.
+- With a retention lock of N days, no snapshot can be deleted before it is N
+  days old, by anyone or by retention. It is off until you set it; a policy
+  then holds at least N days of snapshots, so the disk must have room.
+- Deleting a snapshot takes an administrator, who types their password
+  again, and everyone who gets alerts is told. So are the people who got
+  alerts until now when someone changes where alerts go.
+- A change that makes any of this weaker takes effect three days later. It
+  is announced at once and can be cancelled until then. A change that makes
+  it stronger applies immediately.
+
+**By taking over the server.** Whoever controls the server's disk can erase
+the repository, and nothing the server enforces stops that. What survives is
+an offsite copy that the server itself cannot delete: under "Offsite copy",
+set "Lock the copy against deletion" to a number of days. This needs a bucket
+created with Object Lock (Amazon S3, Backblaze B2, Wasabi and MinIO have
+it). Then:
+
+- everything uploaded is locked until a date at least that many days away,
+  and each run moves the date on for everything the repository still has;
+- deleting from the copy only hides a file, and overwriting only adds a
+  version. The old data stays until its lock has run out, and the server
+  then removes it;
+- when recovering a lost server, "The copy was damaged or deleted too" takes
+  the copy as it was at a time you choose, ignoring everything done to it
+  since.
+
+In "Compliance" mode nobody can lift a lock, not even the account owner, so
+try a small number of days first: you pay for the storage until the locks run
+out. A folder cannot be locked. The storage keys the server holds should not
+be allowed to change the bucket's settings or delete the bucket.
+
+What this does not cover: the lock days must be longer than the time it
+takes you to notice an attack, and the repository key must be kept somewhere
+other than the server, as always.
+
 ### If the server is lost
 
 Everything can be done from the browser. You need the repository key
@@ -969,7 +1044,8 @@ disk the repository is on.
 **From the offsite copy.** Install a new server and open its page. Instead
 of creating an administrator choose "Recover a lost server instead…", say
 where the copy is and give the key. The page shows the download and then
-the sign-in of the old server.
+the sign-in of the old server. If the copy is locked and was damaged too,
+open "The copy was damaged or deleted too" and give a time before the damage.
 
 **From the repository disk.** Start the new server with `--repo` pointing at
 the old repository. It finds backups but no key, and its page asks for the
@@ -1018,7 +1094,12 @@ bb-server fetch --repo /mnt/new-disk/repo \
   leaves out.
 - The repository itself lives on a local disk or mounted share; S3 is for the
   offsite copy. The copy holds what the repository holds, so a snapshot
-  forgotten here is also removed there at the next run.
+  forgotten here is also removed there at the next run, unless the copy is
+  locked.
+- The ransomware checks compare file backups folder by folder. Image and
+  virtual machine backups are judged only by how much new data they add and
+  whether it compresses. The locked offsite copy has run against MinIO, not
+  yet against Amazon S3 or Backblaze B2.
 
 ## Roadmap
 
@@ -1028,7 +1109,7 @@ bb-server fetch --repo /mnt/new-disk/repo \
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. restore over the running system with the registry, non-authoritative and authoritative Active Directory restore in DSRM (little tested on real machines) |
-| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node), VMware vSphere virtual machines over the network (untested on a real host, full reads only). Done also: users with roles, an activity log, and recovering a lost server in the browser. Done also: health report, summaries, webhooks, cancelling jobs, scheduled checks. To do: VMware Changed Block Tracking, Postgres option, two-factor sign-in |
+| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node), VMware vSphere virtual machines over the network (untested on a real host, full reads only). Done also: users with roles, an activity log, and recovering a lost server in the browser. Done also: health report, summaries, webhooks, cancelling jobs, scheduled checks. Done also: ransomware protection (delayed deletion, retention lock, detection, locked offsite copy). To do: VMware Changed Block Tracking, Postgres option, two-factor sign-in |
 | 6. Full recovery (in progress) | Done: whole-machine backup, bare-metal recovery disc, restore as a new Hyper-V machine. To do: driver injection for different hardware, SQL Server and Exchange writers, object-level AD restore |
 
 See [docs/architecture.md](docs/architecture.md) for the design and the
