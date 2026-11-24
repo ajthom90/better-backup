@@ -133,8 +133,8 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("a policy needs a name")
 		return
 	}
-	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 && !p.SystemState && !p.BareMetal {
-		bad("a policy needs at least one path, volume or virtual machine, the system state or the whole machine")
+	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 && !p.SystemState && !p.BareMetal && !p.TrueNASConfig {
+		bad("a policy needs at least one path, volume or virtual machine, the system state, the whole machine or the TrueNAS configuration")
 		return
 	}
 	if !p.BareMetal {
@@ -166,6 +166,10 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.SystemState && a.OS != "windows" {
 		bad("the system state can only be backed up on a Windows machine")
+		return
+	}
+	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.TrueNASConfig && a.OS != "linux" {
+		bad("the TrueNAS configuration can only be backed up by an agent running on TrueNAS SCALE")
 		return
 	}
 	if a, err := s.agent(p.AgentID); err != nil || a == nil || a.Revoked || a.Recovery {
@@ -226,7 +230,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, SystemState: p.SystemState, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, SystemState: p.SystemState, TrueNASConfig: p.TrueNASConfig, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot}}
 	return j, s.enqueue(j)
 }
 

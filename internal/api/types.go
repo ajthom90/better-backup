@@ -130,25 +130,30 @@ type Policy struct {
 	// MachineDisks names the disks BareMetal covers: numbers such as "0"
 	// on Windows, devices such as /dev/sda elsewhere. Empty: the disk
 	// the system starts from.
-	MachineDisks []string  `json:"machine_disks,omitempty"`
-	Schedule     Schedule  `json:"schedule"`
-	Retention    Retention `json:"retention"`
-	// NoSnapshot backs up the live file system instead of a volume
-	// snapshot. It only matters on Windows, where snapshots are the
-	// default.
+	MachineDisks []string `json:"machine_disks,omitempty"`
+	// TrueNASConfig backs up the configuration of a TrueNAS system:
+	// every setting, and the secret seed that decrypts the passwords
+	// stored with them.
+	TrueNASConfig bool      `json:"truenas_config,omitempty"`
+	Schedule      Schedule  `json:"schedule"`
+	Retention     Retention `json:"retention"`
+	// NoSnapshot backs up the live file system instead of a snapshot.
+	// Snapshots are the default where there are any: VSS on Windows,
+	// and ZFS for the paths that are on ZFS datasets.
 	NoSnapshot bool      `json:"no_snapshot,omitempty"`
 	Enabled    bool      `json:"enabled"`
 	Created    time.Time `json:"created"`
 }
 
 type BackupSpec struct {
-	Paths       []string `json:"paths"`
-	Excludes    []string `json:"excludes,omitempty"`
-	Volumes     []string `json:"volumes,omitempty"`
-	VMs         []string `json:"vms,omitempty"`
-	Hypervisor  string   `json:"hypervisor,omitempty"`
-	VMTracking  string   `json:"vm_tracking,omitempty"`
-	SystemState bool     `json:"system_state,omitempty"`
+	Paths         []string `json:"paths"`
+	Excludes      []string `json:"excludes,omitempty"`
+	Volumes       []string `json:"volumes,omitempty"`
+	VMs           []string `json:"vms,omitempty"`
+	Hypervisor    string   `json:"hypervisor,omitempty"`
+	VMTracking    string   `json:"vm_tracking,omitempty"`
+	SystemState   bool     `json:"system_state,omitempty"`
+	TrueNASConfig bool     `json:"truenas_config,omitempty"`
 	// BareMetal and MachineDisks are as in Policy.
 	BareMetal    bool         `json:"bare_metal,omitempty"`
 	MachineDisks []string     `json:"machine_disks,omitempty"`

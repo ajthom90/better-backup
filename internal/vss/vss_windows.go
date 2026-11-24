@@ -88,8 +88,8 @@ func call(obj unsafe.Pointer, slot int, args ...uintptr) uintptr {
 // inProgressError is VSS_E_SNAPSHOT_SET_IN_PROGRESS: retry later.
 type inProgressError struct{ error }
 
-// providerError is VSS_E_UNEXPECTED_PROVIDER_ERROR. The provider gives
-// it for lasting faults, but also when several snapshots are made at
+// providerError is VSS_E_UNEXPECTED_PROVIDER_ERROR or VSS_E_PROVIDER_VETO.
+// The provider gives them for lasting faults, but also when several snapshots are made at
 // once, so it is worth a few more tries.
 type providerError struct{ error }
 
@@ -103,6 +103,11 @@ func check(hr uintptr, what string) error {
 	}
 	if code == 0x8004230F {
 		return providerError{fmt.Errorf("VSS %s failed (0x8004230F): the shadow copy provider had an unexpected error", what)}
+	}
+	if code == 0x80042306 {
+		// VSS_E_PROVIDER_VETO: the provider refused. Like the error
+		// above it also happens while other snapshots are being made.
+		return providerError{fmt.Errorf("VSS %s failed (0x80042306): the shadow copy provider refused the snapshot", what)}
 	}
 	msg := map[uint32]string{
 		0x80070005: "access denied: the agent must run as an administrator or as a service",

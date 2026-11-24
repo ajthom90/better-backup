@@ -26,6 +26,10 @@ backup until it has run beside your current one for a while.
   device on Linux) and restore it over a volume, onto another disk, or into
   an image file. Windows volumes are read from a VSS snapshot and free space
   on NTFS is skipped.
+- **ZFS snapshots, and TrueNAS SCALE**: on a machine with ZFS, files are read
+  from snapshots of their datasets and ZFS volumes from a snapshot too, all
+  taken at one instant. The agent runs on TrueNAS SCALE as an app, and also
+  backs up the system's configuration.
 - **Windows system state**: the registry, boot and system files, and on a
   domain controller the Active Directory database and SYSVOL, as the
   system's own VSS writers list them. It can be restored to a folder, or
@@ -158,6 +162,49 @@ use: Windows refuses to lock a volume with open files, and the system volume
 cannot be restored from the running system (see
 [bare-metal recovery](#bare-metal-recovery)).
 The target must be at least as large as the original volume.
+
+### TrueNAS SCALE and other ZFS systems
+
+On a machine with ZFS the agent reads from ZFS snapshots, as it reads from VSS
+snapshots on Windows. When a backup starts it takes a snapshot of every
+dataset that holds one of the policy's folders or is mounted below one, reads
+the files from there, and removes the snapshots when it is done. Datasets of
+one pool are frozen at the same instant. Nothing needs to be switched on, and
+it works the same on Proxmox VE or any Linux with OpenZFS. Tick "Read live
+files" in the policy (`--no-snapshot`) to go without.
+
+A ZFS volume (zvol), such as the disk of a virtual machine or an iSCSI
+extent, is backed up as an image. Give it as a volume, `/dev/zvol/tank/vm-disk`.
+It is frozen together with the folders, and restoring it in place writes the
+image back onto the volume.
+
+**Installing on TrueNAS SCALE** (24.10 or newer). In the web UI choose "Add an
+agent". Under "On TrueNAS SCALE" it shows a short text for a custom app, with
+the enrollment token filled in. Change the folder to one on a pool of yours,
+then in TrueNAS open Apps, Discover Apps, the menu at the top right, "Install
+via YAML", and paste it. The NAS shows up under Agents a few seconds later.
+
+The app is privileged and shares the host's process ids, and with
+`BB_HOST_ROOT=/proc/1/root` the agent works in the file system of TrueNAS
+itself rather than the container's. So policies name the real paths
+(`/mnt/tank/documents`), snapshots are taken with the system's own `zfs`
+command, and a restore in place writes to the datasets. Its identity is kept
+in the folder you chose, so it survives TrueNAS updates.
+
+**The TrueNAS configuration.** Tick "TrueNAS: back up the system
+configuration" in the policy (`--truenas-config`). The backup then holds
+`truenas-config.tar`: the settings database, the secret seed that unlocks the
+passwords stored in it, and root's SSH keys, the same file TrueNAS makes
+under Manage Configuration with "Export Password Secret Seed" ticked. To put
+it back, restore "TrueNAS configuration" to a folder and upload the file in
+TrueNAS under System, General Settings, Manage Configuration, Upload File.
+After a rebuild that brings back the pools, shares, users and apps settings;
+then restore the data.
+
+**Permissions.** On Linux and macOS a backup keeps each file's extended
+attributes beside its owner, group and mode, and a restore puts them back.
+That covers POSIX ACLs, the NFSv4 ACLs TrueNAS uses for SMB shares, and what
+Samba stores for Windows clients, such as the hidden and read-only flags.
 
 ### Hyper-V virtual machines
 

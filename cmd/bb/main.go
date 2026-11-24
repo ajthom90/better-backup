@@ -51,7 +51,8 @@ Usage:
                                 partition, for bare-metal recovery)
         [--machine-disk DISK ...]  (with --whole-machine: these disks instead,
                                 such as 0 and 1, or /dev/sda)
-        [--no-snapshot]  (Windows: read live files instead of a VSS snapshot)
+        [--truenas-config]     (TrueNAS SCALE: the system configuration)
+        [--no-snapshot]  (read live files instead of a VSS or ZFS snapshot)
         [--keep-last N] [--keep-daily N] [--keep-weekly N]
         [--keep-monthly N] [--keep-yearly N]
   bb policy run POLICY [--wait]          back up now
@@ -148,6 +149,7 @@ var (
 	fWait    = fs.Bool("wait", false, "")
 	fSysSt   = fs.Bool("system-state", false, "")
 	fMachine = fs.Bool("whole-machine", false, "")
+	fTrueNAS = fs.Bool("truenas-config", false, "")
 	fSysRest = fs.Bool("system-state-in-place", false, "")
 	fNoReg   = fs.Bool("no-registry", false, "")
 	fAuthSys = fs.Bool("authoritative-sysvol", false, "")
@@ -431,16 +433,19 @@ func main() {
 			if p.BareMetal {
 				what = append(what, "whole machine")
 			}
+			if p.TrueNASConfig {
+				what = append(what, "TrueNAS configuration")
+			}
 			fmt.Fprintf(tabs, "%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.AgentID, sched, strings.Join(keep, ", "), strings.Join(what, ", "))
 		}
 	case "policy":
 		switch sub {
 		case "add":
-			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols)+len(fVMs) == 0 && !*fSysSt && !*fMachine {
-				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state or --whole-machine"))
+			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols)+len(fVMs) == 0 && !*fSysSt && !*fMachine && !*fTrueNAS {
+				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state, --whole-machine or --truenas-config"))
 			}
 			var p api.Policy
-			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, Hypervisor: *fHyper, VMwareServer: vmwareID(*fVMware), VMTracking: *fVMTrack, SystemState: *fSysSt, BareMetal: *fMachine, MachineDisks: fMDisks,
+			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, Hypervisor: *fHyper, VMwareServer: vmwareID(*fVMware), VMTracking: *fVMTrack, SystemState: *fSysSt, TrueNASConfig: *fTrueNAS, BareMetal: *fMachine, MachineDisks: fMDisks,
 				Schedule: api.Schedule{Interval: *fEvery, DailyAt: *fDaily}, Retention: fKeep, NoSnapshot: *fNoSnap, Enabled: true}, &p)
 			fmt.Printf("created policy %s (%s)\n", p.Name, p.ID)
 		case "run":

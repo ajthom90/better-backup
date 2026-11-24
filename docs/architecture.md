@@ -35,6 +35,9 @@ better-backup has three programs:
 | `internal/vss` | Windows Volume Shadow Copy requester and backup privileges |
 | `internal/disklayout` | Reading and writing GPT and MBR partition tables |
 | `internal/recovery` | The program on the recovery disc: system start-up, console, recovery session |
+| `internal/zfs` | ZFS snapshots of datasets and volumes for the length of a backup |
+| `internal/xattr` | Extended attributes, and with them ACLs, on Linux and macOS |
+| `internal/truenas` | The configuration of a TrueNAS system as one file |
 | `internal/svc` | Windows service, systemd and launchd integration |
 | `internal/hypervisor` | What virtual machine hosts have in common: the driver interface |
 | `internal/hyperv` | Hyper-V driver (PowerShell and WMI) |
