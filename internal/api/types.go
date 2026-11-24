@@ -55,7 +55,7 @@ type Agent struct {
 }
 
 // Hypervisors are the kinds of virtual machine host a policy can name.
-var Hypervisors = []string{"hyperv", "libvirt"}
+var Hypervisors = []string{"hyperv", "libvirt", "proxmox"}
 
 type Schedule struct {
 	Interval string `json:"interval,omitempty"` // Go duration, e.g. "24h"

@@ -37,7 +37,8 @@ better-backup has three programs:
 | `internal/hypervisor` | What virtual machine hosts have in common: the driver interface |
 | `internal/hyperv` | Hyper-V driver (PowerShell and WMI) |
 | `internal/libvirt` | KVM driver (libvirt backup jobs and checkpoints through `virsh`) |
-| `internal/nbd`, `internal/qemuimg` | NBD client and `qemu-nbd` wrapper that read and write QEMU disks |
+| `internal/proxmox` | Proxmox VE driver (`qm`, `pvesm`, and QEMU's machine protocol) |
+| `internal/nbd`, `internal/qemuimg`, `internal/qmp` | NBD client, `qemu-nbd` wrapper and QMP client that read and write QEMU disks |
 
 Data sources other than files (volume images, Hyper-V and other hypervisors,
 system state) will plug in beside `internal/backup`: each produces entries and
@@ -142,7 +143,8 @@ A hypervisor is a `hypervisor.Driver`: it lists the host's machines, freezes
 one (`Freeze`) into a configuration blob and a set of disks to image, and
 builds a machine again from such a blob (`NewRestore`). A machine is stored as
 an entry of type `vm` holding the configuration as a small file, whose name
-says which driver wrote it (`vm.json` for Hyper-V, `libvirt.json` for KVM),
+says which driver wrote it (`vm.json` for Hyper-V, `libvirt.json` for KVM,
+`proxmox.json` for Proxmox VE),
 and one image per disk. Disks are always stored as their raw contents in
 fixed 1 MiB blocks, whatever the format on the host, so any disk can be
 restored anywhere as a plain image.
@@ -160,6 +162,21 @@ job: QEMU exports each disk over NBD on a unix socket inside the machine's
 private folder, as of the moment the job began, and `internal/nbd` reads the
 allocation map, the dirty bitmap and the data from there. Stopped machines
 and restores go through `qemu-nbd`, which handles the image formats.
+
+Proxmox VE does not use libvirt, so its driver talks to each machine's QEMU
+directly over the QMP socket Proxmox keeps for it (`internal/proxmox/live.go`).
+It builds by hand what a libvirt backup job is underneath: a scratch qcow2
+image on top of each disk, a `blockdev-backup` job with `sync=none` that
+copies into it what the machine is about to overwrite, and an NBD export of
+the scratch image; all disks start in one QMP transaction, so they are frozen
+at the same instant. Change tracking is a dirty bitmap per backup, added in
+that same transaction, and a frozen copy of the previous backup's bitmap is
+exported beside the data. Bitmaps are not persistent, so they work on raw
+volumes too and vanish with the QEMU process. Proxmox's services use the same
+socket, which serves one client at a time, so the driver connects only for
+the moments it needs. After the disks are read the driver checks that every
+job is still running, because QEMU ends a job it cannot keep its promise for
+(a full scratch folder), and then the machine is left out of the backup.
 
 ## Offsite copy
 

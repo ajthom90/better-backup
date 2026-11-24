@@ -1,10 +1,12 @@
 package server_test
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -402,4 +404,35 @@ func TestHypervisorPolicy(t *testing.T) {
 			t.Fatalf("saved hypervisor %q, want %q", p.Hypervisor, kind)
 		}
 	}
+}
+
+// qmpTalk sends lines to a QMP socket and returns the answers.
+func qmpTalk(t *testing.T, socket, script string) string {
+	t.Helper()
+	c, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(30 * time.Second))
+	r := bufio.NewReader(c)
+	var out strings.Builder
+	line, _ := r.ReadString('\n') // the greeting
+	out.WriteString(line)
+	for _, cmd := range strings.Split(strings.TrimSpace(script), "\n") {
+		if _, err := c.Write([]byte(cmd + "\n")); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				t.Fatalf("qmp: %v after %s", err, out.String())
+			}
+			out.WriteString(line)
+			if strings.Contains(line, `"return"`) || strings.Contains(line, `"error"`) {
+				break
+			}
+		}
+	}
+	return out.String()
 }

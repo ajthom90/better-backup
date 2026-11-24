@@ -31,9 +31,11 @@ jobs:
         run: go test -race -count=1 ./...
 
   kvm:
-    # Backs up and restores a real virtual machine through libvirt and
-    # QEMU: full, by change tracking, switched off, and as a new machine.
-    name: KVM (libvirt)
+    # Backs up and restores real virtual machines: through libvirt, and
+    # as Proxmox VE runs them (a bare QEMU, with stand-ins for Proxmox's
+    # own tools). Full, by change tracking, switched off, and restored
+    # as new machines.
+    name: KVM (libvirt, Proxmox)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,8 +56,11 @@ jobs:
         run: |
           go test -c -o /tmp/server.test ./internal/server/
           go test -c -o /tmp/qemuimg.test ./internal/qemuimg/
+          go test -c -o /tmp/proxmox.test ./internal/proxmox/
           sudo /tmp/qemuimg.test -test.v
-          sudo env BB_TEST_LIBVIRT=/var/lib/libvirt/images /tmp/server.test -test.v -test.run 'TestLibvirt'
+          sudo /tmp/proxmox.test -test.v
+          cd internal/server
+          sudo env BB_TEST_LIBVIRT=/var/lib/libvirt/images /tmp/server.test -test.v -test.run 'TestLibvirt|TestProxmox'
 
   build:
     name: Lint, cross-compile, Docker

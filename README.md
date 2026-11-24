@@ -216,8 +216,9 @@ bb restore SNAPSHOT --path web01 --target /var/lib/libvirt/images --name web01-r
 bb restore SNAPSHOT --path web01/disk-vda --target /tmp/vda.img --wait
 ```
 
-The agent works out by itself whether its host runs Hyper-V or libvirt; a
-policy can also say so (`--hypervisor libvirt`, "Hypervisor" in the web UI).
+The agent works out by itself whether its host runs Hyper-V, Proxmox VE or
+libvirt; a policy can also say so (`--hypervisor libvirt`, "Hypervisor" in
+the web UI).
 
 A running machine is backed up through a libvirt backup job (libvirt 7.2 and
 QEMU 4.2 or later): QEMU serves every disk as it was when the job began while
@@ -251,6 +252,63 @@ real workloads writing during a backup.
 Known gaps: network disks (Ceph RBD, iSCSI), pass-through and shared disks
 are skipped with a warning, the contents of an emulated TPM are not backed
 up, and a machine cannot yet be restored over the original.
+
+### Proxmox VE virtual machines
+
+Install the agent on each Proxmox VE node (the Linux package, running as
+root). It uses the node's own tools and needs nothing else installed. The
+commands and the web UI are the same as for the other hypervisors; a machine
+is named by its name or by its id:
+
+```sh
+bb policy add --name vms --agent pve01 --vm web01 --vm 105 --vm-tracking check --daily-at 23:00
+bb policy add --name all-vms --agent pve01 --vm '*' --daily-at 23:00
+bb restore SNAPSHOT --path web01 --name web01-restored --wait
+bb restore SNAPSHOT --path web01 --target local-lvm --name web01-restored --wait
+bb restore SNAPSHOT --path web01/disk-scsi0 --target /tmp/scsi0.img --wait
+```
+
+A policy covers the machines of the node its agent is on, so a cluster needs
+an agent and a policy per node; a machine that migrates to another node is
+picked up by that node's `'*'` policy and read in full the first time.
+Containers (LXC) are not covered.
+
+A running machine is backed up through its QEMU, the way Proxmox's own
+backup does it but with standard QEMU commands: a backup job keeps the old
+contents of whatever the machine overwrites, so every disk is read as it was
+at one instant, on any kind of storage. What the machine overwrites during
+the backup is kept in `/var/tmp` until the backup ends (set
+`BB_SCRATCH_DIR` in the agent's environment to use another folder); a busy
+machine needs room there. If the guest agent is enabled for the machine, its
+file systems are flushed and frozen for that instant. A machine that is
+switched off is read from its volumes. Disks marked "no backup" in Proxmox
+are left out, as Proxmox's own backup leaves them out.
+
+`--vm-tracking on` keeps a dirty bitmap in the running QEMU, like Proxmox
+Backup Server does, so the next backup reads only what was written since.
+It works on every kind of storage. The record lives in QEMU's memory: after
+a machine is stopped and started, or migrated, its next backup reads the
+disks in full again (and still stores only what changed).
+
+A restore creates a new machine, switched off, with the saved settings and
+its disks as new volumes on the storage named as the target, or with no
+target on the storages they were on. The machine gets its old id if that is
+free again and the next free id otherwise. It keeps its network (MAC)
+addresses and its SMBIOS identity and gets a new VM generation id, as with
+Proxmox's own restore.
+
+**This has not run on a real Proxmox VE node.** The automated tests run a
+real QEMU set up the way Proxmox sets its machines up, so reading running
+and stopped machines, the change tracking and the restored disks are tested
+for real on every change. Proxmox's own tools (`qm`, `pvesm`, `pvesh`) are
+replaced by stand-ins in those tests, so whether the real tools accept every
+call, LVM volume activation, Ceph storage, and Proxmox VE 9's new disk
+naming are untested. Try it on a machine that does not matter first, and
+check a restore.
+
+Known gaps: the contents of a TPM are not backed up, disks passed through
+from the host are skipped with a warning, cloud-init passwords have to be set
+again, and a machine cannot yet be restored over the original.
 
 ### Windows system state
 
@@ -422,7 +480,7 @@ Then use the two commands above, or start a new server with
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. restore over the running system with the registry, non-authoritative and authoritative Active Directory restore in DSRM (little tested on real machines) |
-| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt. To do: Proxmox and VMware providers, Postgres option, user roles |
+| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node). To do: VMware provider, Postgres option, user roles |
 | 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |
 
 See [docs/architecture.md](docs/architecture.md) for the design and the
