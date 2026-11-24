@@ -277,6 +277,8 @@ type Status struct {
 	RawBytes    int64  `json:"raw_bytes"`
 	Chunks      int64  `json:"chunks"`
 	RunningJobs int    `json:"running_jobs"`
+	// KeySaved is false until someone has downloaded the repository key.
+	KeySaved bool `json:"key_saved"`
 }
 
 type Error struct {
@@ -468,4 +470,119 @@ type MachinePartition struct {
 	Label  string `json:"label,omitempty"`
 	Mount  string `json:"mount,omitempty"`
 	Saved  bool   `json:"saved"`
+}
+
+// Roles, from least to most allowed. A viewer only reads; an operator
+// also runs backups and restores and edits policies and agents; an
+// administrator also manages users and the server's settings.
+const (
+	RoleViewer   = "viewer"
+	RoleOperator = "operator"
+	RoleAdmin    = "admin"
+)
+
+// User is a person who signs in to the web UI.
+type User struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Role     string `json:"role"`
+	Disabled bool   `json:"disabled,omitempty"`
+	// Password is write-only: set it to choose or change the password.
+	Password  string     `json:"password,omitempty"`
+	Created   time.Time  `json:"created"`
+	LastLogin *time.Time `json:"last_login,omitempty"`
+	// Token is true for the built-in identity of the admin token.
+	Token bool `json:"token,omitempty"`
+}
+
+// LoginRequest signs a user in.
+type LoginRequest struct {
+	Name     string `json:"name"`
+	Password string `json:"password"`
+}
+
+// Session is the answer to a sign-in: a bearer token for the admin API.
+type Session struct {
+	Token   string    `json:"token"`
+	Expires time.Time `json:"expires"`
+	User    User      `json:"user"`
+}
+
+// SetupStatus tells the web UI, before anyone is signed in, what the
+// server still needs.
+type SetupStatus struct {
+	Version string `json:"version"`
+	// NeedsSetup: no user exists yet.
+	NeedsSetup bool `json:"needs_setup"`
+	// NeedsToken: creating the first user needs the admin token, because
+	// the server is already in use.
+	NeedsToken bool `json:"needs_token,omitempty"`
+	// Locked: the repository exists but its key is missing.
+	Locked bool `json:"locked,omitempty"`
+	// LockedNeedsSignIn: entering the key needs an administrator.
+	LockedNeedsSignIn bool `json:"locked_needs_sign_in,omitempty"`
+	// CanRecover: the server is new and empty, so it may be replaced by
+	// what an offsite copy holds.
+	CanRecover bool `json:"can_recover,omitempty"`
+	// KeyFromEnv: the repository key is configured outside the server.
+	KeyFromEnv bool              `json:"key_from_env,omitempty"`
+	Recovery   *RecoveryProgress `json:"recovery,omitempty"`
+}
+
+// SetupRequest creates the first administrator.
+type SetupRequest struct {
+	Name     string `json:"name"`
+	Password string `json:"password"`
+	Token    string `json:"token,omitempty"`
+}
+
+// RecoverRequest rebuilds a new server from an offsite copy.
+type RecoverRequest struct {
+	Offsite OffsiteSettings `json:"offsite"`
+	Key     string          `json:"key"`
+}
+
+// UnlockRequest gives a server the key of the repository it found.
+type UnlockRequest struct {
+	Key string `json:"key"`
+}
+
+// RecoveryProgress describes a server recovery that is running or over.
+type RecoveryProgress struct {
+	Running bool   `json:"running"`
+	Done    int64  `json:"done"`
+	Total   int64  `json:"total"`
+	Error   string `json:"error,omitempty"`
+	// Restarting: the download is complete and the server is starting
+	// again on what it fetched.
+	Restarting bool `json:"restarting,omitempty"`
+}
+
+// AuditEntry is one line of the activity log.
+type AuditEntry struct {
+	ID     int64     `json:"id"`
+	Time   time.Time `json:"time"`
+	User   string    `json:"user"`
+	Remote string    `json:"remote,omitempty"`
+	Action string    `json:"action"`
+	Detail string    `json:"detail,omitempty"`
+}
+
+// ServerSettings is what the settings page shows and changes.
+type ServerSettings struct {
+	DataDir  string `json:"data_dir"`
+	RepoDir  string `json:"repo_dir"`
+	Listen   string `json:"listen"`
+	Hostname string `json:"hostname"`
+	// FixedTLSNames come from the command line; TLSNames are set here.
+	FixedTLSNames []string `json:"fixed_tls_names,omitempty"`
+	TLSNames      []string `json:"tls_names"`
+	Fingerprint   string   `json:"fingerprint"`
+	// KeySource is "file" (repo.key) or "environment".
+	KeySource string `json:"key_source"`
+	// KeySaved is when someone last downloaded the repository key.
+	KeySaved *time.Time `json:"key_saved,omitempty"`
+	// StateSaved is when the server's own configuration was last saved
+	// into the repository.
+	StateSaved *time.Time `json:"state_saved,omitempty"`
 }

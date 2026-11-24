@@ -28,6 +28,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	out.Snapshots, out.RunningJobs = len(s.snaps), len(s.running)
 	s.mu.Unlock()
+	out.KeySaved = s.setting("key_saved") != ""
 	reply(w, http.StatusOK, out)
 }
 
@@ -204,6 +205,7 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.kickBackground()
+	note(r, "%s", p.Name)
 	reply(w, http.StatusOK, p)
 }
 
@@ -512,6 +514,18 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	j.Restore.Sources = nil
+	where := "in place"
+	switch {
+	case len(req.Disks) > 0:
+		where = "onto its disks"
+	case req.Target != "":
+		where = "to " + req.Target
+	}
+	what := "everything"
+	if len(req.Include) > 0 {
+		what = strings.Join(req.Include, ", ")
+	}
+	note(r, "%s from snapshot %s of %s onto %s, %s", what, sn.ID, sn.Hostname, a.Name, where)
 	reply(w, http.StatusAccepted, j)
 }
 

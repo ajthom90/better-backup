@@ -111,6 +111,17 @@ active, and new jobs wait until they finish.
   An agent can fetch a chunk only if it knows its id, and ids are only learned
   from the agent's own snapshots or by already having the content. Agents can
   transfer chunks only while they have a running job.
+- **People.** Users sign in with a name and a password (Argon2id) and get a
+  random session token, stored hashed, that the page sends as a bearer
+  token; there are no cookies, so no cross-site request can ride on a
+  session. Each admin API route names the least role that may call it
+  (viewer, operator, admin) and, if it changes something, the line it leaves
+  in the activity log. The admin token in `admin.json` is a built-in
+  administrator for the command line.
+- **The server's own state.** The database and the certificate authority are
+  saved into the repository as `state/server.bak`, sealed with the
+  repository key, and travel with the offsite copy. A new, empty server can
+  take over from them (`internal/server/setup.go`).
 - **The server holds the key.** This is what allows dedup across machines and
   restores that need no secret from the agent. It means whoever controls the
   server and its key can read the backups; protect both accordingly.

@@ -94,8 +94,37 @@ repository key, all in its data directory:
 | Windows | `C:\ProgramData\better-backup` |
 | Docker | `/data` |
 
-> **Copy `repo.key` somewhere safe now.** Backups are encrypted with it. If
-> the key is lost, the backups cannot be read by anyone.
+Then open `https://THE-SERVER:8443/` in a browser. The first visit asks you
+to create the administrator; nothing on the server's own disk is needed for
+that. (A server that already has agents asks for the admin token from
+`admin.json` as well, so that an upgrade never leaves it open to whoever
+finds the page first.)
+
+> **Download the repository key now.** The page reminds you until you have:
+> "Download the key" saves `repo.key`. Backups are encrypted with it. If the
+> key is lost, the backups cannot be read by anyone.
+
+### Users, roles and the activity log
+
+Under "Users" an administrator adds the people who may sign in:
+
+| Role | May |
+| --- | --- |
+| Administrator | everything, including users, server settings and the repository key |
+| Operator | run backups and restores, manage agents and policies, delete snapshots |
+| Viewer | look only |
+
+Passwords are stored as Argon2id hashes. Repeated wrong sign-ins for a name
+are slowed down, a sign-in ends after 12 hours without use, and changing a
+password ends that user's other sign-ins. The "Activity log" lists who
+signed in and who changed or started what, for two years.
+
+The admin token in `admin.json` still works, for the `bb` command line and as
+the way back in if every administrator is locked out ("Use the admin token
+instead" on the sign-in page). Replace it under "Settings".
+
+"Settings" also holds the names and IP addresses the server's certificate
+carries (the same as `--tls-name`, without a restart).
 
 Use `--repo DIR` (or mount a volume at `/data/repo`) to put the repository on
 a bigger disk or a NAS mount.
@@ -144,8 +173,8 @@ revoke agents, create and edit policies, start backups, browse a snapshot and
 restore a file, a folder, a disk or all of it, rebuild a whole machine from
 the recovery disc, follow jobs and read their
 warnings, forget snapshots, verify the repository, reclaim space and set up
-email alerts. The `bb` command line does the same things for scripts. Sign in with the admin token
-from `admin.json` in the data directory. Your browser will warn about the
+email alerts. The `bb` command line does the same things for scripts. Sign in with the name and
+password you created on the first visit. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
 
 ### Whole volumes
@@ -616,25 +645,42 @@ kept in the server's database, like the SMTP password.
 
 ### If the server is lost
 
-All you need is the repository folder and `repo.key`:
+Everything can be done from the browser. You need the repository key
+(`repo.key`, downloaded from the web UI) and either the offsite copy or the
+disk the repository is on.
+
+**From the offsite copy.** Install a new server and open its page. Instead
+of creating an administrator choose "Recover a lost server instead…", say
+where the copy is and give the key. The page shows the download and then
+the sign-in of the old server.
+
+**From the repository disk.** Start the new server with `--repo` pointing at
+the old repository. It finds backups but no key, and its page asks for the
+key.
+
+Either way the server gets back its users, agents, policies, settings and
+its certificate authority: the server saves these into the repository,
+encrypted with the repository key, every day, soon after a change and before
+each offsite copy. Agents carry on without being enrolled again when the new
+server has the old one's address. A copy made by an older version holds only
+the backups; the page then asks for a new administrator, and agents are
+enrolled again.
+
+Only a new server, without users, agents or backups, can be replaced this
+way.
+
+The same from a command line, for a restore without starting a server:
 
 ```sh
 bb-server snapshots --repo /mnt/backup-disk/repo --data /folder/holding/repo.key
 bb-server restore --repo /mnt/backup-disk/repo --data /folder/holding/repo.key \
     --snapshot SNAPSHOT --target /restore/here
-```
 
-If the repository is gone too, download the offsite copy first:
-
-```sh
 export BB_S3_ACCESS_KEY='...' BB_S3_SECRET_KEY='...'
 bb-server fetch --repo /mnt/new-disk/repo \
     --s3-endpoint https://s3.us-west-004.backblazeb2.com --s3-bucket my-backups
 # or: bb-server fetch --repo /mnt/new-disk/repo --from-folder /mnt/offsite
 ```
-
-Then use the two commands above, or start a new server with
-`--repo /mnt/new-disk/repo` and `repo.key` in its data directory.
 
 ## Known limits
 
@@ -661,7 +707,7 @@ Then use the two commands above, or start a new server with
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. restore over the running system with the registry, non-authoritative and authoritative Active Directory restore in DSRM (little tested on real machines) |
-| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node), VMware vSphere virtual machines over the network (untested on a real host, full reads only). To do: VMware Changed Block Tracking, Postgres option, user roles |
+| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node), VMware vSphere virtual machines over the network (untested on a real host, full reads only). Done also: users with roles, an activity log, and recovering a lost server in the browser. To do: VMware Changed Block Tracking, Postgres option, two-factor sign-in |
 | 6. Full recovery (in progress) | Done: whole-machine backup, bare-metal recovery disc, restore as a new Hyper-V machine. To do: driver injection for different hardware, SQL Server and Exchange writers, object-level AD restore |
 
 See [docs/architecture.md](docs/architecture.md) for the design and the
