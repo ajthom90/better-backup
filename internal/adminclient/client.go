@@ -73,3 +73,6 @@ func (c *Client) Do(method, path string, in, out any) error {
 	}
 	return nil
 }
+
+// Base is the address of the server, as given to New.
+func (c *Client) Base() string { return c.base }

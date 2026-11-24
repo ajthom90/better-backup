@@ -369,6 +369,36 @@ func listPath(get tree.Getter, sn *tree.Snapshot, path string) ([]tree.Entry, er
 	if path == "" {
 		return sn.Sources, nil
 	}
+	cur, err := findEntry(get, sn, path)
+	if err != nil {
+		return nil, err
+	}
+	if !isFolder(cur) {
+		return []tree.Entry{*cur}, nil
+	}
+	return children(get, cur)
+}
+
+func isFolder(e *tree.Entry) bool {
+	return e.Type == tree.TypeDir || e.Type == tree.TypeVM || e.Type == tree.TypeMachine
+}
+
+// children reads everything a folder holds.
+func children(get tree.Getter, e *tree.Entry) ([]tree.Entry, error) {
+	var all []tree.Entry
+	for _, p := range e.Subtree {
+		es, err := tree.ReadPage(get, p)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, es...)
+	}
+	return all, nil
+}
+
+// findEntry finds what a snapshot holds at a path, written the way the
+// snapshot's machine writes paths.
+func findEntry(get tree.Getter, sn *tree.Snapshot, path string) (*tree.Entry, error) {
 	sep, eq := "/", func(a, b string) bool { return a == b }
 	if sn.OS == "windows" {
 		sep, eq = `\`, strings.EqualFold
@@ -387,7 +417,7 @@ func listPath(get tree.Getter, sn *tree.Snapshot, path string) ([]tree.Entry, er
 		cur := src
 		if rest != "" {
 			for _, name := range strings.Split(rest, sep) {
-				if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM && cur.Type != tree.TypeMachine {
+				if !isFolder(cur) {
 					return nil, fmt.Errorf("%s is not a directory in this snapshot", path)
 				}
 				var next *tree.Entry
@@ -412,18 +442,7 @@ func listPath(get tree.Getter, sn *tree.Snapshot, path string) ([]tree.Entry, er
 				cur = next
 			}
 		}
-		if cur.Type != tree.TypeDir && cur.Type != tree.TypeVM && cur.Type != tree.TypeMachine {
-			return []tree.Entry{*cur}, nil
-		}
-		var all []tree.Entry
-		for _, p := range cur.Subtree {
-			es, err := tree.ReadPage(get, p)
-			if err != nil {
-				return nil, err
-			}
-			all = append(all, es...)
-		}
-		return all, nil
+		return cur, nil
 	}
 	return nil, fmt.Errorf("%s is not in this snapshot", path)
 }

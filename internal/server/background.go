@@ -115,14 +115,14 @@ func (s *Server) maintain() {
 			return
 		}
 		s.mu.Lock()
-		if len(s.running) > 0 || s.offsiteBusy {
+		j := js[0]
+		if len(s.running) > 0 || s.offsiteBusy || (j.Type == api.JobGC && s.reading > 0) {
 			s.mu.Unlock()
-			return // retried when a job finishes
+			return // retried when a job or a download finishes
 		}
-		s.maint = true
+		s.maint, s.gcRunning = true, j.Type == api.JobGC
 		s.mu.Unlock()
 
-		j := js[0]
 		s.db.Exec(`UPDATE jobs SET status = ?, started = ? WHERE id = ?`, api.StatusRunning, ms(time.Now()), j.ID)
 		s.log.Info("maintenance started", "job", j.ID, "type", j.Type)
 		var result any
@@ -144,7 +144,7 @@ func (s *Server) maintain() {
 			s.finish(j, api.StatusSuccess, "", result, nil)
 		}
 		s.mu.Lock()
-		s.maint = false
+		s.maint, s.gcRunning = false, false
 		s.mu.Unlock()
 		s.wakeAll()
 	}

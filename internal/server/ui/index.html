@@ -15,6 +15,9 @@ main { max-width:1100px; margin:0 auto; padding:20px 16px 60px; }
 section { background:var(--card); border:1px solid var(--line); border-radius:10px; margin-bottom:18px; overflow:hidden; }
 section h2 { font-size:14px; margin:0; padding:12px 16px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
 section h2 span { flex:1; }
+#searchForm { display:flex; gap:6px; margin:0; } #searchForm input { width:300px; max-width:42vw; font-weight:400; }
+.sub { color:var(--muted); font-size:12px; word-break:break-all; }
+#searchHits td { white-space:normal; overflow-wrap:anywhere; vertical-align:top; }
 .scroll { overflow-x:auto; }
 table { width:100%; border-collapse:collapse; }
 th,td { text-align:left; padding:8px 16px; border-bottom:1px solid var(--line); white-space:nowrap; }
@@ -98,7 +101,7 @@ h4 { margin:18px 0 4px; }
   <section><h2><span>Agents</span><button id="newToken" class="need-operator">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
   <section><h2><span>Backup policies</span><button id="newPolicy" class="need-operator">New policy</button></h2><div class="scroll" id="policies"></div></section>
   <section><h2><span>Recent jobs</span><button id="moreJobs">Show more</button></h2><div class="scroll" id="jobs"></div></section>
-  <section><h2><span>Snapshots</span></h2><div class="scroll" id="snapshots"></div></section>
+  <section><h2><span>Snapshots</span><form id="searchForm"><input id="searchBox" type="search" placeholder="Find a file by name, in every snapshot" aria-label="Find a file by name"><button>Search</button></form></h2><div class="scroll" id="snapshots"></div></section>
 </main>
 </div>
 <dialog id="dlg"><div id="dlgBody"></div></dialog>
@@ -833,6 +836,51 @@ function restoreDialog(s, path) {
   $("dlgBody").append(err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
 }
 
+// download saves a file of a snapshot, or a folder as a zip file, through
+// the browser. The server hands out a link that works once.
+async function downloadFrom(s, path) {
+  const l = await call("POST", "/api/v1/snapshots/" + s.id + "/download", { path });
+  const a = el("a", { href: l.url, download: l.name, hidden: true });
+  document.body.append(a); a.click(); a.remove();
+}
+function downloadButton(s, path, folder) {
+  return can("operator") ? button(folder ? "Download as zip" : "Download", async () => downloadFrom(s, path)) : "";
+}
+
+// searchDialog finds files by name in every snapshot.
+async function searchDialog(q) {
+  openDialog(true, el("h3", { textContent: "Looking for “" + q + "”…" }), el("div", { className: "hint", textContent: "Reading the snapshots. The first search after new backups takes longest." }),
+    el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
+  let r;
+  try { r = await call("GET", "/api/v1/search?q=" + encodeURIComponent(q)); }
+  catch (e) { notice("The search did not work", e.message); return; }
+  const t = el("table", { id: "searchHits", style: "table-layout:fixed;width:100%" }, el("tr", null, ...[["Name", "46%"], ["Newest backup of it", "24%"], ["", "30%"]].map(([h, w]) => el("th", { textContent: h, style: "width:" + w }))));
+  for (const h of r.hits) {
+    const s = snapList.find(x => x.id === h.snapshot_id);
+    if (!s) continue;
+    const folder = h.type === "dir";
+    const cut = h.path.lastIndexOf(sepOf(s));
+    const parent = cut > 0 ? h.path.slice(0, cut) : "";
+    const there = folder ? h.path : parent;
+    t.append(el("tr", null,
+      el("td", null, el("div", { style: "word-break:break-word", textContent: h.name + (folder ? " (folder)" : ", " + size(h.size)) }),
+        el("div", { className: "sub", textContent: h.path }), el("div", { className: "sub", textContent: "On " + h.hostname + ", last changed " + when(h.mtime) })),
+      el("td", null, el("div", { textContent: when(h.time) }), el("div", { className: "sub", style: "word-break:normal", textContent: h.snapshots > 1 ? "in " + h.snapshots + " snapshots, since " + when(h.oldest) : "in this snapshot only" })),
+      el("td", null, el("div", { className: "acts", style: "flex-wrap:wrap" },
+        there ? button(folder ? "Open" : "Show folder", async () => browseDialog(s, there, [{ label: there, path: there }])) : "",
+        downloadButton(s, h.path, folder), can("operator") ? button("Restore", async () => restoreDialog(s, h.path)) : ""))));
+  }
+  const n = r.hits.length;
+  const say = !n ? "Nothing with “" + q + "” in its name was found in " + r.snapshots + " snapshots." :
+    (r.more ? "The first " + n : n) + (n === 1 ? " match" : " matches") + " in " + r.snapshots + " snapshots. Each is shown as it was in the newest snapshot that holds it; older versions are reached with Browse on an older snapshot." +
+    (r.partial ? " The search ran out of time before it had read every snapshot: type more of the name." : r.more ? " There are more: type more of the name." : "");
+  openDialog(true, el("h3", { textContent: "Files named like “" + q + "”" }),
+    el("div", { className: "hint", id: "searchSay", textContent: say + " Use * for any letters, as in *.xlsx." }),
+    n ? el("div", { className: "list" }, t) : "",
+    el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
+}
+$("searchForm").onsubmit = ev => { ev.preventDefault(); const q = $("searchBox").value.trim(); if (q) searchDialog(q).catch(e => notice("Something went wrong", e.message)); };
+
 // browseDialog shows what a snapshot holds at a path.
 async function browseDialog(s, path, trail) {
   trail = trail || [];
@@ -847,12 +895,13 @@ async function browseDialog(s, path, trail) {
     const name = open ? el("button", { className: "link", textContent: it.name, onclick: () => browseDialog(s, full, trail.concat({ label: it.name, path: full })).catch(e => notice("Something went wrong", e.message)) }) : it.name;
     t.append(el("tr", null, el("td", { className: "wrap" }, name), el("td", { textContent: kinds[it.type] || it.type }),
       el("td", { textContent: open ? "" : size(it.size) }), el("td", { textContent: when(it.mtime) }),
-      el("td", null, button("Restore", async () => restoreDialog(s, full)))));
+      el("td", null, el("div", { className: "acts" }, downloadButton(s, full, open), can("operator") ? button("Restore", async () => restoreDialog(s, full)) : ""))));
   }
   const body = items.length ? el("div", { className: "list" }, t) : el("div", { className: "empty", textContent: "This folder is empty." });
   const row = el("div", { className: "row" },
     Object.assign(confirmButton("Forget this snapshot", "Click again to delete this snapshot", async () => { await call("DELETE", "/api/v1/snapshots/" + s.id); $("dlg").close(); await refresh(); }), { style: "margin-right:auto" }),
     el("button", { textContent: "Close", onclick: () => $("dlg").close() }));
+  if (path && can("operator")) row.append(el("button", { id: "downloadFolder", textContent: "Download this folder as a zip file", onclick: () => downloadFrom(s, path).catch(e => notice("The download did not start", e.message)) }));
   if (path) row.append(el("button", { className: "primary", textContent: "Restore this folder", onclick: () => restoreDialog(s, path) }));
   else row.append(el("button", { className: "primary", textContent: "Restore everything", onclick: () => restoreDialog(s, "") }));
   openDialog(true, el("h3", { textContent: s.hostname + ", " + when(s.time) }), crumbs, body, row);

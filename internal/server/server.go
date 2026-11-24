@@ -95,6 +95,13 @@ type Server struct {
 	// isoLinks the short-lived download links for the disc image.
 	recovery map[string]*recoverySession
 	isoLinks map[string]isoLink
+	// downloads are the short-lived links to files of a snapshot, and
+	// reading counts the downloads and searches that are reading the
+	// repository; garbage collection waits for them. gcRunning is set
+	// while it runs.
+	downloads map[string]*download
+	reading   int
+	gcRunning bool
 
 	// cert is the certificate the listener hands out. It is replaced
 	// when the server's names change.
@@ -449,6 +456,9 @@ func (s *Server) routes() http.Handler {
 	route("GET /api/v1/snapshots/{id}", viewer, "", s.handleSnapshot)
 	route("DELETE /api/v1/snapshots/{id}", operator, "Deleted a snapshot", s.handleDeleteSnapshot)
 	route("GET /api/v1/snapshots/{id}/ls", viewer, "", s.handleList)
+	route("POST /api/v1/snapshots/{id}/download", operator, "Downloaded from a snapshot", s.handleDownloadLink)
+	mux.HandleFunc("GET /api/v1/downloads/{ticket}", s.handleDownload) // the ticket is the permission
+	route("GET /api/v1/search", viewer, "", s.handleSearch)
 	route("POST /api/v1/restores", operator, "Started a restore", s.handleRestore)
 	route("GET /api/v1/vmware-servers", viewer, "", s.handleVMwareServers)
 	route("POST /api/v1/vmware-servers", admin, "Added a VMware server", s.handleSaveVMwareServer)
