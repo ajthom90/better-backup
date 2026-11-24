@@ -46,6 +46,11 @@ jobs:
             qemu-system-x86 ovmf
           # Let the emulator use hardware virtualization where the runner has it.
           sudo chmod 666 /dev/kvm || true
+      - name: Keep the downloaded kernel packages
+        uses: actions/cache@v4
+        with:
+          path: bin/recovery-cache
+          key: recovery-packages-${{ hashFiles('packaging/recovery/build.py') }}
       - name: Build the recovery disc
         run: make recovery VERSION="ci-$(git rev-parse --short=12 HEAD)"
       - name: Recover a machine in an emulator (UEFI and BIOS)

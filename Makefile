@@ -17,4 +17,4 @@ docker:
 # packaging/recovery/build.py; the result goes to bin/recovery.iso.
 recovery:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/recovery/bb-agent ./cmd/bb-agent
-	python3 packaging/recovery/build.py --agent bin/recovery/bb-agent --out bin/recovery.iso --firmware --version $(VERSION)
+	python3 packaging/recovery/build.py --agent bin/recovery/bb-agent --out bin/recovery.iso --firmware --cache bin/recovery-cache --version $(VERSION)
