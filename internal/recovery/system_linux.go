@@ -161,8 +161,32 @@ type console struct {
 // terminal is one device of the console.
 type terminal struct {
 	path   string
+	mu     sync.Mutex
 	f      *os.File
 	paused atomic.Bool // a command line has the device; leave its keyboard alone
+}
+
+func (t *terminal) file() *os.File {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.f
+}
+
+func (t *terminal) Write(p []byte) (int, error) { return t.file().Write(p) }
+
+// reopen opens the device afresh. When a command line that had the
+// device as its terminal ends, the kernel hangs the device up: what was
+// open before then reads nothing and cannot be written to any more.
+func (t *terminal) reopen() {
+	f, err := os.OpenFile(t.path, os.O_RDWR, 0)
+	if err != nil {
+		return
+	}
+	t.mu.Lock()
+	old := t.f
+	t.f = f
+	t.mu.Unlock()
+	old.Close()
 }
 
 // key is a line typed on one of the console's terminals.
@@ -198,7 +222,7 @@ func openConsole() *console {
 			continue
 		}
 		t := &terminal{path: d, f: f}
-		c.outs = append(c.outs, f)
+		c.outs = append(c.outs, t)
 		c.terms = append(c.terms, t)
 		go t.read(c.in)
 	}
@@ -227,8 +251,9 @@ func (t *terminal) read(in chan<- key) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		t.f.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
-		n, err := t.f.Read(buf)
+		f := t.file()
+		f.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+		n, err := f.Read(buf)
 		for _, b := range buf[:n] {
 			if b != '\n' && b != '\r' {
 				line = append(line, b)
@@ -238,7 +263,11 @@ func (t *terminal) read(in chan<- key) {
 			line = line[:0]
 		}
 		if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
-			return
+			// Hung up, or closed to be opened afresh.
+			time.Sleep(500 * time.Millisecond)
+			if f == t.file() {
+				t.reopen()
+			}
 		}
 	}
 }
@@ -379,9 +408,10 @@ func (u *screen) keys() (changeServer bool) {
 // or a hypervisor's console it is that device itself, which the
 // recovery screen leaves alone meanwhile.
 func shell(from *terminal) {
-	if from != nil && from.path != "/dev/tty1" && from.f.SetReadDeadline(time.Now().Add(time.Second)) == nil {
+	if from != nil && from.path != "/dev/tty1" && from.file().SetReadDeadline(time.Now().Add(time.Second)) == nil {
 		from.paused.Store(true)
 		defer from.paused.Store(false)
+		defer from.reopen()
 		time.Sleep(300 * time.Millisecond) // the read that was under way
 		// The shell opens the device itself, as the terminal of a
 		// session of its own, so that Ctrl-C works in it.
