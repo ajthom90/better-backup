@@ -110,8 +110,10 @@ func TestOffsite(t *testing.T) {
 		t.Fatalf("copy after gc: %+v", got)
 	}
 
-	// The daily schedule: a slot one minute from now does not run yet...
-	next := time.Now().Add(time.Minute)
+	// The daily schedule: a slot a minute or two from now does not run
+	// yet. The slot is a whole minute, so one minute ahead of 12:00:59
+	// would be a second away; two minutes ahead is never under one.
+	next := time.Now().Add(2 * time.Minute)
 	e.do("PUT", "/api/v1/offsite", api.OffsiteSettings{Enabled: true, Kind: "folder", Folder: dest, DailyAt: next.Format("15:04")}, &st)
 	time.Sleep(300 * time.Millisecond)
 	e.do("GET", "/api/v1/offsite", nil, &st)

@@ -304,6 +304,7 @@ func (s *Server) commitSnapshot(a *api.Agent, j *api.Job, req *api.CompleteReque
 	s.mu.Lock()
 	s.snaps[sn.ID] = sn
 	s.mu.Unlock()
+	s.kickIndex()
 	return sn, nil
 }
 
@@ -411,6 +412,7 @@ func (s *Server) deleteSnapshot(id string) error {
 	s.mu.Lock()
 	delete(s.snaps, id)
 	s.mu.Unlock()
+	s.kickIndex()
 	return s.setSetting("gc_needed", "1")
 }
 

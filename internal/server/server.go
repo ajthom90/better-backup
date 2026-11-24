@@ -29,6 +29,7 @@ import (
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/repo"
+	"github.com/ajthom90/better-backup/internal/searchindex"
 	"github.com/ajthom90/better-backup/internal/tree"
 )
 
@@ -104,7 +105,17 @@ type Server struct {
 	// while it runs.
 	downloads map[string]*download
 	reading   int
-	gcRunning bool
+	// index is the index of file names, or nil if it could not be
+	// opened. indexPending is how many snapshots are not in it yet,
+	// indexReset that it is to be emptied and built again, and
+	// indexCancel stops the snapshot that is being added.
+	index        *searchindex.Index
+	indexKick    chan struct{}
+	indexPending int
+	indexErr     string
+	indexReset   bool
+	indexCancel  context.CancelFunc
+	gcRunning    bool
 
 	// cert is the certificate the listener hands out. It is replaced
 	// when the server's names change.
@@ -148,7 +159,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	s := &Server{cfg: cfg, log: cfg.Log, snaps: map[string]*tree.Snapshot{}, running: map[string]string{},
 		wake: map[string]chan struct{}{}, kick: make(chan struct{}, 1), stop: make(chan struct{}), mail: make(chan mailMsg, 64),
-		recovery: map[string]*recoverySession{}, isoLinks: map[string]isoLink{}}
+		recovery: map[string]*recoverySession{}, isoLinks: map[string]isoLink{}, indexKick: make(chan struct{}, 1)}
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -196,6 +207,7 @@ func New(cfg Config) (*Server, error) {
 		for _, sn := range snaps {
 			s.snaps[sn.ID] = sn
 		}
+		s.openIndex()
 	}
 	s.db.Exec(`DELETE FROM sessions WHERE expires < ?`, ms(time.Now()))
 	s.db.Exec(`DELETE FROM audit WHERE time < ?`, ms(time.Now().Add(-auditKeep)))
@@ -242,6 +254,9 @@ func (s *Server) passphrase() ([]byte, error) {
 // Close releases the database and repository.
 func (s *Server) Close() error {
 	var err error
+	if s.index != nil {
+		s.index.Close()
+	}
 	if s.db != nil {
 		err = s.db.Close()
 	}
@@ -331,6 +346,10 @@ func (s *Server) Serve(ctx context.Context) error {
 	if !s.locked {
 		wg.Add(1)
 		go func() { defer wg.Done(); s.background(bg) }()
+		if s.index != nil {
+			wg.Add(1)
+			go func() { defer wg.Done(); s.indexLoop(bg) }()
+		}
 	}
 	go s.mailer(s.stop)
 	go func() {
@@ -462,6 +481,8 @@ func (s *Server) routes() http.Handler {
 	route("POST /api/v1/snapshots/{id}/download", operator, "Downloaded from a snapshot", s.handleDownloadLink)
 	mux.HandleFunc("GET /api/v1/downloads/{ticket}", s.handleDownload) // the ticket is the permission
 	route("GET /api/v1/search", viewer, "", s.handleSearch)
+	route("GET /api/v1/search/index", viewer, "", s.handleSearchIndex)
+	route("POST /api/v1/search/index/rebuild", admin, "Had the index of file names built again", s.handleRebuildIndex)
 	route("POST /api/v1/restores", operator, "Started a restore", s.handleRestore)
 	route("GET /api/v1/vmware-servers", viewer, "", s.handleVMwareServers)
 	route("POST /api/v1/vmware-servers", admin, "Added a VMware server", s.handleSaveVMwareServer)

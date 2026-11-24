@@ -297,9 +297,22 @@ by name in every snapshot: part of the name, or a pattern such as `*.xlsx`.
 Each match is shown as the newest snapshot that holds it has it, with how
 many snapshots hold it, so a file that was deleted last week is found in the
 last snapshot taken before that. From a match you can open its folder,
-download it or restore it. A search reads the snapshots' folder listings, so
-on a repository with millions of files it can take a while; it stops after 25
-seconds and says so.
+download it or restore it.
+
+Searches are answered from an index of file names, so they take a fraction of
+a second however many files and snapshots there are. The server builds the
+index by itself and keeps it up to date in the background after each backup
+and whenever snapshots are forgotten; backups do not wait for it. It is a
+file of its own, `search.db` in the server's data folder, of roughly 130
+bytes for each different file or folder ever backed up (about 700 MB for
+five million files), and it does not grow with the number of snapshots. It
+holds nothing that is not in the repository: if it is lost, or after the
+server is recovered from the offsite copy, it is built again from the
+snapshots, and until that is done searches read the snapshots themselves,
+which is slower. **Settings**, **Search index** shows its state and has a
+button to build it again. A search for only two letters cannot use the index
+of names and reads all of them, which takes a few seconds with millions of
+files.
 
 **Download in the browser.** In Browse, and in the search results, an
 operator or administrator can download a file as it is, or a folder as a zip

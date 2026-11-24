@@ -404,6 +404,7 @@ func (a *archiver) chunks(path string) (ids []keys.ID, size int64, ok bool, err 
 // chunkReader is chunks for data that is already open.
 func (a *archiver) chunkReader(f io.Reader, path string) (ids []keys.ID, size int64, ok bool, err error) {
 	c := chunker.New(f)
+	defer c.Release()
 	for {
 		chunk, err := c.Next()
 		if err == io.EOF {
