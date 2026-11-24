@@ -41,6 +41,10 @@ Usage:
         [--system-state]       (Windows: registry, boot and system files,
                                 Active Directory and SYSVOL on a domain controller)
         [--exclude PATTERN ...] [--every 24h | --daily-at 02:00]
+        [--whole-machine]      (the system disk with its layout and every
+                                partition, for bare-metal recovery)
+        [--machine-disk DISK ...]  (with --whole-machine: these disks instead,
+                                such as 0 and 1, or /dev/sda)
         [--no-snapshot]  (Windows: read live files instead of a VSS snapshot)
         [--keep-last N] [--keep-daily N] [--keep-weekly N]
         [--keep-monthly N] [--keep-yearly N]
@@ -53,6 +57,8 @@ Usage:
   bb ls SNAPSHOT [PATH]                  browse a snapshot
   bb restore SNAPSHOT [--path PATH ...] [--target DIR] [--agent AGENT]
         [--overwrite if-changed|always|never] [--name NEW-VM-NAME] [--wait]
+        [--disk NAME=TARGET ...]  (whole machine: put a disk of the backup,
+                                such as disk0, onto a disk or into a file)
                                          without --target, restores in place;
                                          a virtual machine is restored as a new
                                          machine with its files under --target
@@ -116,6 +122,7 @@ var (
 	fOver    = fs.String("overwrite", "", "")
 	fWait    = fs.Bool("wait", false, "")
 	fSysSt   = fs.Bool("system-state", false, "")
+	fMachine = fs.Bool("whole-machine", false, "")
 	fVMTrack = fs.String("vm-tracking", "", "")
 	fNoSnap  = fs.Bool("no-snapshot", false, "")
 	fSMTP    = fs.String("smtp", "", "")
@@ -133,6 +140,8 @@ var (
 	fTo      cli.Multi
 	fVols    cli.Multi
 	fVMs     cli.Multi
+	fMDisks  cli.Multi
+	fDisks   cli.Multi
 	fPaths   cli.Multi
 	fExcl    cli.Multi
 	fKeep    api.Retention
@@ -284,6 +293,8 @@ func main() {
 	fs.Var(&fTo, "to", "")
 	fs.Var(&fVols, "volume", "")
 	fs.Var(&fVMs, "vm", "")
+	fs.Var(&fMDisks, "machine-disk", "")
+	fs.Var(&fDisks, "disk", "")
 	fs.IntVar(&fKeep.KeepLast, "keep-last", 0, "")
 	fs.IntVar(&fKeep.KeepDaily, "keep-daily", 0, "")
 	fs.IntVar(&fKeep.KeepWeekly, "keep-weekly", 0, "")
@@ -380,16 +391,19 @@ func main() {
 			if p.SystemState {
 				what = append(what, "system state")
 			}
+			if p.BareMetal {
+				what = append(what, "whole machine")
+			}
 			fmt.Fprintf(tabs, "%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.AgentID, sched, strings.Join(keep, ", "), strings.Join(what, ", "))
 		}
 	case "policy":
 		switch sub {
 		case "add":
-			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols)+len(fVMs) == 0 && !*fSysSt {
-				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state"))
+			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols)+len(fVMs) == 0 && !*fSysSt && !*fMachine {
+				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state or --whole-machine"))
 			}
 			var p api.Policy
-			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, VMTracking: *fVMTrack, SystemState: *fSysSt,
+			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, VMTracking: *fVMTrack, SystemState: *fSysSt, BareMetal: *fMachine, MachineDisks: fMDisks,
 				Schedule: api.Schedule{Interval: *fEvery, DailyAt: *fDaily}, Retention: fKeep, NoSnapshot: *fNoSnap, Enabled: true}, &p)
 			fmt.Printf("created policy %s (%s)\n", p.Name, p.ID)
 		case "run":
@@ -453,6 +467,16 @@ func main() {
 	case "restore":
 		need(pos, 2, "bb restore SNAPSHOT")
 		req := api.RestoreRequest{SnapshotID: pos[1], Include: fPaths, Target: *fTarget, Overwrite: *fOver, VMName: *fName}
+		for _, d := range fDisks {
+			name, to, ok := strings.Cut(d, "=")
+			if !ok || name == "" || to == "" {
+				cli.Fatal(errors.New("--disk takes NAME=TARGET, such as disk0=/dev/sdb"))
+			}
+			if req.Disks == nil {
+				req.Disks = map[string]string{}
+			}
+			req.Disks[name] = to
+		}
 		if *fAgent != "" {
 			req.AgentID = agentID(*fAgent)
 		}

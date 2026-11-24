@@ -279,6 +279,13 @@ func (s *Server) handleRecoveryCommand(w http.ResponseWriter, r *http.Request) {
 	busy := rs.agentID != "" && s.running[rs.agentID] != ""
 	if ok && !(busy && req.Command != "rescan") {
 		rs.command = req.Command
+		// The machine does not report back once it is going down.
+		switch req.Command {
+		case "reboot":
+			rs.status = "Restarting"
+		case "poweroff":
+			rs.status = "Switching off"
+		}
 	}
 	s.mu.Unlock()
 	switch {
