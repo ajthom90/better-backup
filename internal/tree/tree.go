@@ -30,6 +30,11 @@ const (
 	// original paths.
 	SystemStateName = "System state"
 
+	// TrueNASConfigName is the name of the source entry that holds the
+	// configuration of a TrueNAS system: a folder with the file TrueNAS
+	// takes back under Manage Configuration.
+	TrueNASConfigName = "TrueNAS configuration"
+
 	// pageSize is the target size of one page of directory entries.
 	pageSize = 1 << 20
 	// inlineContent is the most chunk ids kept inline in a file entry.
@@ -69,6 +74,10 @@ type Entry struct {
 
 	// Subtree lists the pages holding a directory's entries.
 	Subtree []keys.ID `json:"subtree,omitempty"`
+
+	// Xattrs are the extended attributes of a file, directory or link on
+	// Linux and macOS, by name. Access control lists are among them.
+	Xattrs map[string][]byte `json:"xattrs,omitempty"`
 
 	// Streams are the NTFS alternate data streams of a file or directory.
 	Streams []Stream `json:"streams,omitempty"`

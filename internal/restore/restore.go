@@ -64,6 +64,8 @@ type restorer struct {
 	last  time.Time
 	// imageDest is set once an image was written to the target itself.
 	imageDest bool
+	// xattrWarned holds the extended-attribute failures already reported.
+	xattrWarned map[string]bool
 	// sys is set while a system state is restored in place.
 	sys *sysRun
 }
@@ -105,6 +107,10 @@ func Run(ctx context.Context, get tree.Getter, opts Options) (Stats, error) {
 			if err := r.systemState(e, m == matchFull); err != nil {
 				return r.stats, err
 			}
+			continue
+		}
+		if e.Name == tree.TrueNASConfigName && e.Type == tree.TypeDir && opts.Target == "" {
+			r.warn("the TrueNAS configuration was not restored: restore it to a folder, then upload truenas-config.tar in the TrueNAS web interface under System, General Settings, Manage Configuration, Upload File")
 			continue
 		}
 		if err := r.entry(e, e.Name, r.dest(e.Name), m == matchFull); err != nil {
@@ -275,6 +281,9 @@ func (r *restorer) entry(e *tree.Entry, orig, dest string, full bool) error {
 			return nil
 		}
 		r.chown(dest, e)
+		if runtime.GOOS != "windows" {
+			r.platformMeta(dest, e)
+		}
 		r.stats.Files++
 	}
 	return nil

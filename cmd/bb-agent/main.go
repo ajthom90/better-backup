@@ -30,6 +30,11 @@ Get the enroll command, with its token and fingerprint, from the server:
 Flags:
   --dir DIR   agent state directory (default %s, or $BB_AGENT_DIR)
 
+In a container that should back up its host (an app on TrueNAS SCALE, for
+example), set BB_HOST_ROOT=/proc/1/root and run it privileged with the host's
+process ids. The agent then works in the host's file system, and --dir is a
+folder on the host.
+
 Run the agent as root (Linux, macOS) or as a service (Windows) so it can read
 every file. On macOS also grant it Full Disk Access.
 `
@@ -64,6 +69,11 @@ func main() {
 	}
 
 	var err error
+	if root := os.Getenv("BB_HOST_ROOT"); root != "" && (cmd == "run" || cmd == "enroll") {
+		if err := agent.EnterHostRoot(root); err != nil {
+			cli.Fatal(err)
+		}
+	}
 	switch cmd {
 	case "enroll":
 		if agent.Enrolled(*dir) {
