@@ -23,7 +23,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	out := api.Status{Version: Version, RepoID: s.repo.ID(), Fingerprint: s.fp, Packs: st.Packs,
 		StoredBytes: st.StoredBytes, RawBytes: st.RawBytes, Chunks: st.Chunks}
-	s.db.QueryRow(`SELECT COUNT(*) FROM agents WHERE revoked = 0`).Scan(&out.Agents)
+	s.db.QueryRow(`SELECT COUNT(*) FROM agents WHERE revoked = 0 AND recovery = 0`).Scan(&out.Agents)
 	s.mu.Lock()
 	out.Snapshots, out.RunningJobs = len(s.snaps), len(s.running)
 	s.mu.Unlock()
@@ -132,8 +132,15 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("a policy needs a name")
 		return
 	}
-	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 && !p.SystemState {
-		bad("a policy needs at least one path, volume or virtual machine, or the system state")
+	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 && !p.SystemState && !p.BareMetal {
+		bad("a policy needs at least one path, volume or virtual machine, the system state or the whole machine")
+		return
+	}
+	if !p.BareMetal {
+		p.MachineDisks = nil
+	}
+	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.BareMetal && a.OS != "windows" && a.OS != "linux" {
+		bad("a whole machine can be backed up for bare-metal recovery on Windows and Linux only")
 		return
 	}
 	if p.VMTracking != "" && p.VMTracking != "on" && p.VMTracking != "check" {
@@ -144,7 +151,7 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("the system state can only be backed up on a Windows machine")
 		return
 	}
-	if a, err := s.agent(p.AgentID); err != nil || a == nil || a.Revoked {
+	if a, err := s.agent(p.AgentID); err != nil || a == nil || a.Revoked || a.Recovery {
 		bad("agent_id does not name an active agent")
 		return
 	}
@@ -202,7 +209,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, VMTracking: p.VMTracking, SystemState: p.SystemState, NoSnapshot: p.NoSnapshot}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, VMTracking: p.VMTracking, SystemState: p.SystemState, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot}}
 	return j, s.enqueue(j)
 }
 
@@ -404,6 +411,19 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "no such snapshot")
 		return
 	}
+	if len(req.Disks) > 0 {
+		// Onto disks: everything on them is replaced, so the machine must
+		// be named, and only the whole machine can go there.
+		if req.AgentID == "" {
+			fail(w, http.StatusBadRequest, "name the machine whose disks are to be written")
+			return
+		}
+		if machineEntry(sn) == nil {
+			fail(w, http.StatusBadRequest, "this snapshot holds no whole-machine backup")
+			return
+		}
+		req.Include, req.Target = []string{tree.MachineName}, ""
+	}
 	if req.AgentID == "" {
 		req.AgentID = sn.AgentID
 	}
@@ -422,12 +442,16 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "overwrite must be if-changed, always or never")
 		return
 	}
-	if req.Target == "" && a.OS != sn.OS {
+	if a.Recovery && len(req.Disks) == 0 {
+		fail(w, http.StatusBadRequest, "a machine started from the recovery disc can only receive a whole machine onto its disks")
+		return
+	}
+	if req.Target == "" && len(req.Disks) == 0 && a.OS != sn.OS {
 		fail(w, http.StatusBadRequest, fmt.Sprintf("a %s backup cannot be restored in place on a %s agent; set a target directory", sn.OS, a.OS))
 		return
 	}
 	j := &api.Job{Type: api.JobRestore, AgentID: a.ID, SnapshotID: sn.ID, Restore: &api.RestoreSpec{
-		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName}}
+		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName, Disks: req.Disks}}
 	if err := s.enqueue(j); err != nil {
 		s.internal(w, err)
 		return

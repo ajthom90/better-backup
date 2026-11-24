@@ -52,6 +52,9 @@ type Agent struct {
 	LastSeen   time.Time `json:"last_seen"`
 	Online     bool      `json:"online"`
 	Revoked    bool      `json:"revoked"`
+	// Recovery marks a machine started from the recovery disc. It exists
+	// only to receive a restore and is not a machine to back up.
+	Recovery bool `json:"recovery,omitempty"`
 }
 
 type Schedule struct {
@@ -87,9 +90,17 @@ type Policy struct {
 	// SystemState backs up what Windows needs to bring a machine's
 	// identity back: the registry, boot and system files, and on a domain
 	// controller the Active Directory database and SYSVOL.
-	SystemState bool      `json:"system_state,omitempty"`
-	Schedule    Schedule  `json:"schedule"`
-	Retention   Retention `json:"retention"`
+	SystemState bool `json:"system_state,omitempty"`
+	// BareMetal backs up the whole machine: the layout of the disks it
+	// starts from and an image of each of their partitions, which is
+	// what it takes to rebuild the machine on blank hardware.
+	BareMetal bool `json:"bare_metal,omitempty"`
+	// MachineDisks names the disks BareMetal covers: numbers such as "0"
+	// on Windows, devices such as /dev/sda elsewhere. Empty: the disk
+	// the system starts from.
+	MachineDisks []string  `json:"machine_disks,omitempty"`
+	Schedule     Schedule  `json:"schedule"`
+	Retention    Retention `json:"retention"`
 	// NoSnapshot backs up the live file system instead of a volume
 	// snapshot. It only matters on Windows, where snapshots are the
 	// default.
@@ -99,14 +110,16 @@ type Policy struct {
 }
 
 type BackupSpec struct {
-	Paths       []string     `json:"paths"`
-	Excludes    []string     `json:"excludes,omitempty"`
-	Volumes     []string     `json:"volumes,omitempty"`
-	VMs         []string     `json:"vms,omitempty"`
-	VMTracking  string       `json:"vm_tracking,omitempty"`
-	SystemState bool         `json:"system_state,omitempty"`
-	NoSnapshot  bool         `json:"no_snapshot,omitempty"`
-	Parent      []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
+	Paths        []string     `json:"paths"`
+	Excludes     []string     `json:"excludes,omitempty"`
+	Volumes      []string     `json:"volumes,omitempty"`
+	VMs          []string     `json:"vms,omitempty"`
+	VMTracking   string       `json:"vm_tracking,omitempty"`
+	SystemState  bool         `json:"system_state,omitempty"`
+	BareMetal    bool         `json:"bare_metal,omitempty"`
+	MachineDisks []string     `json:"machine_disks,omitempty"`
+	NoSnapshot   bool         `json:"no_snapshot,omitempty"`
+	Parent       []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
 }
 
 type RestoreSpec struct {
@@ -117,6 +130,9 @@ type RestoreSpec struct {
 	Target     string       `json:"target,omitempty"` // empty: restore in place
 	Overwrite  string       `json:"overwrite,omitempty"`
 	VMName     string       `json:"vm_name,omitempty"` // name for a restored virtual machine
+	// Disks says where the disks of a whole machine go: "disk0" to a
+	// device such as /dev/sda.
+	Disks map[string]string `json:"disks,omitempty"`
 }
 
 type Job struct {
@@ -154,6 +170,10 @@ type RestoreRequest struct {
 	Overwrite  string   `json:"overwrite,omitempty"`
 	// VMName names a restored virtual machine. Default: its old name.
 	VMName string `json:"vm_name,omitempty"`
+	// Disks restores a whole machine onto disks of the agent: the name
+	// of a disk in the backup ("disk0") to a device such as /dev/sda.
+	// Everything on those disks is replaced.
+	Disks map[string]string `json:"disks,omitempty"`
 }
 
 type EnrollToken struct {
@@ -251,4 +271,127 @@ type OffsiteStatus struct {
 type OffsiteTest struct {
 	Objects int   `json:"objects"`
 	Bytes   int64 `json:"bytes"`
+}
+
+// RecoveryConfig tells a machine started from the recovery disc where
+// its server is. It carries no secret.
+type RecoveryConfig struct {
+	Server      string `json:"server"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// RecoverySession is the server's answer to a recovery disc that
+// announces itself. The code is shown on the machine's screen; the
+// administrator approves the machine showing that code.
+type RecoverySession struct {
+	ID     string `json:"id"`
+	Secret string `json:"secret"`
+	Code   string `json:"code"`
+}
+
+// RecoveryHardware describes a machine started from the recovery disc.
+type RecoveryHardware struct {
+	Product     string         `json:"product,omitempty"`
+	Firmware    string         `json:"firmware,omitempty"` // "uefi" or "bios"
+	MemoryBytes int64          `json:"memory_bytes,omitempty"`
+	CPUs        int            `json:"cpus,omitempty"`
+	Disks       []RecoveryDisk `json:"disks"`
+	NICs        []RecoveryNIC  `json:"nics,omitempty"`
+}
+
+// RecoveryDisk is a disk a restore can go to.
+type RecoveryDisk struct {
+	Path       string `json:"path"` // /dev/sda
+	Model      string `json:"model,omitempty"`
+	Size       int64  `json:"size"`
+	SectorSize int    `json:"sector_size"`
+	// Contents says in a few words what the disk holds now.
+	Contents string `json:"contents,omitempty"`
+	// Media marks the disk the recovery disc itself was started from.
+	Media bool `json:"media,omitempty"`
+}
+
+// RecoveryNIC is a network adapter and its addresses.
+type RecoveryNIC struct {
+	Name  string   `json:"name"`
+	MAC   string   `json:"mac,omitempty"`
+	Addrs []string `json:"addrs,omitempty"`
+}
+
+// RecoveryPoll is what a recovery disc reports while it waits.
+type RecoveryPoll struct {
+	Version  string            `json:"version,omitempty"`
+	Status   string            `json:"status,omitempty"`
+	Hardware *RecoveryHardware `json:"hardware,omitempty"`
+}
+
+// RecoveryReply answers a poll.
+type RecoveryReply struct {
+	Approved bool `json:"approved"`
+	// EnrollToken is handed over once, after approval: the machine uses
+	// it to become an agent that can receive the restore.
+	EnrollToken string `json:"enroll_token,omitempty"`
+	// Command is "reboot", "poweroff" or "rescan".
+	Command string `json:"command,omitempty"`
+}
+
+// RecoveryMachine is a machine waiting at the recovery disc, as the
+// administrator sees it.
+type RecoveryMachine struct {
+	ID       string            `json:"id"`
+	Code     string            `json:"code"`
+	Remote   string            `json:"remote"`
+	Created  time.Time         `json:"created"`
+	LastSeen time.Time         `json:"last_seen"`
+	Approved bool              `json:"approved"`
+	AgentID  string            `json:"agent_id,omitempty"`
+	Version  string            `json:"version,omitempty"`
+	Status   string            `json:"status,omitempty"`
+	Hardware *RecoveryHardware `json:"hardware,omitempty"`
+	// Job is the machine's most recent restore.
+	Job *Job `json:"job,omitempty"`
+}
+
+// RecoveryStatus is everything the recovery page shows.
+type RecoveryStatus struct {
+	// ISO describes the recovery disc image the server can hand out.
+	ISO struct {
+		Available bool      `json:"available"`
+		Size      int64     `json:"size,omitempty"`
+		Modified  time.Time `json:"modified,omitempty"`
+	} `json:"iso"`
+	Machines []RecoveryMachine `json:"machines"`
+}
+
+// MachineBackup is a whole-machine backup inside a snapshot: the disk
+// layout, without the raw boot sectors, and the size of each image.
+type MachineBackup struct {
+	Hostname string        `json:"hostname"`
+	OS       string        `json:"os"`
+	Firmware string        `json:"firmware,omitempty"`
+	Disks    []MachineDisk `json:"disks"`
+}
+
+// MachineDisk is one disk of a MachineBackup.
+type MachineDisk struct {
+	Name       string `json:"name"`
+	Device     string `json:"device,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Size       int64  `json:"size"`
+	SectorSize int    `json:"sector_size"`
+	Style      string `json:"style"`
+	// Needs is the smallest disk the backup fits on.
+	Needs      int64              `json:"needs"`
+	Partitions []MachinePartition `json:"partitions"`
+}
+
+// MachinePartition is one partition of a MachineDisk.
+type MachinePartition struct {
+	Number int    `json:"number"`
+	Size   int64  `json:"size"`
+	Kind   string `json:"kind"`
+	FS     string `json:"fs,omitempty"`
+	Label  string `json:"label,omitempty"`
+	Mount  string `json:"mount,omitempty"`
+	Saved  bool   `json:"saved"`
 }

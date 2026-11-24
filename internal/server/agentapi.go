@@ -47,6 +47,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, err)
 		return
 	}
+	s.recoveryEnrolled(hashToken(req.Token), id)
 	s.log.Info("agent enrolled", "agent", id, "name", req.Name, "os", req.OS, "remote", r.RemoteAddr)
 	k := s.repo.Keys()
 	reply(w, http.StatusOK, api.EnrollResponse{AgentID: id, Cert: string(cert), IDKey: k.ID[:]})
@@ -75,7 +76,7 @@ func (s *Server) authAgent(r *http.Request) (*api.Agent, error) {
 func scanAgentFP(row *sql.Row, fp *string) (*api.Agent, error) {
 	var a api.Agent
 	var enrolled, seen int64
-	if err := row.Scan(&a.ID, &a.Name, &a.Hostname, &a.OS, &a.Arch, &a.Version, &enrolled, &seen, &a.Revoked, fp); err != nil {
+	if err := row.Scan(&a.ID, &a.Name, &a.Hostname, &a.OS, &a.Arch, &a.Version, &enrolled, &seen, &a.Revoked, &a.Recovery, fp); err != nil {
 		return nil, err
 	}
 	a.EnrolledAt, a.LastSeen = fromMS(enrolled), fromMS(seen)

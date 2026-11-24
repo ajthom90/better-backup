@@ -261,6 +261,9 @@ type Agent struct {
 	cfg *Config
 	c   *client
 	log *slog.Logger
+	// Notify, if set, hears about jobs: "started", then "progress" with
+	// the job's latest figures, then "finished" with its error or nil.
+	Notify func(event string, j *api.Job, detail any)
 }
 
 // New loads the agent identity saved in dir.
@@ -357,7 +360,13 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		}
 		mu.Unlock()
 	}
-	setProgress := func(v any) { mu.Lock(); progress = v; mu.Unlock() }
+	notify := func(event string, detail any) {
+		if a.Notify != nil {
+			a.Notify(event, j, detail)
+		}
+	}
+	setProgress := func(v any) { mu.Lock(); progress = v; mu.Unlock(); notify("progress", v) }
+	notify("started", nil)
 
 	// Heartbeat: report progress every few seconds so the server knows
 	// the job is alive. If the server says the job is gone, stop work.
@@ -426,6 +435,21 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 			opts.SystemState = &backup.SystemState{Roots: sel.Roots(), Match: sel.Match}
 			snapPaths = append(snapPaths, sel.Roots()...)
 		}
+		// A whole machine: look at its disks now, so the volumes that
+		// must be read from a snapshot join the snapshot set.
+		var plan *backup.MachinePlan
+		if j.Backup.BareMetal {
+			var perr error
+			if plan, perr = backup.PlanMachine(j.Backup.MachineDisks); perr != nil {
+				warn("the whole machine was not backed up: " + perr.Error())
+			} else {
+				for _, w := range plan.Warnings {
+					warn(w)
+				}
+				snapPaths = append(snapPaths, plan.SnapPaths...)
+				defer plan.Close()
+			}
+		}
 		if len(snapPaths) > 0 {
 			var skipped []string
 			var serr error
@@ -450,7 +474,26 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 				}
 			}
 		}
+		covered := map[string]bool{}
+		if plan != nil {
+			m, merr := plan.Open(set.Path)
+			if merr != nil {
+				warn("the whole machine was not backed up: " + merr.Error())
+			} else {
+				opts.Machine = m
+				for _, d := range m.Layout.Disks {
+					for _, pt := range d.Partitions {
+						if pt.Image != "" && pt.Mount != "" {
+							covered[strings.ToUpper(pt.Mount)] = true
+						}
+					}
+				}
+			}
+		}
 		for _, v := range j.Backup.Volumes {
+			if covered[strings.ToUpper(strings.TrimRight(v, `\`))] {
+				continue // already in the whole-machine backup
+			}
 			name, readPath := v, v
 			if runtime.GOOS == "windows" {
 				name = strings.ToUpper(strings.TrimRight(v, `\`))
@@ -524,6 +567,13 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		for _, src := range opts.Images {
 			src.Close() // a no-op for images the backup already closed
 		}
+		if opts.Machine != nil {
+			for _, src := range opts.Machine.Images {
+				if src.Close != nil {
+					src.Close()
+				}
+			}
+		}
 		release()
 		req.Stats = &stats
 	case j.Type == api.JobRestore && j.Restore != nil:
@@ -531,7 +581,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		get := func(id keys.ID) ([]byte, error) { return a.c.Get(jctx, id) }
 		stats, err = restore.Run(jctx, get, restore.Options{
 			Sources: j.Restore.Sources, SourceOS: j.Restore.SourceOS, Include: j.Restore.Include,
-			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName,
+			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName, Disks: j.Restore.Disks,
 			Progress: func(s restore.Stats) { setProgress(s) }, Warn: warn})
 		req.Restore = &stats
 	default:
@@ -544,6 +594,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		req.Sources = nil
 	}
 	req.Warnings = warnings
+	notify("finished", err)
 	if ctx.Err() != nil {
 		// Shutting down: the server fails the job when we reconnect.
 		log.Warn("job interrupted by shutdown")

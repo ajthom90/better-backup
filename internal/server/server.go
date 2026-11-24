@@ -50,6 +50,9 @@ type Config struct {
 	// key is generated on first start and kept in DataDir/repo.key.
 	Passphrase string
 	Log        *slog.Logger
+	// RecoveryISO is the recovery disc image to hand out. Default:
+	// DataDir/recovery.iso, then the copy installed with the server.
+	RecoveryISO string
 
 	// Tick is how often schedules and timeouts are checked.
 	Tick time.Duration
@@ -87,6 +90,10 @@ type Server struct {
 	kick        chan struct{}
 	stop        chan struct{} // closed at shutdown to release long polls
 	mail        chan mailMsg  // alerts waiting to be sent
+	// recovery holds the machines waiting at the recovery disc, and
+	// isoLinks the short-lived download links for the disc image.
+	recovery map[string]*recoverySession
+	isoLinks map[string]isoLink
 }
 
 // New opens, or on first start creates, the server state and repository.
@@ -104,7 +111,8 @@ func New(cfg Config) (*Server, error) {
 		cfg.Tick = 20 * time.Second
 	}
 	s := &Server{cfg: cfg, log: cfg.Log, snaps: map[string]*tree.Snapshot{}, running: map[string]string{},
-		wake: map[string]chan struct{}{}, kick: make(chan struct{}, 1), stop: make(chan struct{}), mail: make(chan mailMsg, 64)}
+		wake: map[string]chan struct{}{}, kick: make(chan struct{}, 1), stop: make(chan struct{}), mail: make(chan mailMsg, 64),
+		recovery: map[string]*recoverySession{}, isoLinks: map[string]isoLink{}}
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -144,6 +152,12 @@ func New(cfg Config) (*Server, error) {
 	// Jobs that were running when the server last stopped cannot finish.
 	if _, err := s.db.Exec(`UPDATE jobs SET status = ?, error = 'the server restarted while this job was running', finished = ? WHERE status = ?`,
 		api.StatusFailed, ms(time.Now()), api.StatusRunning); err != nil {
+		s.Close()
+		return nil, err
+	}
+	// Machines that were at the recovery disc must announce themselves
+	// again: their sessions lived in memory.
+	if _, err := s.db.Exec(`UPDATE agents SET revoked = 1 WHERE recovery = 1`); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -343,6 +357,16 @@ func (s *Server) routes() http.Handler {
 	ad("PUT /api/v1/offsite", s.handleSaveOffsite)
 	ad("POST /api/v1/offsite/test", s.handleTestOffsite)
 	ad("POST /api/v1/offsite/run", s.handleRunOffsite)
+	mux.HandleFunc("POST /agent/v1/recovery/sessions", s.handleRecoveryHello)
+	mux.HandleFunc("POST /agent/v1/recovery/sessions/{id}/poll", s.handleRecoveryPoll)
+	mux.HandleFunc("GET /dl/recovery/{ticket}", s.handleRecoveryDownload)
+	ad("GET /api/v1/recovery", s.handleRecovery)
+	ad("POST /api/v1/recovery/machines/{id}/approve", s.handleRecoveryApprove)
+	ad("POST /api/v1/recovery/machines/{id}/command", s.handleRecoveryCommand)
+	ad("DELETE /api/v1/recovery/machines/{id}", s.handleRecoveryForget)
+	ad("POST /api/v1/recovery/iso/link", s.handleRecoveryLink)
+	ad("PUT /api/v1/recovery/iso", s.handleRecoveryUpload)
+	ad("GET /api/v1/snapshots/{id}/machine", s.handleSnapshotMachine)
 	ad("POST /api/v1/repo/gc", s.handleMaintenance(api.JobGC))
 	ad("POST /api/v1/repo/verify", s.handleMaintenance(api.JobVerify))
 	return mux
