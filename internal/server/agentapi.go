@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"io"
@@ -376,8 +377,11 @@ func (s *Server) handlePutChunk(w http.ResponseWriter, r *http.Request, a *api.A
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Pages of folder entries compress well whatever the files hold, and
+	// with small files they are much of an upload. Only file data says
+	// whether the files are encrypted.
 	s.mu.Lock()
-	if job := s.running[a.ID]; job != "" {
+	if job := s.running[a.ID]; job != "" && !bytes.HasPrefix(data, []byte(`[{"name":`)) {
 		d := s.jobData[job]
 		if d == nil {
 			d = &jobData{}
