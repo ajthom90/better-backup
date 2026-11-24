@@ -193,8 +193,9 @@ func TestM365(t *testing.T) {
 	if st.Files != 9 || st.FilesChanged != 3 || downloads()-before != 4 {
 		t.Fatalf("third backup: %+v, %d downloads", st, downloads()-before)
 	}
+	// Paths in a snapshot are written the way its machine writes them.
 	out = t.TempDir()
-	e.do("POST", "/api/v1/restores", api.RestoreRequest{SnapshotID: j.SnapshotID, Target: out, Include: []string{"Microsoft 365/alice@example.com"}}, &rj)
+	e.do("POST", "/api/v1/restores", api.RestoreRequest{SnapshotID: j.SnapshotID, Target: out, Include: []string{filepath.Join("Microsoft 365", "alice@example.com")}}, &rj)
 	if done := e.waitLong(rj.ID); done.Status != api.StatusSuccess {
 		t.Fatalf("restore: %q %v", done.Error, done.Warnings)
 	}
