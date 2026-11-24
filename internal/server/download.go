@@ -363,6 +363,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The index of file names answers at once. Until it is built, read
+	// the snapshots.
+	if out, ok, err := s.searchIndex(r.Context(), text, q.Get("agent_id")); err != nil {
+		s.internal(w, err)
+		return
+	} else if ok {
+		reply(w, http.StatusOK, out)
+		return
+	}
 	var snaps []*tree.Snapshot
 	s.mu.Lock()
 	for _, sn := range s.snaps {

@@ -862,7 +862,7 @@ function downloadButton(s, path, folder) {
 
 // searchDialog finds files by name in every snapshot.
 async function searchDialog(q) {
-  openDialog(true, el("h3", { textContent: "Looking for “" + q + "”…" }), el("div", { className: "hint", textContent: "Reading the snapshots. The first search after new backups takes longest." }),
+  openDialog(true, el("h3", { textContent: "Looking for “" + q + "”…" }), el("div", { className: "hint", textContent: "Looking through the names of every file in every snapshot." }),
     el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
   let r;
   try { r = await call("GET", "/api/v1/search?q=" + encodeURIComponent(q)); }
@@ -886,7 +886,9 @@ async function searchDialog(q) {
   const n = r.hits.length;
   const say = !n ? "Nothing with “" + q + "” in its name was found in " + r.snapshots + " snapshots." :
     (r.more ? "The first " + n : n) + (n === 1 ? " match" : " matches") + " in " + r.snapshots + " snapshots. Each is shown as it was in the newest snapshot that holds it; older versions are reached with Browse on an older snapshot." +
-    (r.partial ? " The search ran out of time before it had read every snapshot: type more of the name." : r.more ? " There are more: type more of the name." : "");
+    (r.partial ? " The search ran out of time before it had read everything: type more of the name." : r.more ? " There are more: type more of the name." : "") +
+    (!r.indexed ? " The index of file names is still being built, so this search read the snapshots themselves and took longer." :
+      r.behind ? " " + r.behind + (r.behind === 1 ? " new snapshot is" : " new snapshots are") + " still being added to the index and " + (r.behind === 1 ? "was" : "were") + " not searched." : "");
   openDialog(true, el("h3", { textContent: "Files named like “" + q + "”" }),
     el("div", { className: "hint", id: "searchSay", textContent: say + " Use * for any letters, as in *.xlsx." }),
     n ? el("div", { className: "list" }, t) : "",
@@ -1263,8 +1265,30 @@ function downloadKey(back) {
 }
 $("keyBannerBtn").onclick = () => downloadKey();
 
+// indexSays puts the state of the index of file names into words.
+function indexSays(ix) {
+  const n = ix.names.toLocaleString() + (ix.names === 1 ? " file or folder name" : " file and folder names");
+  if (ix.state === "off") return "The index could not be opened, so searches read the snapshots themselves, which is slow. " + (ix.error || "");
+  if (ix.state === "building") return "Being built: " + (ix.snapshots - ix.waiting) + " of " + ix.snapshots + " snapshots are in it so far (" + n + ", " + size(ix.bytes) + "). Until it is done, searches read the snapshots themselves, which is slower." + (ix.error ? " It stopped on a problem and tries again by itself: " + ix.error : "");
+  return "Up to date: " + n + " from " + ix.snapshots + (ix.snapshots === 1 ? " snapshot" : " snapshots") + ", using " + size(ix.bytes) + " in the data folder." +
+    (ix.waiting ? " " + ix.waiting + (ix.waiting === 1 ? " new snapshot is" : " new snapshots are") + " being added." : "") + (ix.error ? " It stopped on a problem and tries again by itself: " + ix.error : "");
+}
 async function settingsDialog() {
-  const [st, mon] = await Promise.all([call("GET", "/api/v1/settings"), call("GET", "/api/v1/monitor")]);
+  const [st, mon, ix] = await Promise.all([call("GET", "/api/v1/settings"), call("GET", "/api/v1/monitor"), call("GET", "/api/v1/search/index")]);
+  const ixSay = el("div", { className: "hint", id: "indexState", textContent: indexSays(ix) });
+  // While the index is being built, show how far it is.
+  const watchIndex = async () => {
+    while (ixSay.isConnected) {
+      let now;
+      try { now = await call("GET", "/api/v1/search/index"); } catch (e) { return; }
+      ixSay.textContent = indexSays(now);
+      if (now.state !== "building" && !now.waiting) return;
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  };
+  const rebuild = confirmButton("Build the index again", "Click again to empty the index and fill it again", async () => { await call("POST", "/api/v1/search/index/rebuild"); await settingsDialog(); });
+  rebuild.id = "rebuildIndex"; rebuild.className = "";
+  if (ix.state === "building" || ix.waiting) setTimeout(watchIndex, 0);
   const verifyDays = el("input", { type: "number", id: "verifyDays", min: 0, max: 3650, value: mon.verify_every_days });
   const verifyAt = el("input", { type: "time", id: "verifyAt", value: mon.verify_at || "01:00" });
   const diskWarn = el("input", { type: "number", id: "diskWarn", min: 0, max: 90, value: mon.disk_warn_percent });
@@ -1300,6 +1324,9 @@ async function settingsDialog() {
     el("div", { className: "hint", textContent: "0 turns the check off. It finds data damaged by a failing disk before a restore needs it. It reads the whole repository, which takes hours on a large one, and backups wait while it runs." }),
     el("label", { textContent: "Warn when less than this percentage of the repository's disk is free" }), diskWarn,
     el("div", { className: "hint", textContent: "0 turns the warning off. The warning shows under Health and goes out as an alert." }),
+    el("h4", { textContent: "Search index" }),
+    el("div", { className: "hint", textContent: "The search box above the snapshots finds files by name. The server keeps an index of the names of every backed-up file so that a search answers at once, however many files and snapshots there are. It keeps the index up to date by itself after each backup and when snapshots are forgotten. Building it again changes nothing in the backups; with many files it takes a while, and until it is done searches still work but are slower." }),
+    ixSay, el("div", { style: "margin-top:8px" }, rebuild),
     el("h4", { textContent: "Command line access" }),
     el("div", { style: "margin-top:8px" }, newToken),
     el("h4", { textContent: "Where things are" }),

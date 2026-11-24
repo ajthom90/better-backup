@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ajthom90/better-backup/internal/api"
 )
@@ -145,6 +146,9 @@ func TestDownloadAndSearch(t *testing.T) {
 		return r
 	}
 	r := search("BUDGET")
+	if !r.Indexed || r.Behind != 0 {
+		t.Fatalf("the search was not answered from the index: %+v", r)
+	}
 	if r.Snapshots != 2 || len(r.Hits) != 3 || r.More {
 		t.Fatalf("search: %+v", r)
 	}
@@ -181,6 +185,46 @@ func TestDownloadAndSearch(t *testing.T) {
 	}
 	if err := e.admin.Do("GET", "/api/v1/search?q=%5Bab", nil, nil); err != nil {
 		t.Fatalf("a search with a bracket: %v", err)
+	}
+
+	// The index of file names can be built again from the snapshots.
+	// Searches go on while it is, by reading the snapshots, and find
+	// the same.
+	var ixs api.SearchIndexStatus
+	e.do("GET", "/api/v1/search/index", nil, &ixs)
+	if ixs.State != "ready" || ixs.Snapshots != 2 || ixs.Waiting != 0 || ixs.Names < 8 || ixs.Bytes == 0 {
+		t.Fatalf("index status: %+v", ixs)
+	}
+	names := ixs.Names
+	e.do("POST", "/api/v1/search/index/rebuild", nil, &ixs)
+	if ixs.State != "building" {
+		t.Fatalf("index status after asking for it again: %+v", ixs)
+	}
+	if r = search("budget"); len(r.Hits) != 3 || r.Snapshots != 2 {
+		t.Fatalf("search while the index is built: %+v", r)
+	}
+	for start := time.Now(); ixs.State != "ready"; time.Sleep(20 * time.Millisecond) {
+		if time.Since(start) > 30*time.Second {
+			t.Fatalf("the index was not built again: %+v", ixs)
+		}
+		e.do("GET", "/api/v1/search/index", nil, &ixs)
+	}
+	if r = search("budget"); !r.Indexed || len(r.Hits) != 3 || ixs.Names != names {
+		t.Fatalf("search after the index was built again: %+v, %+v", r, ixs)
+	}
+	// A forgotten snapshot takes the files only it held out of the index.
+	e.do("DELETE", "/api/v1/snapshots/"+j1.SnapshotID, nil, nil)
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+		e.do("GET", "/api/v1/search/index", nil, &ixs)
+		if ixs.Names < names {
+			break
+		}
+		if time.Since(start) > 30*time.Second {
+			t.Fatalf("the forgotten snapshot's files stayed in the index: %+v", ixs)
+		}
+	}
+	if r = search("budget"); !r.Indexed || len(r.Hits) != 2 || r.Snapshots != 1 || r.Hits[0].Snapshots != 1 {
+		t.Fatalf("search after a snapshot was forgotten: %+v", r)
 	}
 
 	// Downloads are in the activity log.

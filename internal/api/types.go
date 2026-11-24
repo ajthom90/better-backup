@@ -382,6 +382,28 @@ type SearchResult struct {
 	// that the search ran out of time before it had read every snapshot.
 	More    bool `json:"more,omitempty"`
 	Partial bool `json:"partial,omitempty"`
+	// Indexed says the index of file names gave the answer; without it
+	// the snapshots themselves were read, which is slower. Behind is how
+	// many new snapshots were not in the index yet.
+	Indexed bool `json:"indexed"`
+	Behind  int  `json:"behind,omitempty"`
+}
+
+// SearchIndexStatus describes the index of file names that searches
+// are answered from.
+type SearchIndexStatus struct {
+	// State is "ready", "building" (searches read the snapshots until
+	// it is built) or "off" (it could not be opened).
+	State string `json:"state"`
+	// Snapshots is how many snapshots there are, and Waiting how many
+	// of them are not in the index yet.
+	Snapshots int `json:"snapshots"`
+	Waiting   int `json:"waiting"`
+	// Names is how many different files and folders the index holds,
+	// and Bytes its size on disk.
+	Names int64  `json:"names"`
+	Bytes int64  `json:"bytes"`
+	Error string `json:"error,omitempty"`
 }
 
 type Status struct {
