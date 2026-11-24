@@ -96,7 +96,8 @@ func TestIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ix.Close()
+	// ix is opened a second time further down: close that one.
+	defer func() { ix.Close() }()
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	s1 := st.snapshot(t, "s1", t0, "a", "p", files{"/data/Reports/Budget 2026.xlsx": 10, "/data/Reports/old/budget-2019.xls": 5, "/data/notes.txt": 1})
 	s2 := st.snapshot(t, "s2", t0.Add(time.Hour), "a", "p", files{"/data/Reports/Budget 2026.xlsx": 12, "/data/Reports/Budget 2027.xlsx": 3, "/data/notes.txt": 1})
