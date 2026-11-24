@@ -184,6 +184,7 @@ function policyDialog(p) {
   const hypervisor = el("select", { id: "hypervisor" },
     el("option", { value: "", textContent: "Whichever the chosen machine is a host of" }),
     el("option", { value: "hyperv", textContent: "Hyper-V" }),
+    el("option", { value: "proxmox", textContent: "Proxmox VE" }),
     el("option", { value: "libvirt", textContent: "KVM with libvirt" }));
   hypervisor.value = (p && p.hypervisor) || "";
   const err = el("div", { id: "err" });
@@ -218,7 +219,7 @@ function policyDialog(p) {
     el("label", { textContent: "Whole volumes to back up as images (optional)" }), volumes,
     el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS." }),
     el("label", { textContent: "Virtual machines (optional)" }), vms,
-    el("div", { className: "hint", textContent: "Choose the agent on the virtual machine host: Hyper-V, or KVM with libvirt. Each machine is backed up while it runs, from a checkpoint or a backup job of the hypervisor." }),
+    el("div", { className: "hint", textContent: "Choose the agent on the virtual machine host: Hyper-V, Proxmox VE, or KVM with libvirt. On Proxmox a machine can also be named by its id. Each machine is backed up while it runs, from a checkpoint or a backup job of the hypervisor." }),
     el("label", { textContent: "Hypervisor" }), hypervisor,
     el("label", { textContent: "How virtual machine disks are read" }), vmTracking,
     el("div", { className: "hint", textContent: "Reading only what changed is much faster and relies on the hypervisor's change tracking. Run a few backups with the checking option first: it reads everything and warns if the tracking missed a change." }),
@@ -387,10 +388,10 @@ function restoreDialog(s, path) {
     el("label", { textContent: "Only this file, folder or disk" }), only,
     el("div", { className: "hint", textContent: "The original path. Use Browse on a snapshot to pick one." }),
     el("label", { textContent: "Put it in" }), target,
-    el("div", { className: "hint", textContent: "A folder on the chosen machine. A disk image can also go to a volume (E:), a device, or a new file (.img, or .vhdx on Windows). Restoring onto a different machine, or restoring a virtual machine, needs a folder here." }),
+    el("div", { className: "hint", textContent: "A folder on the chosen machine. A disk image can also go to a volume (E:), a device, or a new file (.img, or .vhdx on Windows). Restoring onto a different machine, or restoring a virtual machine, needs a folder here. For a Proxmox machine, name a storage such as local-lvm instead, or leave this empty to use the storages its disks were on." }),
     el("label", { textContent: "Existing files" }), mode,
     el("label", { textContent: "Name for a restored virtual machine" }), vmName,
-    el("div", { className: "hint", textContent: "Only for virtual machines. One is restored as a new machine, switched off, with its disks in the folder above. Restore it onto a host of the same kind it was backed up from: Hyper-V, or KVM with libvirt (there a folder such as /var/lib/libvirt/images)." }),
+    el("div", { className: "hint", textContent: "Only for virtual machines. One is restored as a new machine, switched off, with its disks in the place above. Restore it onto a host of the same kind it was backed up from: Hyper-V, Proxmox VE, or KVM with libvirt (there a folder such as /var/lib/libvirt/images)." }),
     err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
 }
 

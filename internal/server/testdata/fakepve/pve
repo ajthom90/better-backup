@@ -1,0 +1,84 @@
+#!/bin/bash
+# A stand-in for the Proxmox VE tools qm, pvesm and pvesh, for tests.
+# It keeps a node's state under $BB_PVE_ROOT: machine configurations in
+# etc/pve/qemu-server, storages listed in "storages" (name and type per
+# line) with their volumes as files under storage/NAME.
+set -eu
+R=${BB_PVE_ROOT:?}
+tool=$(basename "$0")
+conf() { echo "$R/etc/pve/qemu-server/$1.conf"; }
+die() { echo "$*" >&2; exit 255; }
+volpath() { # storage:volume -> file
+  local st=${1%%:*} vol=${1#*:}
+  [ -d "$R/storage/$st" ] || die "storage '$st' does not exist"
+  if [ "$(awk -v s="$st" '$1==s{print $2}' "$R/storages")" = dir ]; then echo "$R/storage/$st/images/$vol"; else echo "$R/storage/$st/$vol"; fi
+}
+case "$tool $1" in
+"qm list")
+  printf '%10s %-20s %-10s %-10s %12s %-10s\n' VMID NAME STATUS 'MEM(MB)' 'BOOTDISK(GB)' PID
+  for f in "$R"/etc/pve/qemu-server/*.conf; do
+    [ -e "$f" ] || continue
+    id=$(basename "$f" .conf); name=$(sed -n 's/^name: //p' "$f"); st=stopped
+    [ -S "$R/var/run/qemu-server/$id.qmp" ] && st=running
+    printf '%10s %-20s %-10s %-10s %12s %-10s\n' "$id" "${name:-VM $id}" "$st" 64 0.00 0
+  done ;;
+"qm config")
+  [ -e "$(conf "$2")" ] || die "Configuration file 'nodes/pve/qemu-server/$2.conf' does not exist"
+  cat "$(conf "$2")" ;;
+"qm create")
+  id=$2; shift 2
+  [ -e "$(conf "$id")" ] && die "unable to create VM $id - VM $id already exists on node 'pve'"
+  [ "$1" = --name ] || die "400 Parameter verification failed."
+  echo "$2" | grep -Eq '^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$' || die "400 Parameter verification failed. name: invalid format - value does not look like a valid DNS name"
+  echo "name: $2" > "$(conf "$id")" ;;
+"qm set")
+  id=$2; shift 2
+  f=$(conf "$id"); [ -e "$f" ] || die "no such VM"
+  cp "$f" "$f.new"
+  while [ $# -gt 0 ]; do
+    k=${1#--}; v=$2; shift 2
+    # Like the real thing, refuse what only root@pam may set, and
+    # volumes that do not exist. Nothing is saved if anything fails.
+    [ "$k" = args ] && { rm "$f.new"; die "400 Parameter verification failed. args: only root@pam can set this"; }
+    case "$k" in scsi[0-9]*|virtio[0-9]*|sata[0-9]*|ide[0-9]*|efidisk[0-9]*)
+      vol=${v%%,*}
+      case "$vol" in none|/*|*:cloudinit|*:iso/*) ;; *) [ -e "$(volpath "$vol")" ] || { rm "$f.new"; die "volume '$vol' does not exist"; } ;; esac ;;
+    esac
+    [ "$k" = vmgenid ] && [ "$v" = 1 ] && v=11111111-2222-3333-4444-555555555555
+    v=${v//$'\n'/\\n} # one line per setting
+    grep -v "^$k: " "$f.new" > "$f.tmp" || true
+    printf '%s: %s\n' "$k" "$v" >> "$f.tmp"; mv "$f.tmp" "$f.new"
+  done
+  mv "$f.new" "$f" ;;
+"qm guest")
+  die "QEMU guest agent is not running" ;;
+"pvesm status")
+  printf '%-12s %10s %10s %15s %15s %15s %8s\n' Name Type Status Total Used Available %
+  while read -r name type; do printf '%-12s %10s %10s %15s %15s %15s %8s\n' "$name" "$type" active 100 1 99 1.00%; done < "$R/storages" ;;
+"pvesm path")
+  p=$(volpath "$2"); [ -e "$p" ] || die "volume '$2' does not exist"; echo "$p" ;;
+"pvesm alloc")
+  st=$2; id=$3; size=$5; fmt=""
+  [ "$4" = "" ] || die "this stand-in only allocates volumes with automatic names"
+  [ "${6:-}" = --format ] && fmt=$7
+  type=$(awk -v s="$st" '$1==s{print $2}' "$R/storages"); [ -n "$type" ] || die "storage '$st' does not exist"
+  if [ "$type" = dir ]; then
+    fmt=${fmt:-raw}; mkdir -p "$R/storage/$st/images/$id"; n=0
+    while [ -e "$R/storage/$st/images/$id/vm-$id-disk-$n.$fmt" ]; do n=$((n+1)); done
+    vol="$st:$id/vm-$id-disk-$n.$fmt"
+  else
+    [ -z "$fmt" ] || [ "$fmt" = raw ] || die "unsupported format '$fmt'"
+    fmt=raw; n=0
+    while [ -e "$R/storage/$st/vm-$id-disk-$n" ]; do n=$((n+1)); done
+    vol="$st:vm-$id-disk-$n"
+  fi
+  qemu-img create -q -f "$fmt" "$(volpath "$vol")" "${size}K"
+  # Plain LVM does not clear what it hands out.
+  [ "$type" != lvm ] || qemu-io -f raw -c "write -q -P 0xee 0 ${size}k" "$(volpath "$vol")"
+  echo "successfully created '$vol'" ;;
+"pvesh get")
+  [ "$2" = /cluster/nextid ] || die "no such path"
+  if [ "${3:-}" = --vmid ]; then [ -e "$(conf "$4")" ] && die "400 Parameter verification failed. vmid: VM $4 already exists"; echo "$4"; exit 0; fi
+  id=100; while [ -e "$(conf "$id")" ]; do id=$((id+1)); done; echo "$id" ;;
+*) die "the stand-in for $tool does not know: $*" ;;
+esac

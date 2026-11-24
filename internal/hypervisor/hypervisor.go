@@ -145,6 +145,11 @@ func ByConfigFile(name string) Driver {
 	return nil
 }
 
+// auto lists the hypervisors a computer can be a host of, in the order
+// they are looked for. Proxmox comes before libvirt: a Proxmox node can
+// have libvirt's tools installed, but its machines are not libvirt's.
+var auto = []string{"hyperv", "proxmox", "libvirt"}
+
 // For returns the driver for a policy's hypervisor setting. An empty
 // kind means the hypervisor this computer is a host of.
 func For(kind string) (Driver, error) {
@@ -159,7 +164,11 @@ func For(kind string) (Driver, error) {
 		return d, nil
 	}
 	var labels []string
-	for _, d := range All() {
+	for _, k := range auto {
+		d := ByKind(k)
+		if d == nil {
+			continue
+		}
 		if d.Available() == nil {
 			return d, nil
 		}

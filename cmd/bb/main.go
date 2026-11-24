@@ -35,9 +35,10 @@ Usage:
   bb policies                            list backup policies
   bb policy add --name NAME --agent AGENT [--path PATH ...]
         [--volume VOLUME ...]  (block-level image: C: or /dev/vg0/data)
-        [--vm NAME ...]        (virtual machine on the agent's host: Hyper-V or
-                                KVM with libvirt; '*' for all on the host)
-        [--hypervisor hyperv|libvirt]  (default: whichever the host is)
+        [--vm NAME ...]        (virtual machine on the agent's host: Hyper-V,
+                                Proxmox VE or KVM with libvirt; '*' for all
+                                on the host)
+        [--hypervisor hyperv|libvirt|proxmox]  (default: whichever the host is)
         [--vm-tracking on|check]  (read only what changed in each machine's
                                 disks; check reads all and tests the tracking)
         [--system-state]       (Windows: registry, boot and system files,
