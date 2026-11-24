@@ -370,9 +370,17 @@ func (ix *Index) Reconcile(snaps []*tree.Snapshot) ([]*tree.Snapshot, error) {
 	alive := map[int64]int{}    // snapshots of a series that exist
 	newest := map[int64]int64{} // time of the newest indexed snapshot of a series
 	var lost []int64            // snapshots that are newly gone
+	// A series is indexed again from its start if a snapshot older than
+	// one already indexed is to be added, which cannot be done after
+	// it, or if a forgotten snapshot is back, as after the repository
+	// was put back from a copy.
+	again := map[int64]bool{}
 	for _, r := range all {
 		switch {
 		case r.gone:
+			if exists[r.id] != nil {
+				again[r.series] = true
+			}
 		case exists[r.id] == nil:
 			lost = append(lost, r.seq)
 		default:
@@ -397,12 +405,13 @@ func (ix *Index) Reconcile(snaps []*tree.Snapshot) ([]*tree.Snapshot, error) {
 		}
 		return pending[i].ID < pending[j].ID
 	})
-	// A snapshot older than one already indexed in its series cannot be
-	// added after it: the series is indexed again from its start.
-	again := map[int64]bool{}
+	waiting := map[int64]bool{}
 	for _, sn := range pending {
-		if id, ok := seriesOf[seriesKey(sn)]; ok && sn.Time.UnixMilli() < newest[id] {
-			again[id] = true
+		if id, ok := seriesOf[seriesKey(sn)]; ok {
+			waiting[id] = true
+			if sn.Time.UnixMilli() < newest[id] {
+				again[id] = true
+			}
 		}
 	}
 	if len(again) > 0 {
@@ -414,10 +423,11 @@ func (ix *Index) Reconcile(snaps []*tree.Snapshot) ([]*tree.Snapshot, error) {
 		}
 		sort.Slice(pending, func(i, j int) bool { return pending[i].Time.Before(pending[j].Time) })
 	}
-	// A series none of whose snapshots exist is dropped whole.
+	// A series none of whose snapshots exist is dropped whole, unless a
+	// new snapshot of it waits: that one is added faster to what is there.
 	var drop []int64
 	for _, id := range seriesOf {
-		if alive[id] == 0 || again[id] {
+		if (alive[id] == 0 && !waiting[id]) || again[id] {
 			drop = append(drop, id)
 		}
 	}
@@ -941,11 +951,12 @@ func (l *line) within(first int64, last sql.NullInt64) (lo, hi int) {
 }
 
 // trigrams returns a full-text query for the names that can match
-// text, or "" if text has no run of three letters to look up.
+// text, or "" if text has no run of three letters to look up. The
+// index of names ignores case by itself.
 func trigrams(text string) string {
 	var terms []string
 	seen := map[string]bool{}
-	for _, run := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return r == '*' || r == '?' }) {
+	for _, run := range strings.FieldsFunc(text, func(r rune) bool { return r == '*' || r == '?' }) {
 		rs := []rune(run)
 		for i := 0; i+3 <= len(rs) && len(terms) < 16; i++ {
 			t := string(rs[i : i+3])

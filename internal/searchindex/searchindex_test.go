@@ -151,6 +151,30 @@ func TestIndex(t *testing.T) {
 	if n != 6 {
 		t.Fatalf("%d names are left, want 6", n)
 	}
+	// The repository is put back from a copy made before that, and the
+	// forgotten snapshot is there again.
+	syncAll(t, ix, st, []*tree.Snapshot{s1, s2, s3})
+	if got = find("budget"); len(got) != 3 || got["/data/Reports/Budget 2026.xlsx"].Snapshots != 3 || got["/data/Reports/Budget 2027.xlsx"].Newest != "s2" {
+		t.Fatalf("after a forgotten snapshot came back: %+v", got)
+	}
+	// A snapshot older than the ones in the index turns up.
+	s0 := st.snapshot(t, "s0", t0.Add(-time.Hour), "a", "p", files{"/data/Reports/Budget 2025.xlsx": 7, "/data/notes.txt": 1})
+	syncAll(t, ix, st, []*tree.Snapshot{s1, s2, s3, s0})
+	if got = find("budget"); len(got) != 4 || got["/data/Reports/Budget 2025.xlsx"].Newest != "s0" || got["/data/Reports/Budget 2026.xlsx"].Oldest != "s1" {
+		t.Fatalf("after an older snapshot was added: %+v", got)
+	}
+	if h := find("notes")["/data/notes.txt"]; h.Snapshots != 4 || h.Oldest != "s0" || h.Newest != "s3" {
+		t.Fatalf("a file in all four: %+v", h)
+	}
+	// Capital letters and letters with accents are found either way.
+	s4 := st.snapshot(t, "s4", t0.Add(3*time.Hour), "a", "p", files{"/data/Ärger über Größe.TXT": 2})
+	syncAll(t, ix, st, []*tree.Snapshot{s1, s2, s3, s0, s4})
+	for _, q := range []string{"ärger", "ÜBER", "größe.txt"} {
+		r, err := ix.Search(context.Background(), Query{Text: q, Match: func(n string) bool { return strings.Contains(strings.ToLower(n), strings.ToLower(q)) }})
+		if err != nil || len(r.Hits) != 1 {
+			t.Fatalf("search for %q: %+v, %v", q, r, err)
+		}
+	}
 	// Open it again as the index of another repository: it is emptied.
 	ix.Close()
 	if ix, err = Open(ix.path, "other"); err != nil {
