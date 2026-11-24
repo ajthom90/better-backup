@@ -74,6 +74,24 @@ Check (-not (Test-Path "$state\enroll.conf")) 'the used enrollment code was dele
 $status = & "$env:ProgramFiles\better-backup\Agent\bb-agent.exe" status | Out-String
 Write-Host $status
 Check ($LASTEXITCODE -eq 0 -and $status -match 'msi-test') 'bb-agent status reaches the service over its local control channel'
+# The settings page, as `bb-agent setup` serves it to a browser and as the app shows it.
+$agentDir = "$env:ProgramFiles\better-backup\Agent"
+$setup = Start-Process "$agentDir\bb-agent.exe" -ArgumentList 'setup', '--no-browser' -RedirectStandardOutput "$Dir\setup.log" -PassThru -WindowStyle Hidden
+try {
+  Wait { (Get-Content "$Dir\setup.log" -Raw) -match 'http://\S+' } 'bb-agent setup serves the settings page' 20
+  $page = [regex]::Match((Get-Content "$Dir\setup.log" -Raw), 'http://\S+').Value
+  $web = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+  Check ((Invoke-WebRequest $page -WebSession $web).Content -match '<html') 'the settings page loads'
+  $shown = Invoke-RestMethod ($page -replace '/\?key=.*', '/api/state') -WebSession $web
+  Write-Host ($shown | ConvertTo-Json -Depth 5)
+  Check (($shown | ConvertTo-Json -Depth 5) -match 'msi-test') 'the settings page shows this agent'
+} finally { Stop-Process -Id $setup.Id -Force -ErrorAction SilentlyContinue }
+Check (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\better-backup agent.lnk") 'the settings app is in the Start menu'
+$app = Start-Process "$agentDir\bb-agent-ui.exe" -PassThru
+Start-Sleep 8
+Check (-not $app.HasExited) 'the settings app starts and stays open'
+Stop-Process -Id $app.Id -Force
+
 Check (-not ((Readers $state) -match 'Users')) "ordinary users cannot read $state"
 Check (-not (Select-String -Path "$Dir\msi-install-the-agent-with-an-enrollment-code.log" -Pattern $t.token -Quiet)) 'the token is not in the installer log'
 Check (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SafeBoot\Network\better-backup-agent') 'the agent may start in safe mode'

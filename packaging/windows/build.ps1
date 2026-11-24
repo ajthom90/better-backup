@@ -33,8 +33,17 @@ Push-Location $root
 try {
   $env:CGO_ENABLED = '0'; $env:GOOS = 'windows'; $env:GOARCH = $Arch
   $ld = "-s -w -X github.com/ajthom90/better-backup/internal/server.Version=$Version -X github.com/ajthom90/better-backup/internal/agent.Version=$Version"
-  go build -trimpath -ldflags $ld -o "$bin/" ./cmd/...
+  go build -trimpath -ldflags $ld -o "$bin/" ./cmd/bb ./cmd/bb-agent ./cmd/bb-server
+
+  # The settings app is a window, and carries a manifest that makes
+  # Windows start it elevated. The manifest is linked in as a resource.
+  $syso = "cmd/bb-agent-ui/rsrc_windows_$Arch.syso"
+  $env:GOOS = ''; $env:GOARCH = ''
+  go run github.com/akavel/rsrc@v0.10.2 -arch $Arch -manifest packaging/windows/bb-agent-ui.manifest -o $syso
+  $env:GOOS = 'windows'; $env:GOARCH = $Arch
+  go build -trimpath -tags 'desktop,production' -ldflags "-H windowsgui $ld" -o "$bin/" ./cmd/bb-agent-ui
 } finally {
+  if ($syso) { Remove-Item $syso -ErrorAction SilentlyContinue }
   Remove-Item Env:GOOS, Env:GOARCH
   Pop-Location
 }

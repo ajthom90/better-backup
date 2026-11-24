@@ -23,7 +23,7 @@
     <Property Id="ENROLL_CODE" Secure="yes" Hidden="yes" />
     <Property Id="AGENT_NAME" Secure="yes" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/ajthom90/better-backup" />
-    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="The agent runs as the service “better-backup agent”. If you gave it an enrollment code, it registers with the server within a minute and then shows up in the server's web UI. Its log is C:\ProgramData\better-backup-agent\agent.log." />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="The agent runs as the service “better-backup agent”. If you gave it an enrollment code, it registers with the server within a minute and then shows up in the server's web UI. To register later, or to see how the backups are going, open “better-backup agent” from the Start menu." />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="CompanyFolder" Name="better-backup">
@@ -33,6 +33,7 @@
     <StandardDirectory Id="CommonAppDataFolder">
       <Directory Id="STATEDIR" Name="better-backup-agent" />
     </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
 
     <Feature Id="Main" Title="better-backup agent">
       <Component Id="AgentExe" Directory="INSTALLFOLDER">
@@ -44,6 +45,13 @@
                               RestartServiceDelayInSeconds="30" ResetPeriodInDays="1" />
         </ServiceInstall>
         <ServiceControl Id="AgentService" Name="better-backup-agent" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+
+      <!-- The settings window: register with a server, see how backups go, start one. -->
+      <Component Id="AgentUi" Directory="INSTALLFOLDER">
+        <File Id="AgentUi" Source="$(BinDir)\bb-agent-ui.exe" KeyPath="yes">
+          <Shortcut Id="AgentUi" Directory="ProgramMenuFolder" Name="better-backup agent" Description="Register this machine with a backup server and see its backups." WorkingDirectory="INSTALLFOLDER" />
+        </File>
       </Component>
 
       <!-- Lets the agent start in safe mode with networking, where a domain controller is restored. -->
@@ -79,7 +87,7 @@
         <Control Id="CodeHelp" Type="Text" X="20" Y="58" Width="330" Height="38" NoPrefix="yes" Text="In the server's web UI choose “Add an agent”, copy the enrollment code shown there, and paste it here. The code holds the server's address and works once." />
         <Control Id="CodeLabel" Type="Text" X="20" Y="100" Width="330" Height="12" NoPrefix="yes" Text="&amp;Enrollment code:" />
         <Control Id="CodeEdit" Type="Edit" X="20" Y="113" Width="330" Height="18" Property="ENROLL_CODE" Text="{2048}" />
-        <Control Id="CodeLater" Type="Text" X="20" Y="135" Width="330" Height="24" NoPrefix="yes" Text="Leave it empty to register later. The agent is installed either way and waits until it is registered." />
+        <Control Id="CodeLater" Type="Text" X="20" Y="135" Width="330" Height="24" NoPrefix="yes" Text="Leave it empty to register later with “better-backup agent” in the Start menu. The agent is installed either way and waits until it is registered." />
         <Control Id="NameLabel" Type="Text" X="20" Y="168" Width="330" Height="12" NoPrefix="yes" Text="&amp;Name to show on the server (empty for this computer's name):" />
         <Control Id="NameEdit" Type="Edit" X="20" Y="181" Width="200" Height="18" Property="AGENT_NAME" Text="{64}" />
 
