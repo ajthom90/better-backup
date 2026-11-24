@@ -47,6 +47,8 @@ backup until it has run beside your current one for a while.
   files are downloaded. They are restored into a folder, each message as an
   `.eml` file. Tested against a stand-in for Microsoft Graph, not yet
   against a real tenant.
+- **Search and download**: find a file by name across every snapshot, and
+  download a file, or a folder as a zip file, in the browser.
 - **Agents for Windows, macOS and Linux**, enrolled with a one-time token and
   authenticated with per-agent TLS certificates. Agents dial out to the
   server, so only the server needs an open port.
@@ -284,6 +286,23 @@ warnings, forget snapshots, verify the repository, reclaim space and set up
 email alerts. The `bb` command line does the same things for scripts. Sign in with the name and
 password you created on the first visit. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
+
+**Find a file.** The box above the list of snapshots finds files and folders
+by name in every snapshot: part of the name, or a pattern such as `*.xlsx`.
+Each match is shown as the newest snapshot that holds it has it, with how
+many snapshots hold it, so a file that was deleted last week is found in the
+last snapshot taken before that. From a match you can open its folder,
+download it or restore it. A search reads the snapshots' folder listings, so
+on a repository with millions of files it can take a while; it stops after 25
+seconds and says so.
+
+**Download in the browser.** In Browse, and in the search results, an
+operator or administrator can download a file as it is, or a folder as a zip
+file, straight to their own computer, without an agent. The data comes from
+the server, so nothing on the backed-up machine is touched. Each download is
+written to the activity log. A disk image downloads as a raw image; links
+inside a folder are left out of the zip file, and so are owners and
+permissions, which a zip file cannot hold. For those, restore to a folder.
 
 ### Windows installers
 

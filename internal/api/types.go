@@ -343,6 +343,47 @@ type ListEntry struct {
 	Mode    uint32    `json:"mode"`
 }
 
+// DownloadRequest asks for a link to a file or folder of a snapshot.
+type DownloadRequest struct {
+	Path string `json:"path"`
+}
+
+// DownloadLink is a link that downloads once, within two minutes, with
+// no sign-in: a file as it is, a folder as a zip file.
+type DownloadLink struct {
+	URL  string `json:"url"`
+	Name string `json:"name"`
+	Size int64  `json:"size,omitempty"`
+}
+
+// SearchHit is a file or folder whose name matched a search, as the
+// newest snapshot that holds it has it.
+type SearchHit struct {
+	SnapshotID string    `json:"snapshot_id"`
+	Time       time.Time `json:"time"`
+	// Snapshots is how many of the searched snapshots hold the path,
+	// and Oldest the time of the oldest of them.
+	Snapshots int       `json:"snapshots"`
+	Oldest    time.Time `json:"oldest"`
+	AgentID   string    `json:"agent_id"`
+	Hostname  string    `json:"hostname"`
+	Path      string    `json:"path"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	Size      int64     `json:"size"`
+	ModTime   time.Time `json:"mtime"`
+}
+
+type SearchResult struct {
+	Hits []SearchHit `json:"hits"`
+	// Snapshots is how many snapshots were searched.
+	Snapshots int `json:"snapshots"`
+	// More says there are more matches than are listed, and Partial
+	// that the search ran out of time before it had read every snapshot.
+	More    bool `json:"more,omitempty"`
+	Partial bool `json:"partial,omitempty"`
+}
+
 type Status struct {
 	Version     string `json:"version"`
 	RepoID      string `json:"repo_id"`
