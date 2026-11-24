@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ajthom90/better-backup/internal/hypervisor"
 	_ "github.com/ajthom90/better-backup/internal/hypervisor/all"
@@ -169,7 +170,34 @@ func (r *restorer) vm(e *tree.Entry, orig string, full bool) error {
 	if err := drv.Available(); err != nil {
 		return fmt.Errorf("the virtual machine %s can only be rebuilt on a %s host; elsewhere restore its disks one at a time with --path", e.Name, drv.Label())
 	}
-	rs, err := drv.NewRestore(r.ctx, config, hypervisor.Target{Place: r.opts.Target, Name: name, OpenFile: openImageTarget, Connection: r.opts.Connection})
+	target := hypervisor.Target{Place: r.opts.Target, Name: name, OpenFile: openImageTarget, Connection: r.opts.Connection}
+	// Over the original: the machine that has the name stays as it is
+	// until the disks from the backup are in place. Then it is switched
+	// off and renamed, never deleted.
+	var replacer hypervisor.Replacer
+	var aside string
+	if r.opts.VMReplace {
+		rp, ok := drv.(hypervisor.Replacer)
+		if !ok {
+			return fmt.Errorf("virtual machine %s: restoring over the original is not built yet for %s; restore it under a new name instead", e.Name, drv.Label())
+		}
+		place, found, err := rp.Find(r.ctx, r.opts.Connection, name)
+		if err != nil {
+			return fmt.Errorf("virtual machine %s: looking for the machine to replace: %w", e.Name, err)
+		}
+		if found {
+			stamp := now().Format("2006-01-02 15.04.05")
+			replacer, aside = rp, name+" (replaced "+stamp+")"
+			target.Replace, target.Folder = true, name+" restored "+stamp
+			if target.Place == "" {
+				target.Place = place
+			}
+			if target.Place == "" {
+				return fmt.Errorf("virtual machine %s: the machine to replace has no disk that says where its files are; name a folder to put the restored one in", e.Name)
+			}
+		}
+	}
+	rs, err := drv.NewRestore(r.ctx, config, target)
 	if err != nil {
 		return fmt.Errorf("virtual machine %s: %w", e.Name, err)
 	}
@@ -198,16 +226,37 @@ func (r *restorer) vm(e *tree.Entry, orig string, full bool) error {
 			return err
 		}
 	}
+	if replacer != nil {
+		if err := replacer.SetAside(r.ctx, r.opts.Connection, name, aside); err != nil {
+			abort()
+			return fmt.Errorf("virtual machine %s: setting the machine that is there aside failed, so it was left as it is: %w (the disks from the backup were restored to %s)", name, err, rs.Where())
+		}
+	}
 	warnings, err := rs.Finish()
 	for _, w := range warnings {
 		r.warn("%s: %s", name, w)
 	}
 	if err != nil {
-		return fmt.Errorf("creating the virtual machine %s: %w (its disks were restored to %s)", name, err, rs.Where())
+		err = fmt.Errorf("creating the virtual machine %s: %w (its disks were restored to %s)", name, err, rs.Where())
+		if replacer != nil {
+			if back := replacer.PutBack(r.ctx, r.opts.Connection, name, aside); back != nil {
+				return fmt.Errorf("%w; the machine that was there is now called %q and is switched off, and giving it its name back failed: %v", err, aside, back)
+			}
+			return fmt.Errorf("%w; the machine that was there has its name back and is switched off: start it again", err)
+		}
+		return err
+	}
+	if replacer != nil {
+		r.warn("%s: the restored machine's files are in %s. The machine that was there was switched off and is kept as %q. It has the same network addresses as the restored one, so do not run both. Delete it, and its disks, when you are sure of the restored one, and take care to leave that folder alone", name, rs.Where(), aside)
+	} else if r.opts.VMReplace {
+		r.warn("%s: there was no machine of that name to replace, so it was restored as a new one", name)
 	}
 	r.stats.Files++
 	return nil
 }
+
+// now is the clock, which tests replace.
+var now = time.Now
 
 // children reads every entry under a virtual machine or whole machine.
 func (r *restorer) children(e *tree.Entry) ([]tree.Entry, error) {

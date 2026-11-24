@@ -233,6 +233,8 @@ type RestoreSpec struct {
 	Target     string       `json:"target,omitempty"` // empty: restore in place
 	Overwrite  string       `json:"overwrite,omitempty"`
 	VMName     string       `json:"vm_name,omitempty"` // name for a restored virtual machine
+	// VMReplace is as in RestoreRequest.
+	VMReplace bool `json:"vm_replace,omitempty"`
 	// Disks says where the disks of a whole machine go: "disk0" to a
 	// device such as /dev/sda.
 	Disks map[string]string `json:"disks,omitempty"`
@@ -296,6 +298,10 @@ type RestoreRequest struct {
 	Overwrite  string   `json:"overwrite,omitempty"`
 	// VMName names a restored virtual machine. Default: its old name.
 	VMName string `json:"vm_name,omitempty"`
+	// VMReplace restores a virtual machine over the one that has its
+	// name: that one is switched off and renamed, not deleted, once the
+	// disks from the backup are in place.
+	VMReplace bool `json:"vm_replace,omitempty"`
 	// Disks restores a whole machine onto disks of the agent: the name
 	// of a disk in the backup ("disk0") to a device such as /dev/sda.
 	// Everything on those disks is replaced.

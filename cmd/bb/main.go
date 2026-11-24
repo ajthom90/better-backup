@@ -65,6 +65,9 @@ Usage:
   bb ls SNAPSHOT [PATH]                  browse a snapshot
   bb restore SNAPSHOT [--path PATH ...] [--target DIR] [--agent AGENT]
         [--overwrite if-changed|always|never] [--name NEW-VM-NAME] [--wait]
+        [--replace]  (a Hyper-V or KVM virtual machine: put it back over the
+                      one that has its name, which is switched off and
+                      kept under another name; --target is then optional)
         [--disk NAME=TARGET ...]  (whole machine: put a disk of the backup,
                                 such as disk0, onto a disk or into a file)
         [--vmware-server NAME] (for a VMware machine: where it goes, if not
@@ -149,6 +152,7 @@ var (
 	fTarget  = fs.String("target", "", "")
 	fOver    = fs.String("overwrite", "", "")
 	fWait    = fs.Bool("wait", false, "")
+	fReplace = fs.Bool("replace", false, "")
 	fSysSt   = fs.Bool("system-state", false, "")
 	fMachine = fs.Bool("whole-machine", false, "")
 	fTrueNAS = fs.Bool("truenas-config", false, "")
@@ -546,7 +550,7 @@ func main() {
 		}
 	case "restore":
 		need(pos, 2, "bb restore SNAPSHOT")
-		req := api.RestoreRequest{SnapshotID: pos[1], Include: fPaths, Target: *fTarget, Overwrite: *fOver, VMName: *fName, VMwareServer: vmwareID(*fVMware)}
+		req := api.RestoreRequest{SnapshotID: pos[1], Include: fPaths, Target: *fTarget, Overwrite: *fOver, VMName: *fName, VMReplace: *fReplace, VMwareServer: vmwareID(*fVMware)}
 		if *fSysRest {
 			req.SystemState = &api.SystemStateRestore{Registry: !*fNoReg, AuthoritativeSYSVOL: *fAuthSys, AuthoritativeSubtrees: fAuthDN, Restart: *fRestart}
 		} else if *fNoReg || *fAuthSys || len(fAuthDN) > 0 || *fRestart {

@@ -132,7 +132,11 @@ func TestLibvirt(t *testing.T) {
 	name := "bbtest-" + filepath.Base(work)[7:]
 	clone := name + "-restored"
 	t.Cleanup(func() {
-		for _, d := range []string{name, clone, clone + "2"} {
+		all, _ := exec.Command("virsh", "-c", uri, "list", "--all", "--name").Output()
+		for _, d := range strings.Split(string(all), "\n") {
+			if !strings.HasPrefix(d, name) {
+				continue
+			}
 			exec.Command("virsh", "-c", uri, "destroy", d).Run()
 			exec.Command("virsh", "-c", uri, "undefine", d, "--nvram", "--checkpoints-metadata").Run()
 		}
@@ -388,6 +392,59 @@ func TestLibvirt(t *testing.T) {
 	if got := virsh("checkpoint-list", name, "--name"); got != "" {
 		t.Fatalf("checkpoints left after tracking was switched off: %q", got)
 	}
+
+	// 8. Restored over the original: the machine that is there, running
+	// and with a checkpoint from change tracking, is switched off and
+	// kept under another name, and the restored one has its name and
+	// its files in a new folder beside the old ones.
+	e.do("PUT", "/api/v1/policies/"+pol.ID, api.Policy{Name: "vms", AgentID: agentID, VMs: []string{name}, VMTracking: "on", Enabled: true}, &pol)
+	j, _ = e.backup(pol.ID)
+	noWarnings(j)
+	sh(t, "cp", disk, filepath.Join(work, "before.qcow2"))
+	guestWrite("vda", "0x99", "30M", "1M") // what the restore takes back
+	var over api.Job
+	e.do("POST", "/api/v1/restores", api.RestoreRequest{SnapshotID: j.SnapshotID, Include: []string{name}, VMReplace: true}, &over)
+	r = e.waitLong(over.ID)
+	if r.Status != api.StatusWarning || len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "is kept as") {
+		t.Fatalf("restore over the original: %s %s %v", r.Status, r.Error, r.Warnings)
+	}
+	var aside string
+	for _, d := range strings.Split(virsh("list", "--all", "--name"), "\n") {
+		if strings.HasPrefix(d, name+" (replaced ") {
+			aside = d
+		}
+	}
+	if aside == "" || !strings.Contains(r.Warnings[0], aside) {
+		t.Fatalf("the machine that was there is not kept: %q, %v", virsh("list", "--all", "--name"), r.Warnings)
+	}
+	if got := virsh("domstate", aside); got != "shut off" {
+		t.Fatalf("the machine that was set aside is %q", got)
+	}
+	if xml := virsh("dumpxml", aside); !strings.Contains(xml, disk) {
+		t.Fatalf("the machine that was set aside lost its disks:\n%s", xml)
+	}
+	folders, _ := filepath.Glob(filepath.Join(work, name+" restored *"))
+	if len(folders) != 1 {
+		t.Fatalf("folders of the restored machine: %v", folders)
+	}
+	xml := virsh("dumpxml", name)
+	if !strings.Contains(xml, filepath.Join(folders[0], "vda.qcow2")) || strings.Contains(xml, disk) {
+		t.Fatalf("the restored machine's disks:\n%s", xml)
+	}
+	sh(t, "qemu-img", "compare", "-f", "qcow2", "-F", "qcow2", filepath.Join(work, "before.qcow2"), filepath.Join(folders[0], "vda.qcow2"))
+	// It starts, and the next backup of it works.
+	virsh("start", name)
+	if j, _ = e.backup(pol.ID); j.Status == api.StatusFailed {
+		t.Fatalf("backup of the restored machine: %s", j.Error)
+	}
+	// Asked to replace a machine that is not there, it is an ordinary
+	// restore that says so.
+	e.do("POST", "/api/v1/restores", api.RestoreRequest{SnapshotID: j.SnapshotID, Include: []string{name}, Target: work, VMName: name + "-new", VMReplace: true}, &over)
+	r = e.waitLong(over.ID)
+	if r.Status != api.StatusWarning || !strings.Contains(strings.Join(r.Warnings, "\n"), "no machine of that name") {
+		t.Fatalf("replacing a machine that is not there: %s %s %v", r.Status, r.Error, r.Warnings)
+	}
+	virsh("domstate", name+"-new")
 }
 
 // TestHypervisorPolicy checks that a policy names a known hypervisor.

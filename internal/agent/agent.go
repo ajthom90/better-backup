@@ -685,7 +685,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		}
 		stats, err = restore.Run(jctx, get, restore.Options{SystemState: sys,
 			Sources: j.Restore.Sources, SourceOS: j.Restore.SourceOS, Include: j.Restore.Include,
-			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName, Disks: j.Restore.Disks, Connection: j.Restore.Connection,
+			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName, VMReplace: j.Restore.VMReplace, Disks: j.Restore.Disks, Connection: j.Restore.Connection,
 			Progress: func(s restore.Stats) { setProgress(s) }, Warn: warn})
 		req.Restore = &stats
 	default:

@@ -508,6 +508,16 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "mail and files from Microsoft 365 are restored into a folder: say where to put them, or choose only other parts of the backup")
 		return
 	}
+	if req.VMReplace {
+		switch {
+		case len(req.Disks) > 0 || req.SystemState != nil:
+			fail(w, http.StatusBadRequest, "vm_replace does not go with disks or system_state")
+			return
+		case !holdsVM(sn):
+			fail(w, http.StatusBadRequest, "this snapshot holds no virtual machine to put back over the original")
+			return
+		}
+	}
 	if req.SystemState != nil {
 		has := false
 		for _, e := range sn.Sources {
@@ -534,7 +544,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		req.Include = []string{tree.SystemStateName}
 	}
 	j := &api.Job{Type: api.JobRestore, AgentID: a.ID, SnapshotID: sn.ID, Restore: &api.RestoreSpec{
-		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName, Disks: req.Disks,
+		SnapshotID: sn.ID, Sources: sn.Sources, SourceOS: sn.OS, Include: req.Include, Target: req.Target, Overwrite: req.Overwrite, VMName: req.VMName, VMReplace: req.VMReplace, Disks: req.Disks,
 		VMwareServer: req.VMwareServer, SystemState: req.SystemState}}
 	if err := s.enqueue(j); err != nil {
 		s.internal(w, err)
@@ -552,8 +562,22 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	if len(req.Include) > 0 {
 		what = strings.Join(req.Include, ", ")
 	}
+	if req.VMReplace {
+		where += ", replacing the virtual machine of the same name"
+	}
 	note(r, "%s from snapshot %s of %s onto %s, %s", what, sn.ID, sn.Hostname, a.Name, where)
 	reply(w, http.StatusAccepted, j)
+}
+
+// holdsVM says whether a snapshot has a virtual machine among its
+// sources.
+func holdsVM(sn *tree.Snapshot) bool {
+	for _, e := range sn.Sources {
+		if e.Type == tree.TypeVM {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleMaintenance(kind string) http.HandlerFunc {

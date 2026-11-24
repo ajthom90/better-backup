@@ -14,3 +14,5 @@ func Prepare(name, tag string, o Options) (*Checkpoint, error) {
 }
 func (c *Checkpoint) Release() error                        { return nil }
 func Create(cfg Config, dir, name string) ([]string, error) { return nil, ErrUnsupported }
+func Locate(name string) (string, bool, error)              { return "", false, ErrUnsupported }
+func Rename(name, to string, off bool) error                { return ErrUnsupported }
