@@ -134,8 +134,12 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("a policy needs a name")
 		return
 	}
-	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 && !p.SystemState && !p.BareMetal && !p.TrueNASConfig {
-		bad("a policy needs at least one path, volume or virtual machine, the system state, the whole machine or the TrueNAS configuration")
+	if msg := s.checkM365(&p); msg != "" {
+		bad(msg)
+		return
+	}
+	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 && !p.SystemState && !p.BareMetal && !p.TrueNASConfig && p.M365 == nil {
+		bad("a policy needs at least one path, volume or virtual machine, the system state, the whole machine, the TrueNAS configuration or Microsoft 365")
 		return
 	}
 	if !p.BareMetal {
@@ -232,7 +236,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, SystemState: p.SystemState, TrueNASConfig: p.TrueNASConfig, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, SystemState: p.SystemState, TrueNASConfig: p.TrueNASConfig, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot, M365: p.M365}}
 	return j, s.enqueue(j)
 }
 
@@ -479,6 +483,10 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	// target it goes back to the datastore it was on.
 	if req.Target == "" && len(req.Disks) == 0 && a.OS != sn.OS && req.VMwareServer == "" {
 		fail(w, http.StatusBadRequest, fmt.Sprintf("a %s backup cannot be restored in place on a %s agent; set a target directory", sn.OS, a.OS))
+		return
+	}
+	if req.Target == "" && len(req.Disks) == 0 && coversM365(sn, req.Include) {
+		fail(w, http.StatusBadRequest, "mail and files from Microsoft 365 are restored into a folder: say where to put them, or choose only other parts of the backup")
 		return
 	}
 	if req.SystemState != nil {

@@ -44,6 +44,7 @@ better-backup has three programs:
 | `internal/libvirt` | KVM driver (libvirt backup jobs and checkpoints through `virsh`) |
 | `internal/proxmox` | Proxmox VE driver (`qm`, `pvesm`, and QEMU's machine protocol) |
 | `internal/vmware` | VMware vSphere driver (snapshots and OVF export and import, through govmomi) |
+| `internal/m365` | Microsoft 365 mailboxes and OneDrive as a tree to back up, through Microsoft Graph; `m365test` is a stand-in for Graph |
 | `internal/vmdk` | Reads and writes VMware's stream-optimized disk format |
 | `internal/nbd`, `internal/qemuimg`, `internal/qmp` | NBD client, `qemu-nbd` wrapper and QMP client that read and write QEMU disks |
 

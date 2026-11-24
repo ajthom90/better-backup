@@ -37,6 +37,11 @@ const (
 	// original paths.
 	SystemStateName = "System state"
 
+	// M365Name is the name of the source entry that holds what was backed
+	// up from Microsoft 365: a folder per user, with their mail and their
+	// OneDrive in it.
+	M365Name = "Microsoft 365"
+
 	// TrueNASConfigName is the name of the source entry that holds the
 	// configuration of a TrueNAS system: a folder with the file TrueNAS
 	// takes back under Manage Configuration.
@@ -88,6 +93,11 @@ type Entry struct {
 
 	// Streams are the NTFS alternate data streams of a file or directory.
 	Streams []Stream `json:"streams,omitempty"`
+
+	// Key names the version of a file that came from a service instead
+	// of a file system, such as a message in a mailbox. A later backup
+	// that finds the same key does not download the file again.
+	Key string `json:"key,omitempty"`
 }
 
 // Stream is one named NTFS alternate data stream. Its data is stored

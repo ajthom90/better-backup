@@ -42,6 +42,8 @@ type Options struct {
 	SystemState *SystemState
 	// Folders are stored under a name of their own instead of their path.
 	Folders []Folder
+	// Virtual are sources that do not come from a file system.
+	Virtual []VirtualSource
 	// Parent holds the sources of the previous snapshot. Files whose size
 	// and modification time match it are not read again.
 	Parent []tree.Entry
@@ -101,7 +103,7 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 	if a.opts.MapPath == nil {
 		a.opts.MapPath = func(p string) string { return p }
 	}
-	if len(opts.Paths) == 0 && len(opts.Images) == 0 && len(opts.VMs) == 0 && len(opts.Folders) == 0 && opts.SystemState == nil && opts.Machine == nil {
+	if len(opts.Paths) == 0 && len(opts.Images) == 0 && len(opts.VMs) == 0 && len(opts.Folders) == 0 && len(opts.Virtual) == 0 && opts.SystemState == nil && opts.Machine == nil {
 		return nil, a.stats, errors.New("no paths to back up")
 	}
 	parents := map[string]*tree.Entry{}
@@ -177,6 +179,17 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 			return nil, a.stats, err
 		}
 		if e != nil {
+			sources = append(sources, *e)
+		}
+	}
+	for i := range opts.Virtual {
+		v := &opts.Virtual[i]
+		e, err := a.vdir(v.Root, v.Name, parents[v.Name])
+		if err != nil {
+			return nil, a.stats, err
+		}
+		if e != nil {
+			e.Name = v.Name
 			sources = append(sources, *e)
 		}
 	}
@@ -385,6 +398,11 @@ func (a *archiver) chunks(path string) (ids []keys.ID, size int64, ok bool, err 
 		return nil, 0, false, nil
 	}
 	defer f.Close()
+	return a.chunkReader(f, path)
+}
+
+// chunkReader is chunks for data that is already open.
+func (a *archiver) chunkReader(f io.Reader, path string) (ids []keys.ID, size int64, ok bool, err error) {
 	c := chunker.New(f)
 	for {
 		chunk, err := c.Next()
@@ -491,7 +509,8 @@ func (a *archiver) systemState(src *SystemState, parent *tree.Entry) (*tree.Entr
 	return &tree.Entry{Name: tree.SystemStateName, Type: tree.TypeDir, Mode: 0o755, ModTime: time.Now().UnixNano(), Subtree: pages}, nil
 }
 
-func (a *archiver) dir(path string, parent *tree.Entry) ([]keys.ID, error) {
+// prevEntries returns what a folder held in the last backup, by name.
+func (a *archiver) prevEntries(parent *tree.Entry) map[string]*tree.Entry {
 	prev := map[string]*tree.Entry{}
 	if parent != nil && parent.Type == tree.TypeDir {
 		for _, p := range parent.Subtree {
@@ -499,14 +518,18 @@ func (a *archiver) dir(path string, parent *tree.Entry) ([]keys.ID, error) {
 			if err != nil {
 				// Without the previous listing every file is simply
 				// read again; the backup is still correct.
-				prev = map[string]*tree.Entry{}
-				break
+				return map[string]*tree.Entry{}
 			}
 			for i := range es {
 				prev[es[i].Name] = &es[i]
 			}
 		}
 	}
+	return prev
+}
+
+func (a *archiver) dir(path string, parent *tree.Entry) ([]keys.ID, error) {
+	prev := a.prevEntries(parent)
 	items, err := os.ReadDir(a.opts.MapPath(path))
 	if err != nil {
 		a.warn("%v", err)

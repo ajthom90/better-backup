@@ -66,6 +66,8 @@ pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:
 .code { font:600 18px ui-monospace,Consolas,monospace; letter-spacing:1px; }
 .machine .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
 .steps { margin:8px 0; padding-left:20px; } .steps li { margin:4px 0; }
+.picklist { border:1px solid var(--line); border-radius:8px; max-height:220px; overflow:auto; padding:2px 10px 8px; margin-top:8px; }
+details { margin-top:12px; font-size:13px; } summary { cursor:pointer; color:var(--accent); }
 .warnbox { color:var(--warn); margin:8px 0; }
 header { flex-wrap:wrap; }
 header h1 { min-width:140px; }
@@ -88,7 +90,7 @@ h4 { margin:18px 0 4px; }
 <body>
 <div id="front" class="front" hidden></div>
 <div id="app" hidden>
-<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="recovery" class="need-operator">Bare-metal recovery</button><button id="vmware" class="need-admin">VMware servers</button><button id="offsite" class="need-operator">Offsite copy</button><button id="alerts" class="need-admin">Alerts and reports</button><button id="users" class="need-admin">Users</button><button id="activity" class="need-admin">Activity log</button><button id="settings" class="need-admin">Settings</button><span id="whoami"></span><button id="account">My password</button><button id="logout">Sign out</button></header>
+<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="recovery" class="need-operator">Bare-metal recovery</button><button id="vmware" class="need-admin">VMware servers</button><button id="m365" class="need-admin">Microsoft 365</button><button id="offsite" class="need-operator">Offsite copy</button><button id="alerts" class="need-admin">Alerts and reports</button><button id="users" class="need-admin">Users</button><button id="activity" class="need-admin">Activity log</button><button id="settings" class="need-admin">Settings</button><span id="whoami"></span><button id="account">My password</button><button id="logout">Sign out</button></header>
 <main>
   <div class="banner need-admin" id="keyBanner" hidden><span><b>Keep a copy of the repository key.</b> Without it, neither the backups on this server nor the offsite copy can be read. Download it and keep it somewhere other than this server.</span><button class="primary" id="keyBannerBtn">Download the key</button></div>
   <section><h2><span>Health</span><span id="healthState" style="flex:none;white-space:nowrap"></span></h2><ul class="issues" id="issues" hidden></ul><div class="scroll" id="health"></div></section>
@@ -108,6 +110,7 @@ let agentNames = {};
 let agentList = [];
 let snapList = [];
 let vmwareList = [];
+let m365List = [];
 let jobLimit = 15;
 let me = null; // the signed-in user
 
@@ -137,9 +140,10 @@ function notice(title, text) {
 }
 
 async function refresh() {
-  const [st, allAgents, policies, jobs, snaps, off, vmw, health] = await Promise.all([
+  const [st, allAgents, policies, jobs, snaps, off, vmw, health, m365] = await Promise.all([
     call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
-    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers"), call("GET", "/api/v1/health")]);
+    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers"), call("GET", "/api/v1/health"), call("GET", "/api/v1/m365-tenants")]);
+  m365List = m365;
   showHealth(health);
   vmwareList = vmw;
   $("version").textContent = "version " + st.version;
@@ -157,7 +161,7 @@ async function refresh() {
       a.revoked || !can("operator") ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
   table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
-    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : [], p.bare_metal ? ["whole machine"] : []).join(", "),
+    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : [], p.bare_metal ? ["whole machine"] : [], p.m365 ? [m365Summary(p.m365)] : []).join(", "),
       (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
       keeps(p.retention),
       el("div", { className: "acts need-operator" },
@@ -217,6 +221,12 @@ function keeps(r) {
   return parts.length ? parts.join(", ") : "everything";
 }
 const lines = v => v.split("\n").map(x => x.trim()).filter(Boolean);
+// m365Summary says in a few words what a policy takes from Microsoft 365.
+function m365Summary(m) {
+  const t = m365List.find(x => x.id === m.tenant);
+  const who = (m.users || []).includes("*") ? "everyone" : (m.users || []).length === 1 ? m.users[0] : (m.users || []).length + " users";
+  return "Microsoft 365 " + [m.mail ? "mail" : "", m.onedrive ? "OneDrive" : ""].filter(Boolean).join(" and ") + " of " + who + (t ? " at " + t.name : "");
+}
 
 // policyDialog creates a policy, or edits p when one is given.
 function policyDialog(p) {
@@ -264,6 +274,40 @@ function policyDialog(p) {
   if (p && p.vmware_server) vmwareServer.value = p.vmware_server;
   const vmwareBox = el("div", null, el("label", { textContent: "VMware server" }), vmwareServer,
     el("div", { className: "hint", textContent: vmwareList.length ? "The machines are read over the network from this server, so the agent above can be any machine that reaches it; it need not be a host. Each backup reads the disks in full." : "Add the vCenter Server or ESXi host first: close this and choose “VMware servers” at the top." }));
+  // Microsoft 365: a tenant, whose mail and files, and for whom.
+  const m = p && p.m365;
+  const m365Tenant = el("select", { id: "m365Tenant" }, el("option", { value: "", textContent: "Nothing from Microsoft 365" }), ...m365List.map(t => el("option", { value: t.id, textContent: t.name })));
+  if (m) m365Tenant.value = m.tenant;
+  const m365Mail = el("input", { type: "checkbox", id: "m365Mail", checked: m ? !!m.mail : true });
+  const m365Drive = el("input", { type: "checkbox", id: "m365Drive", checked: m ? !!m.onedrive : true });
+  const m365Users = el("textarea", { id: "m365Users", rows: 2, value: m ? (m.users || []).join("\n") : "*", placeholder: "One sign-in name per line, such as alice@example.com, or * for everyone with a licence" });
+  const m365Pick = el("div", { id: "m365Pick", className: "picklist", hidden: true });
+  const m365Load = el("button", { id: "m365Load", textContent: "Choose from the users of the tenant", style: "margin-top:8px" });
+  m365Load.onclick = async () => {
+    m365Pick.hidden = false;
+    m365Pick.replaceChildren(el("div", { className: "hint", textContent: "Asking Microsoft 365…" }));
+    try {
+      const us = await call("GET", "/api/v1/m365-tenants/" + m365Tenant.value + "/users");
+      const chosen = () => new Set(lines(m365Users.value).map(x => x.toLowerCase()));
+      const everyone = el("input", { type: "checkbox", checked: chosen().has("*") });
+      const boxes = us.map(u => {
+        const box = el("input", { type: "checkbox", checked: chosen().has(u.upn.toLowerCase()), value: u.upn });
+        return [box, el("label", { className: "check" }, box, u.name + " (" + u.upn + ")" + (u.guest ? ", a guest" : u.licensed ? "" : ", no licence"))];
+      });
+      const sync = () => { m365Users.value = (everyone.checked ? ["*"] : []).concat(boxes.filter(([b]) => b.checked).map(([b]) => b.value)).join("\n"); };
+      everyone.onchange = sync;
+      boxes.forEach(([b]) => { b.onchange = sync; });
+      m365Pick.replaceChildren(el("label", { className: "check" }, everyone, "Everyone with a licence, including people who join later"), ...boxes.map(([, l]) => l));
+    } catch (e) { m365Pick.replaceChildren(el("div", { className: "hint", textContent: e.message + " You can still type the sign-in names above." })); }
+  };
+  const m365Box = el("div", { id: "m365Box" },
+    el("label", { className: "check" }, m365Mail, "Mail: every folder of the mailbox"),
+    el("label", { className: "check" }, m365Drive, "OneDrive: every file"),
+    el("label", { textContent: "Users" }), m365Users,
+    el("div", { className: "hint", textContent: "* takes every user who has a licence and is not a guest. A shared mailbox has no licence: name it here by its address to include it." }),
+    m365Load, m365Pick);
+  const showM365 = () => { m365Box.hidden = !m365Tenant.value; };
+  m365Tenant.onchange = showM365;
   const trackingBox = el("div");
   const showHyper = () => { const v = hypervisor.value === "vmware"; vmwareBox.hidden = !v; trackingBox.hidden = v; };
   hypervisor.onchange = showHyper;
@@ -276,6 +320,7 @@ function policyDialog(p) {
       bare_metal: bareMetal.checked, machine_disks: machineDisks.value.split(",").map(x => x.trim()).filter(Boolean),
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
+    if (m365Tenant.value) body.m365 = { tenant: m365Tenant.value, users: lines(m365Users.value), mail: m365Mail.checked, onedrive: m365Drive.checked };
     try {
       await call(p ? "PUT" : "POST", "/api/v1/policies" + (p ? "/" + p.id : ""), body);
       $("dlg").close(); await refresh();
@@ -307,6 +352,9 @@ function policyDialog(p) {
     el("label", { textContent: "Virtual machines (optional)" }), vms,
     el("div", { className: "hint", textContent: "Choose the agent on the virtual machine host: Hyper-V, Proxmox VE, or KVM with libvirt. For VMware choose it below, and any agent that reaches the VMware server. On Proxmox a machine can also be named by its id. Each machine is backed up while it runs, from a checkpoint or a backup job of the hypervisor." }),
     el("label", { textContent: "Hypervisor" }), hypervisor, vmwareBox, trackingBox,
+    el("label", { textContent: "Microsoft 365 (optional)" }), m365Tenant,
+    el("div", { className: "hint", textContent: m365List.length ? "Mailboxes and OneDrive are read from Microsoft over the internet, so the machine chosen above only has to reach the internet; nothing of it needs to be on that machine. The first backup downloads everything, later ones only what is new or changed. A policy can hold nothing else." : "Add your tenant first: close this and choose “Microsoft 365” at the top." }),
+    m365Box,
     el("label", { className: "check" }, sysState, "Windows: back up the system state"),
     el("div", { className: "hint", textContent: "The registry, boot and system files, and on a domain controller the Active Directory database and SYSVOL. It can be restored to a folder; restoring it over a running system is not built yet." }),
     el("label", { className: "check" }, trueNAS, "TrueNAS: back up the system configuration"),
@@ -320,7 +368,7 @@ function policyDialog(p) {
     err, buttons);
   trackingBox.append(el("label", { textContent: "How virtual machine disks are read" }), vmTracking,
     el("div", { className: "hint", textContent: "Reading only what changed is much faster and relies on the hypervisor's change tracking. Run a few backups with the checking option first: it reads everything and warns if the tracking missed a change." }));
-  showHyper();
+  showHyper(); showM365();
   $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
 }
 $("newPolicy").onclick = () => policyDialog(null);
@@ -648,6 +696,71 @@ function vmwareEdit(v) {
     err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => vmwareDialog().catch(e => notice("Something went wrong", e.message)) }), save));
 }
 $("vmware").onclick = () => vmwareDialog().catch(e => notice("Something went wrong", e.message));
+
+// m365Dialog lists the Microsoft 365 tenants; m365Edit adds or changes one.
+async function m365Dialog() {
+  m365List = await call("GET", "/api/v1/m365-tenants");
+  const list = el("div", { className: "list", id: "m365List" });
+  if (!m365List.length) list.append(el("div", { className: "empty", textContent: "No Microsoft 365 tenant yet." }));
+  else {
+    const t = el("table", null, el("tr", null, ...["Name", "Directory (tenant) id", "Application (client) id", ""].map(h => el("th", { textContent: h }))));
+    for (const v of m365List) t.append(el("tr", null, el("td", { textContent: v.name }), el("td", { textContent: v.tenant_id }), el("td", { textContent: v.client_id }),
+      el("td", null, el("div", { className: "acts" }, button("Edit", async () => m365Edit(v)),
+        confirmButton("Remove", "Click again to remove", async () => { await call("DELETE", "/api/v1/m365-tenants/" + v.id); await m365Dialog(); })))));
+    list.append(t);
+  }
+  openDialog(true, el("h3", { textContent: "Microsoft 365" }),
+    el("div", { className: "hint", textContent: "Tenants whose mailboxes and OneDrive are backed up. better-backup signs in as an app that you register in your tenant and allow to read mail and files; it cannot change or delete anything there. A backup policy then names the tenant and the users." }),
+    list, el("div", { className: "row" }, el("button", { textContent: "Add a tenant", id: "m365Add", style: "margin-right:auto", onclick: () => m365Edit(null) }), el("button", { textContent: "Close", onclick: () => { $("dlg").close(); refresh().catch(() => {}); } })));
+}
+function m365Edit(v) {
+  const name = el("input", { id: "m365Name", value: v ? v.name : "", placeholder: "For example: Example Ltd" });
+  const tenant = el("input", { id: "m365TenantID", value: v ? v.tenant_id : "", placeholder: "11111111-2222-3333-4444-555555555555", autocomplete: "off" });
+  const client = el("input", { id: "m365ClientID", value: v ? v.client_id : "", placeholder: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", autocomplete: "off" });
+  const secret = el("input", { id: "m365Secret", type: "password", placeholder: v && v.secret_set ? "Saved. Paste a new one to replace it." : "The secret's Value", autocomplete: "new-password" });
+  const login = el("input", { id: "m365Login", value: v ? v.login_url || "" : "", placeholder: "https://login.microsoftonline.us" });
+  const graph = el("input", { id: "m365Graph", value: v ? v.graph_url || "" : "", placeholder: "https://graph.microsoft.us" });
+  const err = el("div", { id: "err" });
+  const result = el("div", { id: "m365Result", className: "hint" });
+  const body = () => ({ id: v ? v.id : "", name: name.value.trim(), tenant_id: tenant.value.trim(), client_id: client.value.trim(),
+    client_secret: secret.value.trim(), secret_set: !secret.value.trim() && !!(v && v.secret_set), login_url: login.value.trim(), graph_url: graph.value.trim() });
+  const test = el("button", { id: "m365Test", textContent: "Test the connection", style: "margin-right:auto" });
+  test.onclick = async () => {
+    err.textContent = ""; result.textContent = "Signing in to Microsoft 365…";
+    try {
+      const r = await call("POST", "/api/v1/m365-tenants/test", body());
+      result.textContent = "It works. The tenant has " + r.users + " accounts, " + r.licensed + " of them users with a licence.";
+    } catch (e) { result.textContent = ""; err.textContent = e.message; }
+  };
+  const save = el("button", { className: "primary", textContent: v ? "Save changes" : "Add tenant" });
+  save.onclick = async () => {
+    try {
+      await call(v ? "PUT" : "POST", "/api/v1/m365-tenants" + (v ? "/" + v.id : ""), body());
+      await m365Dialog();
+    } catch (e) { err.textContent = e.message; }
+  };
+  const step = (...kids) => el("li", null, ...kids);
+  const b = t => el("b", { textContent: t });
+  openDialog(false, el("h3", { textContent: v ? "Edit Microsoft 365 tenant" : "Add a Microsoft 365 tenant" }),
+    el("details", { id: "m365Steps", open: !v }, el("summary", { textContent: "How to register the app in your tenant (about five minutes, once)" }),
+      el("ol", { className: "steps" },
+        step("Sign in to ", el("a", { href: "https://entra.microsoft.com", target: "_blank", rel: "noopener", textContent: "entra.microsoft.com" }), " as an administrator. Open ", b("App registrations"), " and choose ", b("New registration"), "."),
+        step("Name it, for example better-backup. Leave ", b("Accounts in this organizational directory only"), " selected and the redirect address empty. Choose ", b("Register"), "."),
+        step("On the overview, copy the ", b("Application (client) ID"), " and the ", b("Directory (tenant) ID"), " into the boxes below."),
+        step("Open ", b("API permissions"), ", choose ", b("Add a permission"), ", ", b("Microsoft Graph"), ", ", b("Application permissions"), " and tick ", b("User.Read.All"), ", ", b("Mail.Read"), " and ", b("Files.Read.All"), ". Then choose ", b("Grant admin consent"), "."),
+        step("Open ", b("Certificates & secrets"), ", choose ", b("New client secret"), " and copy its ", b("Value"), " (not the Secret ID) into the box below. It is shown only once."))),
+    el("label", { textContent: "Name" }), name,
+    el("label", { textContent: "Directory (tenant) ID" }), tenant,
+    el("label", { textContent: "Application (client) ID" }), client,
+    el("label", { textContent: "Client secret" }), secret,
+    el("div", { className: "hint", textContent: "The secret is kept on this server and handed to the agent that runs a backup, with the job. Microsoft lets a secret last two years at most. When it runs out the backups fail and say so; create a new one and paste it here." }),
+    el("details", null, el("summary", { textContent: "Another Microsoft cloud (US Government, China)" }),
+      el("label", { textContent: "Sign-in service" }), login,
+      el("label", { textContent: "Microsoft Graph" }), graph,
+      el("div", { className: "hint", textContent: "Leave both empty for the worldwide service." })),
+    result, err, el("div", { className: "row" }, test, el("button", { textContent: "Cancel", onclick: () => m365Dialog().catch(e => notice("Something went wrong", e.message)) }), save));
+}
+$("m365").onclick = () => m365Dialog().catch(e => notice("Something went wrong", e.message));
 $("offsite").onclick = () => offsiteDialog().catch(e => notice("Something went wrong", e.message));
 $("alerts").onclick = () => alertsDialog().catch(e => notice("Something went wrong", e.message));
 
@@ -682,6 +795,7 @@ function restoreDialog(s, path) {
     el("div", { className: "hint", textContent: "Only for machines backed up from VMware. Above, “Put it in” then names a datastore; leave it empty for the datastore the machine was on." }));
   // Putting a system state back over its machine is a restore of its own.
   const hasState = s.os === "windows" && s.sources.some(x => x.name === "System state");
+  const hasM365 = s.sources.some(x => x.name === "Microsoft 365");
   const inPlace = el("input", { type: "checkbox", id: "sysInPlace" });
   const sysReg = el("input", { type: "checkbox", id: "sysRegistry", checked: true });
   const sysRestart = el("input", { type: "checkbox", id: "sysRestart" });
@@ -723,6 +837,7 @@ function restoreDialog(s, path) {
     el("div", { className: "hint", textContent: "The original path. Use Browse on a snapshot to pick one." }),
     el("label", { textContent: "Put it in" }), target,
     el("div", { className: "hint", textContent: "A folder on the chosen machine. A disk image can also go to a volume (E:), a device, or a new file (.img, or .vhdx on Windows). Restoring onto a different machine, or restoring a virtual machine, needs a folder here. For a Proxmox machine, name a storage such as local-lvm instead, or leave this empty to use the storages its disks were on." }),
+    hasM365 ? el("div", { className: "hint", id: "m365RestoreHint", textContent: "Mail and files from Microsoft 365 always go into a folder: each message as an .eml file that Outlook and other mail programs open, and the OneDrive files as they were. Putting them straight back into a mailbox or a OneDrive is not built yet." }) : "",
     el("label", { textContent: "Existing files" }), mode,
     el("label", { textContent: "Name for a restored virtual machine" }), vmName,
     el("div", { className: "hint", textContent: "Only for virtual machines. One is restored as a new machine, switched off, with its disks in the place above. Restore it onto a host of the same kind it was backed up from: Hyper-V, Proxmox VE, or KVM with libvirt (there a folder such as /var/lib/libvirt/images)." }),

@@ -34,6 +34,7 @@ import (
 	"github.com/ajthom90/better-backup/internal/hypervisor"
 	_ "github.com/ajthom90/better-backup/internal/hypervisor/all"
 	"github.com/ajthom90/better-backup/internal/keys"
+	"github.com/ajthom90/better-backup/internal/m365"
 	"github.com/ajthom90/better-backup/internal/restore"
 	"github.com/ajthom90/better-backup/internal/tree"
 	"github.com/ajthom90/better-backup/internal/truenas"
@@ -648,7 +649,20 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 				return nil
 			}})
 		}
+		var m365err error
+		if m := j.Backup.M365; m != nil {
+			root, merr := m365Source(jctx, j.Backup, warn)
+			if merr != nil {
+				m365err = merr
+				warn("Microsoft 365 was not backed up: " + strings.TrimPrefix(merr.Error(), "Microsoft 365: "))
+			} else {
+				opts.Virtual = append(opts.Virtual, backup.VirtualSource{Name: tree.M365Name, Root: root})
+			}
+		}
 		req.Sources, stats, err = backup.Run(jctx, a.c, opts)
+		if err != nil && m365err != nil && jctx.Err() == nil && len(opts.Paths)+len(opts.Images)+len(opts.VMs)+len(opts.Folders) == 0 && opts.Machine == nil && opts.SystemState == nil {
+			err = m365err // nothing else was asked for: say what went wrong
+		}
 		for _, src := range opts.Images {
 			src.Close() // a no-op for images the backup already closed
 		}
@@ -699,6 +713,17 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 	} else {
 		log.Info("job finished", "warnings", len(warnings))
 	}
+}
+
+// m365Source signs in to the tenant of a backup and returns what to
+// back up from it.
+func m365Source(ctx context.Context, b *api.BackupSpec, warn func(string)) (*backup.VNode, error) {
+	c := b.M365Connection
+	if c == nil {
+		return nil, errors.New("Microsoft 365: the tenant of this policy was removed from the server")
+	}
+	client := m365.New(m365.Connection{TenantID: c.TenantID, ClientID: c.ClientID, ClientSecret: c.ClientSecret, LoginURL: c.LoginURL, GraphURL: c.GraphURL})
+	return client.Source(ctx, m365.Spec{Users: b.M365.Users, Mail: b.M365.Mail, OneDrive: b.M365.OneDrive}, warn)
 }
 
 // systemState asks the VSS writers which files make up this machine's

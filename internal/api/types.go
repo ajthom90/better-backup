@@ -84,6 +84,56 @@ type VMwareServer struct {
 	Insecure bool `json:"insecure,omitempty"`
 }
 
+// M365Tenant is a Microsoft 365 tenant whose mailboxes and OneDrive can
+// be backed up, and the app registration that reads them. The server
+// keeps the list and hands the sign-in to the agent that runs a job,
+// with the job.
+type M365Tenant struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// TenantID is the directory (tenant) id, or one of its domain names.
+	TenantID string `json:"tenant_id"`
+	// ClientID is the application (client) id of the app registration.
+	ClientID string `json:"client_id"`
+	// ClientSecret is never returned by the server. When saving, leave
+	// it empty and set SecretSet to keep the stored secret.
+	ClientSecret string `json:"client_secret,omitempty"`
+	SecretSet    bool   `json:"secret_set,omitempty"`
+	// LoginURL and GraphURL are for the national clouds, such as
+	// https://login.microsoftonline.us and https://graph.microsoft.us.
+	// Empty: the worldwide service.
+	LoginURL string `json:"login_url,omitempty"`
+	GraphURL string `json:"graph_url,omitempty"`
+}
+
+// M365Spec says what a policy backs up from Microsoft 365.
+type M365Spec struct {
+	// Tenant is the id of the M365Tenant.
+	Tenant string `json:"tenant"`
+	// Users are sign-in names such as alice@example.com. "*" means
+	// every licensed user who is not a guest.
+	Users    []string `json:"users"`
+	Mail     bool     `json:"mail,omitempty"`
+	OneDrive bool     `json:"onedrive,omitempty"`
+}
+
+// M365Connection is the sign-in of a tenant, as an agent gets it.
+type M365Connection struct {
+	TenantID     string `json:"tenant_id"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	LoginURL     string `json:"login_url,omitempty"`
+	GraphURL     string `json:"graph_url,omitempty"`
+}
+
+// M365User is an account of a tenant, for choosing whom to back up.
+type M365User struct {
+	UPN      string `json:"upn"`
+	Name     string `json:"name"`
+	Licensed bool   `json:"licensed"`
+	Guest    bool   `json:"guest,omitempty"`
+}
+
 type Schedule struct {
 	Interval string `json:"interval,omitempty"` // Go duration, e.g. "24h"
 	DailyAt  string `json:"daily_at,omitempty"` // "HH:MM" in server local time
@@ -136,9 +186,12 @@ type Policy struct {
 	// TrueNASConfig backs up the configuration of a TrueNAS system:
 	// every setting, and the secret seed that decrypts the passwords
 	// stored with them.
-	TrueNASConfig bool      `json:"truenas_config,omitempty"`
-	Schedule      Schedule  `json:"schedule"`
-	Retention     Retention `json:"retention"`
+	TrueNASConfig bool `json:"truenas_config,omitempty"`
+	// M365 backs up mailboxes and OneDrive from Microsoft 365. The agent
+	// only needs to reach the internet; nothing of it is on the agent.
+	M365      *M365Spec `json:"m365,omitempty"`
+	Schedule  Schedule  `json:"schedule"`
+	Retention Retention `json:"retention"`
 	// NoSnapshot backs up the live file system instead of a snapshot.
 	// Snapshots are the default where there are any: VSS on Windows,
 	// and ZFS for the paths that are on ZFS datasets.
@@ -166,6 +219,10 @@ type BackupSpec struct {
 	// to the agent, and never stored with the job.
 	VMwareServer string                 `json:"vmware_server,omitempty"`
 	Connection   *hypervisor.Connection `json:"connection,omitempty"`
+	// M365 is as in Policy. M365Connection is its tenant's sign-in,
+	// set like Connection.
+	M365           *M365Spec       `json:"m365,omitempty"`
+	M365Connection *M365Connection `json:"m365_connection,omitempty"`
 }
 
 type RestoreSpec struct {
