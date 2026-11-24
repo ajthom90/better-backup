@@ -311,6 +311,8 @@ func (s *Server) routes() http.Handler {
 	ag("POST /agent/v1/chunks/missing", s.handleMissing)
 	ag("PUT /agent/v1/chunks/{id}", s.handlePutChunk)
 	ag("GET /agent/v1/chunks/{id}", s.handleGetChunk)
+	ag("GET /agent/v1/summary", s.handleAgentSummary)
+	ag("POST /agent/v1/backup", s.handleAgentBackup)
 
 	ad := func(pattern string, h http.HandlerFunc) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {

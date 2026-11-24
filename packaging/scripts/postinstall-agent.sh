@@ -1,11 +1,12 @@
 #!/bin/sh
 set -e
-if command -v systemctl >/dev/null 2>&1; then
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
     systemctl enable better-backup-agent.service || true
-    # The unit starts only after enrollment (see ConditionPathExists).
     systemctl restart better-backup-agent.service || true
 fi
-echo "Enroll this machine, then start the agent:"
-echo "  bb-agent enroll --server https://SERVER:8443 --token TOKEN --fingerprint FP"
-echo "  systemctl restart better-backup-agent"
+if [ ! -e /var/lib/better-backup-agent/agent.json ] && [ ! -e /var/lib/better-backup-agent/enroll.conf ]; then
+    echo "better-backup agent installed. Enroll this machine with your server:"
+    echo "  sudo bb-agent enroll"
+    echo "It asks for the enrollment code from \"Add an agent\" in the server's web UI."
+fi

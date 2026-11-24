@@ -29,7 +29,8 @@ const usage = `bb manages a better-backup server.
 
 Usage:
   bb status                              server and repository summary
-  bb token create [--ttl 24h] [--uses 1] make an enrollment token for new agents
+  bb token create [--ttl 24h] [--uses 1] make an enrollment code for new agents
+            [--for URL]                  the address agents reach this server by
   bb agents                              list agents
   bb agent revoke AGENT                  block an agent
   bb policies                            list backup policies
@@ -119,6 +120,7 @@ var (
 	fFP      = fs.String("fingerprint", os.Getenv("BB_FINGERPRINT"), "")
 	fTTL     = fs.String("ttl", "24h", "")
 	fUses    = fs.Int("uses", 1, "")
+	fFor     = fs.String("for", "", "")
 	fName    = fs.String("name", "", "")
 	fAgent   = fs.String("agent", "", "")
 	fEvery   = fs.String("every", "", "")
@@ -159,6 +161,36 @@ var (
 	timeForm = "2006-01-02 15:04"
 )
 
+// serverURL is the address this command reached the server by.
+var serverURL string
+
+// agentURL is the address to give agents: the one named with --for, or
+// the one this command uses. On the server machine itself that is a
+// loopback address, which is no use to another machine, so the
+// machine's own name stands in.
+func agentURL() (string, bool) {
+	if *fFor != "" {
+		return strings.TrimRight(*fFor, "/"), true
+	}
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		return serverURL, false
+	}
+	if ip := net.ParseIP(u.Hostname()); u.Hostname() == "localhost" || (ip != nil && (ip.IsLoopback() || ip.IsUnspecified())) {
+		host, _ := os.Hostname()
+		if host == "" {
+			host = "THIS-SERVER"
+		}
+		port := u.Port()
+		if port == "" {
+			port = "443"
+		}
+		u.Host = net.JoinHostPort(host, port)
+		return strings.TrimRight(u.String(), "/"), false
+	}
+	return strings.TrimRight(u.String(), "/"), true
+}
+
 func client() *adminclient.Client {
 	if clientV != nil {
 		return clientV
@@ -189,7 +221,7 @@ func client() *adminclient.Client {
 	if err != nil {
 		cli.Fatal(err)
 	}
-	clientV = cl
+	clientV, serverURL = cl, c.URL
 	return cl
 }
 
@@ -350,8 +382,14 @@ func main() {
 		var t api.EnrollToken
 		do("POST", "/api/v1/enroll-tokens", map[string]any{"ttl": *fTTL, "uses": *fUses}, &t)
 		fmt.Printf("Token valid until %s for %d enrollment(s). On the machine to back up, run:\n\n", t.Expires.Local().Format(timeForm), t.Uses)
-		fmt.Printf("  bb-agent enroll --server https://THIS-SERVER:8443 --token %s --fingerprint %s\n\n", t.Token, t.Fingerprint)
-		fmt.Println("Replace THIS-SERVER with the address the machine reaches this server by.")
+		addr, sure := agentURL()
+		fmt.Printf("  bb-agent enroll %s\n\n", api.EncodeEnrollCode(addr, t.Token, t.Fingerprint))
+		fmt.Printf("The code is also what the agent's installer and its app ask for. It names this\nserver as %s", addr)
+		if sure {
+			fmt.Println(".")
+		} else {
+			fmt.Println("; if the machine reaches the server by another\naddress, make the code with: bb token create --for https://ADDRESS:8443")
+		}
 	case "agents":
 		var as []api.Agent
 		do("GET", "/api/v1/agents", nil, &as)

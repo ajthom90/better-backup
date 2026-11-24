@@ -28,6 +28,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
+	"github.com/ajthom90/better-backup/internal/agentctl"
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/backup"
 	"github.com/ajthom90/better-backup/internal/hypervisor"
@@ -78,7 +79,7 @@ func Enrolled(dir string) bool {
 func Enroll(dir, serverURL, token, fingerprint, name string) (*Config, error) {
 	serverURL = strings.TrimRight(serverURL, "/")
 	if u, err := url.Parse(serverURL); err != nil || u.Scheme != "https" || u.Host == "" {
-		return nil, fmt.Errorf("server must be an https URL such as https://backup.example.com:8443, got %q", serverURL)
+		return nil, permanent{fmt.Errorf("server must be an https URL such as https://backup.example.com:8443, got %q", serverURL)}
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -109,6 +110,9 @@ func Enroll(dir, serverURL, token, fingerprint, name string) (*Config, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return nil, permanent{httpError(resp)} // the token was refused: trying again cannot help
+	}
 	if resp.StatusCode != 200 {
 		return nil, httpError(resp)
 	}
@@ -178,6 +182,8 @@ func newClient(dir string, cfg *Config) (*client, error) {
 
 // permanent marks errors that retrying cannot fix.
 type permanent struct{ error }
+
+func (p permanent) Unwrap() error { return p.error }
 
 // do sends a request, retrying network failures and server errors.
 func (c *client) do(ctx context.Context, method, path string, body []byte, ctype string) ([]byte, int, error) {
@@ -262,6 +268,25 @@ type Agent struct {
 	cfg *Config
 	c   *client
 	log *slog.Logger
+
+	mu    sync.Mutex
+	state state
+}
+
+// state is what the agent last saw of the server and of its own work.
+type state struct {
+	connected   bool
+	revoked     bool
+	lastContact time.Time
+	err         string
+	job         *agentctl.Job
+	progress    any
+}
+
+func (a *Agent) setState(f func(*state)) {
+	a.mu.Lock()
+	f(&a.state)
+	a.mu.Unlock()
 }
 
 // New loads the agent identity saved in dir.
@@ -287,14 +312,20 @@ func New(dir string, log *slog.Logger) (*Agent, error) {
 func (a *Agent) Run(ctx context.Context) error {
 	a.log.Info("better-backup agent started", "server", a.cfg.Server, "agent", a.cfg.AgentID, "version", Version)
 	backoff := time.Second
+	// Until the server has answered once, ask without waiting for work:
+	// whoever is watching wants to know now whether the server is there.
+	wait := "0"
 	for ctx.Err() == nil {
-		data, code, err := a.c.pollOnce(ctx, "/agent/v1/jobs/next?wait=25&version="+url.QueryEscape(Version))
+		data, code, err := a.c.pollOnce(ctx, "/agent/v1/jobs/next?wait="+wait+"&version="+url.QueryEscape(Version))
 		if err != nil {
 			if ctx.Err() != nil {
 				break
 			}
 			var p permanent
-			if errors.As(err, &p) && code == http.StatusUnauthorized {
+			revoked := errors.As(err, &p) && code == http.StatusUnauthorized
+			a.setState(func(s *state) { s.connected, s.revoked, s.err = false, revoked, err.Error() })
+			wait = "0"
+			if revoked {
 				a.log.Error("the server rejected this agent; it may have been revoked", "err", err)
 				backoff = time.Minute
 			} else {
@@ -307,7 +338,8 @@ func (a *Agent) Run(ctx context.Context) error {
 			backoff = min(backoff*2, time.Minute)
 			continue
 		}
-		backoff = time.Second
+		backoff, wait = time.Second, "25"
+		a.setState(func(s *state) { s.connected, s.revoked, s.err, s.lastContact = true, false, "", time.Now() })
 		if code == http.StatusNoContent {
 			continue
 		}
@@ -319,6 +351,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.runJob(ctx, &j)
 	}
 	return nil
+}
+
+func newRequest(ctx context.Context, method, url string) (*http.Request, error) {
+	return http.NewRequestWithContext(ctx, method, url, nil)
 }
 
 // pollOnce is a single long poll, without the retry loop of do: the
@@ -358,7 +394,16 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		}
 		mu.Unlock()
 	}
-	setProgress := func(v any) { mu.Lock(); progress = v; mu.Unlock() }
+	setProgress := func(v any) {
+		mu.Lock()
+		progress = v
+		mu.Unlock()
+		a.setState(func(s *state) { s.progress = v })
+	}
+	a.setState(func(s *state) {
+		s.job, s.progress = &agentctl.Job{ID: j.ID, Type: j.Type, Started: time.Now()}, nil
+	})
+	defer a.setState(func(s *state) { s.job, s.progress, s.lastContact = nil, nil, time.Now() })
 
 	// Heartbeat: report progress every few seconds so the server knows
 	// the job is alive. If the server says the job is gone, stop work.
