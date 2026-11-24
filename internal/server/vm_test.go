@@ -367,8 +367,12 @@ func TestLibvirt(t *testing.T) {
 		t.Fatalf("check of a healthy backup job: %v", err)
 	}
 	virsh("domjobabort", name)
-	if err := fz.Check(); err == nil {
-		t.Fatal("a backup job that ended early went unnoticed")
+	// libvirt forgets the job a moment after the command returns.
+	for i := 0; fz.Check() == nil; i++ {
+		if i == 50 {
+			t.Fatal("a backup job that ended early went unnoticed")
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	for _, d := range fz.Disks {
 		d.Close()
