@@ -170,16 +170,32 @@ func (r *restorer) vm(e *tree.Entry, orig string, full bool) error {
 	if err := drv.Available(); err != nil {
 		return fmt.Errorf("the virtual machine %s can only be rebuilt on a %s host; elsewhere restore its disks one at a time with --path", e.Name, drv.Label())
 	}
-	rs, err := drv.NewRestore(r.ctx, config, hypervisor.Target{Place: r.opts.Target, Name: name, OpenFile: openImageTarget})
+	rs, err := drv.NewRestore(r.ctx, config, hypervisor.Target{Place: r.opts.Target, Name: name, OpenFile: openImageTarget, Connection: r.opts.Connection})
 	if err != nil {
 		return fmt.Errorf("virtual machine %s: %w", e.Name, err)
 	}
+	abort := func() {
+		if a, ok := rs.(hypervisor.Aborter); ok {
+			a.Abort()
+		}
+	}
 	for _, d := range disks {
-		w, fresh, done, err := rs.Disk(d.Name, d.Size)
+		spec := hypervisor.DiskSpec{Name: d.Name, Size: d.Size, BlockSize: d.BlockSize}
+		err := tree.EachContent(r.get, d, func(id keys.ID) error {
+			spec.Data = append(spec.Data, id != keys.ID{})
+			return nil
+		})
 		if err != nil {
+			abort()
+			return fmt.Errorf("virtual machine %s: its disk %s: %w", e.Name, d.Name, err)
+		}
+		w, fresh, done, err := rs.Disk(spec)
+		if err != nil {
+			abort()
 			return fmt.Errorf("virtual machine %s: its disk %s: %w", e.Name, d.Name, err)
 		}
 		if err := r.writeImage(d, d.Name+" of "+name, w, fresh, done); err != nil {
+			abort()
 			return err
 		}
 	}

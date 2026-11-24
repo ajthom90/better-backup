@@ -76,10 +76,12 @@ type Server struct {
 	ln   net.Listener
 	http *http.Server
 
-	mu      sync.Mutex
-	snaps   map[string]*tree.Snapshot
-	running map[string]string // agent id -> its running job
-	maint   bool              // GC or verify in progress: no agent jobs start
+	mu sync.Mutex
+	// vmwareMu is held while the list of VMware servers is changed.
+	vmwareMu sync.Mutex
+	snaps    map[string]*tree.Snapshot
+	running  map[string]string // agent id -> its running job
+	maint    bool              // GC or verify in progress: no agent jobs start
 	// offsiteBusy is set while the offsite copy is being updated;
 	// garbage collection waits for it.
 	offsiteBusy bool
@@ -341,6 +343,10 @@ func (s *Server) routes() http.Handler {
 	ad("DELETE /api/v1/snapshots/{id}", s.handleDeleteSnapshot)
 	ad("GET /api/v1/snapshots/{id}/ls", s.handleList)
 	ad("POST /api/v1/restores", s.handleRestore)
+	ad("GET /api/v1/vmware-servers", s.handleVMwareServers)
+	ad("POST /api/v1/vmware-servers", s.handleSaveVMwareServer)
+	ad("PUT /api/v1/vmware-servers/{id}", s.handleSaveVMwareServer)
+	ad("DELETE /api/v1/vmware-servers/{id}", s.handleDeleteVMwareServer)
 	ad("GET /api/v1/offsite", s.handleOffsite)
 	ad("PUT /api/v1/offsite", s.handleSaveOffsite)
 	ad("POST /api/v1/offsite/test", s.handleTestOffsite)

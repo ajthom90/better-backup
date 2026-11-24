@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -157,6 +158,12 @@ func (s *Server) dispatch(a *api.Agent) (*api.Job, error) {
 		if p := s.parentLocked(a.ID, j.PolicyID); p != nil {
 			j.Backup.Parent = p.Sources
 		}
+		if j.Backup.VMwareServer != "" {
+			j.Backup.Connection = s.vmwareConnection(j.Backup.VMwareServer)
+		}
+	}
+	if j.Restore != nil && j.Restore.VMwareServer != "" {
+		j.Restore.Connection = s.vmwareConnection(j.Restore.VMwareServer)
 	}
 	s.log.Info("job started", "job", j.ID, "type", j.Type, "agent", a.Name)
 	return j, nil
@@ -268,6 +275,11 @@ func (s *Server) commitSnapshot(a *api.Agent, j *api.Job, req *api.CompleteReque
 	for i := range req.Sources {
 		e := &req.Sources[i]
 		for _, ids := range [][]keys.ID{e.Subtree, e.Content, e.ContentIndex} {
+			if e.Type == tree.TypeImage {
+				// The zero id marks a block of an image that holds
+				// nothing; there is no chunk behind it.
+				ids = slices.DeleteFunc(slices.Clone(ids), func(id keys.ID) bool { return id == keys.ID{} })
+			}
 			missing, err := s.repo.Missing(ids)
 			if err != nil {
 				return nil, err

@@ -30,6 +30,31 @@ jobs:
       - name: Test
         run: go test -race -count=1 ./...
 
+  zfs:
+    name: ZFS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Create a ZFS pool
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zfsutils-linux
+          sudo modprobe zfs
+          truncate -s 2G /tmp/pool.img
+          sudo zpool create bbtest /tmp/pool.img
+      - name: Back up and restore datasets and a volume
+        run: |
+          go test -c -o server.test ./internal/server
+          sudo BB_TEST_ZPOOL=bbtest ./server.test -test.run TestZFS -test.v
+      - name: Kernel log
+        if: failure()
+        run: |
+          zfs version || true
+          sudo dmesg | tail -n 120
+
   kvm:
     # Backs up and restores real virtual machines: through libvirt, and
     # as Proxmox VE runs them (a bare QEMU, with stand-ins for Proxmox's

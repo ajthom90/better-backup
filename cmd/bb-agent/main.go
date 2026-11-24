@@ -46,6 +46,11 @@ three parts of a code can also be given one by one:
 Flags:
   --dir DIR   agent state directory (default %s, or $BB_AGENT_DIR)
 
+In a container that should back up its host (an app on TrueNAS SCALE, for
+example), set BB_HOST_ROOT=/proc/1/root and run it privileged with the host's
+process ids. The agent then works in the host's file system, and --dir is a
+folder on the host.
+
 The installed agent runs as root (Linux, macOS) or as a service (Windows)
 so that it can read every file; these commands talk to it, and need root
 or an administrator too. On macOS also grant bb-agent Full Disk Access.
@@ -80,6 +85,11 @@ func main() {
 	given := req.Code != "" || (req.Server != "" && req.Token != "" && req.Fingerprint != "")
 
 	var err error
+	if root := os.Getenv("BB_HOST_ROOT"); root != "" && cmd != "version" && cmd != "service" && cmd != "fda-check" {
+		if err := agent.EnterHostRoot(root); err != nil {
+			cli.Fatal(err)
+		}
+	}
 	switch cmd {
 	case "enroll":
 		if len(pos) > 1 {

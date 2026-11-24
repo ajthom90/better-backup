@@ -398,6 +398,9 @@ func TestHypervisorPolicy(t *testing.T) {
 		t.Fatalf("unknown hypervisor: %v", err)
 	}
 	for _, kind := range append([]string{""}, api.Hypervisors...) {
+		if kind == "vmware" {
+			continue // needs a server as well: see TestVMware
+		}
 		var p api.Policy
 		e.do("POST", "/api/v1/policies", api.Policy{Name: "vms " + kind, AgentID: agentID, VMs: []string{"a"}, Hypervisor: kind}, &p)
 		if p.Hypervisor != kind {

@@ -66,7 +66,7 @@ pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:
   <div id="err"></div><button class="primary">Sign in</button></form>
 </div>
 <div id="app" hidden>
-<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="offsite">Offsite copy</button><button id="alerts">Email alerts</button><button id="logout">Sign out</button></header>
+<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="vmware">VMware servers</button><button id="offsite">Offsite copy</button><button id="alerts">Email alerts</button><button id="logout">Sign out</button></header>
 <main>
   <section><h2><span>Repository</span><button id="runVerify">Verify all data</button><button id="runGC">Reclaim space</button></h2><div class="stats" id="stats"></div></section>
   <section><h2><span>Agents</span><button id="newToken">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
@@ -82,6 +82,7 @@ const $ = id => document.getElementById(id);
 let token = sessionStorage.getItem("bb-token") || "";
 let agentNames = {};
 let agentList = [];
+let vmwareList = [];
 let jobLimit = 15;
 
 async function call(method, path, body) {
@@ -110,9 +111,10 @@ function notice(title, text) {
 }
 
 async function refresh() {
-  const [st, agents, policies, jobs, snaps, off] = await Promise.all([
+  const [st, agents, policies, jobs, snaps, off, vmw] = await Promise.all([
     call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
-    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite")]);
+    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers")]);
+  vmwareList = vmw;
   $("version").textContent = "version " + st.version;
   agentList = agents;
   agentNames = Object.fromEntries(agents.map(a => [a.id, a.name]));
@@ -125,7 +127,7 @@ async function refresh() {
       a.revoked ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
   table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
-    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : []).join(", "),
+    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : []).join(", "),
       (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
       keeps(p.retention),
       el("div", { className: "acts" },
@@ -159,7 +161,7 @@ function policyDialog(p) {
   if (p) agent.value = p.agent_id;
   const paths = el("textarea", { rows: 3, value: p ? (p.paths || []).join("\n") : "", placeholder: "One folder or file per line, for example D:\\Shares or /home" });
   const excludes = el("textarea", { rows: 2, value: p && p.excludes ? p.excludes.join("\n") : "", placeholder: "One pattern per line, for example *.tmp or node_modules" });
-  const volumes = el("textarea", { rows: 2, value: p && p.volumes ? p.volumes.join("\n") : "", placeholder: "One per line, for example C: on Windows or /dev/vg0/data on Linux" });
+  const volumes = el("textarea", { rows: 2, value: p && p.volumes ? p.volumes.join("\n") : "", placeholder: "One per line, for example C: on Windows, /dev/vg0/data on Linux or /dev/zvol/tank/vm-disk on TrueNAS" });
   const vms = el("textarea", { rows: 2, value: p && p.vms ? p.vms.join("\n") : "", placeholder: "One name per line, or * for every machine on the host" });
   const kind = el("select", null, el("option", { value: "daily", textContent: "Every day at a set time" }),
     el("option", { value: "interval", textContent: "Repeating, every so often" }), el("option", { value: "manual", textContent: "Only when started by hand" }));
@@ -177,6 +179,7 @@ function policyDialog(p) {
   const enabled = el("input", { type: "checkbox", checked: p ? p.enabled : true });
   const noSnap = el("input", { type: "checkbox", checked: p ? !!p.no_snapshot : false });
   const sysState = el("input", { type: "checkbox", id: "sysState", checked: p ? !!p.system_state : false });
+  const trueNAS = el("input", { type: "checkbox", id: "trueNAS", checked: p ? !!p.truenas_config : false });
   const vmTracking = el("select", { id: "vmTracking" },
     el("option", { value: "", textContent: "Read every disk in full" }),
     el("option", { value: "on", textContent: "Read only what changed since the last backup" }),
@@ -186,14 +189,22 @@ function policyDialog(p) {
     el("option", { value: "", textContent: "Whichever the chosen machine is a host of" }),
     el("option", { value: "hyperv", textContent: "Hyper-V" }),
     el("option", { value: "proxmox", textContent: "Proxmox VE" }),
-    el("option", { value: "libvirt", textContent: "KVM with libvirt" }));
+    el("option", { value: "libvirt", textContent: "KVM with libvirt" }),
+    el("option", { value: "vmware", textContent: "VMware vSphere (ESXi or vCenter), over the network" }));
   hypervisor.value = (p && p.hypervisor) || "";
+  const vmwareServer = el("select", { id: "vmwareServer" }, ...vmwareList.map(v => el("option", { value: v.id, textContent: v.name })));
+  if (p && p.vmware_server) vmwareServer.value = p.vmware_server;
+  const vmwareBox = el("div", null, el("label", { textContent: "VMware server" }), vmwareServer,
+    el("div", { className: "hint", textContent: vmwareList.length ? "The machines are read over the network from this server, so the agent above can be any machine that reaches it; it need not be a host. Each backup reads the disks in full." : "Add the vCenter Server or ESXi host first: close this and choose “VMware servers” at the top." }));
+  const trackingBox = el("div");
+  const showHyper = () => { const v = hypervisor.value === "vmware"; vmwareBox.hidden = !v; trackingBox.hidden = v; };
+  hypervisor.onchange = showHyper;
   const err = el("div", { id: "err" });
   const save = el("button", { className: "primary", textContent: p ? "Save changes" : "Create policy" });
   save.onclick = async () => {
     const retention = {};
     for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
-    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), hypervisor: hypervisor.value, vm_tracking: vmTracking.value, system_state: sysState.checked,
+    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "", vm_tracking: hypervisor.value === "vmware" ? "" : vmTracking.value, system_state: sysState.checked, truenas_config: trueNAS.checked,
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
     try {
@@ -216,23 +227,27 @@ function policyDialog(p) {
     el("label", { textContent: "Name" }), name,
     el("label", { textContent: "Machine to back up" }), agent,
     el("label", { textContent: "Folders and files to back up" }), paths,
+    el("div", { className: "hint", textContent: "Files are read from a snapshot where there is one, so files in use are backed up as they were at one instant: VSS on Windows, and ZFS on TrueNAS and other systems with ZFS, where every dataset under these folders is included." }),
     el("label", { textContent: "Leave out (optional)" }), excludes,
     el("label", { textContent: "Whole volumes to back up as images (optional)" }), volumes,
-    el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS." }),
+    el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS. A ZFS volume (zvol) is read from a snapshot taken together with the folders above." }),
     el("label", { textContent: "Virtual machines (optional)" }), vms,
-    el("div", { className: "hint", textContent: "Choose the agent on the virtual machine host: Hyper-V, Proxmox VE, or KVM with libvirt. On Proxmox a machine can also be named by its id. Each machine is backed up while it runs, from a checkpoint or a backup job of the hypervisor." }),
-    el("label", { textContent: "Hypervisor" }), hypervisor,
-    el("label", { textContent: "How virtual machine disks are read" }), vmTracking,
-    el("div", { className: "hint", textContent: "Reading only what changed is much faster and relies on the hypervisor's change tracking. Run a few backups with the checking option first: it reads everything and warns if the tracking missed a change." }),
+    el("div", { className: "hint", textContent: "Choose the agent on the virtual machine host: Hyper-V, Proxmox VE, or KVM with libvirt. For VMware choose it below, and any agent that reaches the VMware server. On Proxmox a machine can also be named by its id. Each machine is backed up while it runs, from a checkpoint or a backup job of the hypervisor." }),
+    el("label", { textContent: "Hypervisor" }), hypervisor, vmwareBox, trackingBox,
     el("label", { className: "check" }, sysState, "Windows: back up the system state"),
     el("div", { className: "hint", textContent: "The registry, boot and system files, and on a domain controller the Active Directory database and SYSVOL. It can be restored to a folder; restoring it over a running system is not built yet." }),
+    el("label", { className: "check" }, trueNAS, "TrueNAS: back up the system configuration"),
+    el("div", { className: "hint", textContent: "Every setting of the TrueNAS system (pools, shares, users, apps, network) and the secret seed that unlocks the passwords saved in it. It is restored to a folder as truenas-config.tar, which TrueNAS takes back under System, General Settings, Manage Configuration, Upload File." }),
     el("label", { textContent: "Schedule" }), el("div", { className: "two" }, kind, el("div", null, at, every)),
     el("div", { className: "hint", textContent: "Times are in the server's time zone." }),
     el("label", { textContent: "Snapshots to keep" }), grid,
     el("div", { className: "hint", textContent: "Leave every box empty to keep all snapshots." }),
     el("label", { className: "check" }, enabled, "Run on schedule"),
-    el("label", { className: "check" }, noSnap, "Windows: read live files instead of a VSS snapshot"),
+    el("label", { className: "check" }, noSnap, "Read live files instead of a VSS or ZFS snapshot"),
     err, buttons);
+  trackingBox.append(el("label", { textContent: "How virtual machine disks are read" }), vmTracking,
+    el("div", { className: "hint", textContent: "Reading only what changed is much faster and relies on the hypervisor's change tracking. Run a few backups with the checking option first: it reads everything and warns if the tracking missed a change." }));
+  showHyper();
   $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
 }
 $("newPolicy").onclick = () => policyDialog(null);
@@ -347,6 +362,49 @@ async function offsiteDialog() {
     el("div", { className: "hint", textContent: "In the server's time zone. Clear the time to copy only when you press “Save and copy now”. The first copy sends everything and can take long; later ones send only what is new." }),
     msg, el("div", { className: "row" }, test, run, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
 }
+// vmwareDialog lists the VMware servers; vmwareEdit adds or changes one.
+async function vmwareDialog() {
+  vmwareList = await call("GET", "/api/v1/vmware-servers");
+  const list = el("div", { className: "list", id: "vmwareList" });
+  if (!vmwareList.length) list.append(el("div", { className: "empty", textContent: "No VMware servers yet." }));
+  else {
+    const t = el("table", null, el("tr", null, ...["Name", "Address", "Signs in as", ""].map(h => el("th", { textContent: h }))));
+    for (const v of vmwareList) t.append(el("tr", null, el("td", { textContent: v.name }), el("td", { textContent: v.url }), el("td", { textContent: v.username }),
+      el("td", null, el("div", { className: "acts" }, button("Edit", async () => vmwareEdit(v)),
+        confirmButton("Remove", "Click again to remove", async () => { await call("DELETE", "/api/v1/vmware-servers/" + v.id); await vmwareDialog(); })))));
+    list.append(t);
+  }
+  openDialog(true, el("h3", { textContent: "VMware servers" }),
+    el("div", { className: "hint", textContent: "vCenter Servers and ESXi hosts whose virtual machines are backed up over the network. A policy names one of them and an agent that can reach it. The account needs to take and remove snapshots, export machines, and, for restores, create them. ESXi with the free license cannot be backed up this way." }),
+    list, el("div", { className: "row" }, el("button", { textContent: "Add a server", id: "vmwareAdd", style: "margin-right:auto", onclick: () => vmwareEdit(null) }), el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
+}
+function vmwareEdit(v) {
+  const name = el("input", { id: "vmwName", value: v ? v.name : "", placeholder: "For example: Main vCenter" });
+  const url = el("input", { id: "vmwURL", value: v ? v.url : "", placeholder: "vcenter.example.com" });
+  const user = el("input", { id: "vmwUser", value: v ? v.username : "", placeholder: "administrator@vsphere.local", autocomplete: "off" });
+  const pass = el("input", { id: "vmwPass", type: "password", placeholder: v && v.password_set ? "Saved. Type to replace it." : "", autocomplete: "new-password" });
+  const thumb = el("input", { id: "vmwThumb", value: v ? v.thumbprint || "" : "", placeholder: "Leave empty for a certificate from a known authority" });
+  const insecure = el("input", { type: "checkbox", id: "vmwInsecure", checked: v ? !!v.insecure : false });
+  const err = el("div", { id: "err" });
+  const save = el("button", { className: "primary", textContent: v ? "Save changes" : "Add server" });
+  save.onclick = async () => {
+    try {
+      await call(v ? "PUT" : "POST", "/api/v1/vmware-servers" + (v ? "/" + v.id : ""), { name: name.value.trim(), url: url.value.trim(), username: user.value.trim(),
+        password: pass.value, password_set: !pass.value && !!(v && v.password_set), thumbprint: thumb.value.trim(), insecure: insecure.checked });
+      await vmwareDialog();
+    } catch (e) { err.textContent = e.message; }
+  };
+  openDialog(false, el("h3", { textContent: v ? "Edit VMware server" : "Add a VMware server" }),
+    el("label", { textContent: "Name" }), name,
+    el("label", { textContent: "Address of the vCenter Server or ESXi host" }), url,
+    el("label", { textContent: "Sign in as" }), el("div", { className: "two" }, user, pass),
+    el("div", { className: "hint", textContent: "The password is kept on this server and handed to the agent that runs a backup or restore, with the job." }),
+    el("label", { textContent: "Certificate thumbprint (SHA-256)" }), thumb,
+    el("div", { className: "hint", textContent: "Most servers use a certificate of their own making. Leave this empty and run a backup: the job's error then shows the thumbprint the server presents, to compare with the server's own display and paste here." }),
+    el("label", { className: "check" }, insecure, "Accept any certificate (not safe on a network you do not control)"),
+    err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => vmwareDialog().catch(e => notice("Something went wrong", e.message)) }), save));
+}
+$("vmware").onclick = () => vmwareDialog().catch(e => notice("Something went wrong", e.message));
 $("offsite").onclick = () => offsiteDialog().catch(e => notice("Something went wrong", e.message));
 $("alerts").onclick = () => alertsDialog().catch(e => notice("Something went wrong", e.message));
 
@@ -376,6 +434,9 @@ function restoreDialog(s, path) {
   const mode = el("select", null, el("option", { value: "if-changed", textContent: "Replace files that differ from the backup" }),
     el("option", { value: "always", textContent: "Replace every file" }), el("option", { value: "never", textContent: "Only restore missing files" }));
   const vmName = el("input", { id: "vmName", placeholder: "Leave empty to keep its old name" });
+  const vmware = el("select", { id: "restoreVMware" }, el("option", { value: "", textContent: "The one its backup policy names" }), ...vmwareList.map(v => el("option", { value: v.id, textContent: v.name })));
+  const vmwareBox = el("div", { hidden: !vmwareList.length }, el("label", { textContent: "VMware server for a restored virtual machine" }), vmware,
+    el("div", { className: "hint", textContent: "Only for machines backed up from VMware. Above, “Put it in” then names a datastore; leave it empty for the datastore the machine was on." }));
   // Putting a system state back over its machine is a restore of its own.
   const hasState = s.os === "windows" && s.sources.some(x => x.name === "System state");
   const inPlace = el("input", { type: "checkbox", id: "sysInPlace" });
@@ -406,7 +467,7 @@ function restoreDialog(s, path) {
         j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: s.agent_id,
           system_state: { registry: sysReg.checked, restart: sysRestart.checked, authoritative_sysvol: sysAuthVol.checked, authoritative_subtrees: lines(sysAuthDN.value) } });
       } else
-      j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: agent.value, target: target.value.trim(), include: only.value.trim() ? [only.value.trim()] : [], overwrite: mode.value, vm_name: vmName.value.trim() });
+      j = await call("POST", "/api/v1/restores", { snapshot_id: s.id, agent_id: agent.value, target: target.value.trim(), include: only.value.trim() ? [only.value.trim()] : [], overwrite: mode.value, vm_name: vmName.value.trim(), vmware_server: vmware.value });
       await refresh(); await jobDialog(j.id);
     } catch (e) { err.textContent = e.message; }
   };
@@ -421,7 +482,8 @@ function restoreDialog(s, path) {
     el("div", { className: "hint", textContent: "A folder on the chosen machine. A disk image can also go to a volume (E:), a device, or a new file (.img, or .vhdx on Windows). Restoring onto a different machine, or restoring a virtual machine, needs a folder here. For a Proxmox machine, name a storage such as local-lvm instead, or leave this empty to use the storages its disks were on." }),
     el("label", { textContent: "Existing files" }), mode,
     el("label", { textContent: "Name for a restored virtual machine" }), vmName,
-    el("div", { className: "hint", textContent: "Only for virtual machines. One is restored as a new machine, switched off, with its disks in the place above. Restore it onto a host of the same kind it was backed up from: Hyper-V, Proxmox VE, or KVM with libvirt (there a folder such as /var/lib/libvirt/images)." }));
+    el("div", { className: "hint", textContent: "Only for virtual machines. One is restored as a new machine, switched off, with its disks in the place above. Restore it onto a host of the same kind it was backed up from: Hyper-V, Proxmox VE, or KVM with libvirt (there a folder such as /var/lib/libvirt/images)." }),
+    vmwareBox);
   $("dlgBody").append(err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
 }
 
@@ -493,7 +555,23 @@ $("moreJobs").onclick = () => { jobLimit = jobLimit === 15 ? 100 : 15; $("moreJo
 $("newToken").onclick = async () => {
   try {
     const t = await call("POST", "/api/v1/enroll-tokens", { ttl: "24h", uses: 1 });
-    notice("Add an agent", "Install bb-agent on the machine, then run this there within 24 hours:\n\nbb-agent enroll --server " + location.origin + " --token " + t.token + " --fingerprint " + t.fingerprint + "\n\nThen start it with: bb-agent service install && bb-agent service start");
+    const st = await call("GET", "/api/v1/status");
+    const tag = /^v?\d+\.\d+\.\d+$/.test(st.version || "") ? "latest" : "edge";
+    const folder = el("input", { id: "nasFolder", value: "/mnt/tank/better-backup-agent" });
+    const yaml = el("pre", { id: "nasYaml" });
+    const fill = () => { yaml.textContent = "services:\n  better-backup-agent:\n    image: ghcr.io/ajthom90/better-backup-agent:" + tag + "\n    restart: unless-stopped\n    privileged: true\n    pid: host\n    network_mode: host\n    environment:\n      BB_HOST_ROOT: /proc/1/root\n      BB_AGENT_DIR: " + JSON.stringify(folder.value.trim()) + "\n      BB_SERVER: " + location.origin + "\n      BB_ENROLL_TOKEN: " + t.token + "\n      BB_FINGERPRINT: " + t.fingerprint + "\n"; };
+    folder.oninput = fill; fill();
+    openDialog(true, el("h3", { textContent: "Add an agent" }),
+      el("div", { textContent: "Install bb-agent on the machine, then run this there within 24 hours:" }),
+      el("pre", { textContent: "bb-agent enroll --server " + location.origin + " --token " + t.token + " --fingerprint " + t.fingerprint }),
+      el("div", { textContent: "Then start it with: bb-agent service install && bb-agent service start" }),
+      el("h3", { textContent: "On TrueNAS SCALE", style: "margin-top:22px" }),
+      el("div", { textContent: "The agent runs as an app. In TrueNAS open Apps, Discover Apps, the menu at the top right, Install via YAML. Name it better-backup-agent and paste the text below. It needs TrueNAS SCALE 24.10 or newer." }),
+      el("label", { textContent: "A folder on one of its pools, where the agent keeps its identity" }), folder,
+      el("div", { className: "hint", textContent: "Replace tank with the name of a pool. The folder is created on first start." }),
+      yaml,
+      el("div", { className: "hint", textContent: "The app is privileged and works in the file system of TrueNAS itself, so policies use the real paths (/mnt/tank/documents), files are read from ZFS snapshots, and a restore can write them back in place." }),
+      el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
   } catch (e) { notice("Could not create a token", e.message); }
 };
 function signOut() { token = ""; sessionStorage.removeItem("bb-token"); $("app").hidden = true; $("login").hidden = false; }

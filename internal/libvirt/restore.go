@@ -60,7 +60,8 @@ func (d driver) NewRestore(ctx context.Context, config []byte, t hypervisor.Targ
 
 func (r *restore) Where() string { return r.dir }
 
-func (r *restore) Disk(name string, size int64) (io.WriterAt, bool, func() error, error) {
+func (r *restore) Disk(spec hypervisor.DiskSpec) (io.WriterAt, bool, func() error, error) {
+	name, size := spec.Name, spec.Size
 	var dk *Disk
 	for i := range r.cfg.Disks {
 		if r.cfg.Disks[i].File == name {

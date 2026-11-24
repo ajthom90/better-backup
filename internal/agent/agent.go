@@ -36,7 +36,9 @@ import (
 	"github.com/ajthom90/better-backup/internal/keys"
 	"github.com/ajthom90/better-backup/internal/restore"
 	"github.com/ajthom90/better-backup/internal/tree"
+	"github.com/ajthom90/better-backup/internal/truenas"
 	"github.com/ajthom90/better-backup/internal/vss"
+	"github.com/ajthom90/better-backup/internal/zfs"
 )
 
 // Version is set at build time.
@@ -496,8 +498,34 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 				}
 			}
 		}
+		// Elsewhere, ZFS does the same job: every dataset that holds a
+		// path, and every ZFS volume, is read from a snapshot taken at
+		// one instant.
+		var frozen *zfs.Session
+		if runtime.GOOS != "windows" {
+			var zwarn []string
+			var zerr error
+			frozen, zwarn, zerr = zfs.Begin(jctx, zfs.Options{Agent: a.cfg.AgentID, Tag: "better-backup-" + j.ID,
+				Paths: j.Backup.Paths, Volumes: j.Backup.Volumes, Live: j.Backup.NoSnapshot})
+			for _, w := range zwarn {
+				warn(w)
+			}
+			if zerr != nil {
+				warn("could not look for ZFS datasets, backing up live files: " + zerr.Error())
+			}
+			opts.Excludes = append(append([]string{}, opts.Excludes...), frozen.Excludes()...)
+			if snaps := frozen.Snapshots(); len(snaps) > 0 {
+				log.Info("ZFS snapshots created", "snapshots", snaps)
+				opts.MapPath = frozen.Path
+			}
+			release = func() {
+				if cerr := frozen.Close(); cerr != nil {
+					warn("removing the backup's ZFS snapshots failed; remove them by hand: " + cerr.Error())
+				}
+			}
+		}
 		for _, v := range j.Backup.Volumes {
-			name, readPath := v, v
+			name, readPath, zvol := v, v, false
 			if runtime.GOOS == "windows" {
 				name = strings.ToUpper(strings.TrimRight(v, `\`))
 				readPath = strings.TrimRight(set.Path(name+`\`), `\`)
@@ -505,13 +533,34 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 					warn("volume " + name + " was not backed up: it has no VSS snapshot")
 					continue
 				}
+			} else {
+				var ok bool
+				if name, readPath, zvol, ok = frozen.Volume(v); !ok {
+					continue // Begin said why
+				}
 			}
 			src, oerr := backup.OpenImage(name, readPath)
 			if oerr != nil {
 				warn("volume " + name + " was not backed up: " + oerr.Error())
 				continue
 			}
+			// The unwritten parts of a ZFS volume read as zeros and
+			// take no room in the backup.
+			src.SkipZero = zvol
 			opts.Images = append(opts.Images, src)
+		}
+		if j.Backup.TrueNASConfig {
+			stage := filepath.Join(a.dir, "truenas-config")
+			version, terr := truenas.SaveConfig(stage)
+			// The copy holds the system's secret key: it must not
+			// outlive the backup.
+			defer os.RemoveAll(stage)
+			if terr != nil {
+				warn("the TrueNAS configuration was not backed up: " + terr.Error())
+			} else {
+				log.Info("TrueNAS configuration saved", "version", version)
+				opts.Folders = append(opts.Folders, backup.Folder{Name: tree.TrueNASConfigName, Path: stage})
+			}
 		}
 		vms := j.Backup.VMs
 		var drv hypervisor.Driver
@@ -525,7 +574,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		for _, v := range vms {
 			if v == "*" {
 				var lerr error
-				if vms, lerr = drv.List(jctx); lerr != nil {
+				if vms, lerr = drv.List(jctx, j.Backup.Connection); lerr != nil {
 					warn("could not list the virtual machines on this host: " + lerr.Error())
 				}
 				break
@@ -534,7 +583,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		for _, name := range vms {
 			opts.VMs = append(opts.VMs, backup.VMSource{Name: name, Open: func(vm *backup.VMSource, prev []byte) error {
 				fz, err := drv.Freeze(jctx, vm.Name, hypervisor.Options{Tracking: j.Backup.VMTracking != "", Previous: prev,
-					Tag: j.ID, Scope: j.PolicyID, StateDir: a.dir})
+					Tag: j.ID, Scope: j.PolicyID, StateDir: a.dir, Connection: j.Backup.Connection})
 				if err != nil {
 					return err
 				}
@@ -571,7 +620,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		}
 		stats, err = restore.Run(jctx, get, restore.Options{SystemState: sys,
 			Sources: j.Restore.Sources, SourceOS: j.Restore.SourceOS, Include: j.Restore.Include,
-			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName,
+			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName, Connection: j.Restore.Connection,
 			Progress: func(s restore.Stats) { setProgress(s) }, Warn: warn})
 		req.Restore = &stats
 	default:
