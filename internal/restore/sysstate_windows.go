@@ -111,6 +111,11 @@ func (s *sysRun) place(dest string) (string, bool) {
 		}
 		s.hives[hive] = filepath.Join(s.stage, hive)
 		return s.hives[hive], false
+	case fileHiveLog:
+		if !s.opts.Registry {
+			return dest, true
+		}
+		return filepath.Join(s.stage, hive), false
 	}
 	if strings.EqualFold(filepath.Base(dest), "ntds.dit") {
 		s.ad = true

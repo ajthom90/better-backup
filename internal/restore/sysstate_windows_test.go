@@ -5,6 +5,7 @@ package restore
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -130,7 +131,7 @@ func TestHiveReplace(t *testing.T) {
 	unload := func() {
 		procRegUnload.Call(uintptr(registry.LOCAL_MACHINE), uintptr(unsafe.Pointer(u16(mount))))
 	}
-	read := func() string {
+	read := func(mount string) string {
 		k, err := registry.OpenKey(registry.LOCAL_MACHINE, mount, registry.QUERY_VALUE)
 		if err != nil {
 			t.Fatal(err)
@@ -154,13 +155,18 @@ func TestHiveReplace(t *testing.T) {
 	}
 	// Until it is mounted again, which for a machine hive means a
 	// restart, the old contents stay.
-	if got := read(); got != "live/" {
-		t.Fatalf("before remounting: %q", got)
+	if got := read(mount); got != "live/" {
+		t.Fatalf("while mounted: %q", got)
 	}
-	unload()
-	load(liveFile)
-	if got := read(); got != "from backup/yes" {
-		t.Fatalf("after remounting: %q", got)
+	// The file under the hive's name is now the restored one: mounted a
+	// second time, as a restart would, it shows the backup's contents.
+	const again = mount + "-2"
+	if r, _, _ := procRegLoad.Call(uintptr(registry.LOCAL_MACHINE), uintptr(unsafe.Pointer(u16(again))), uintptr(unsafe.Pointer(u16(liveFile)))); r != 0 {
+		t.Fatal(windows.Errno(r))
+	}
+	t.Cleanup(func() { procRegUnload.Call(uintptr(registry.LOCAL_MACHINE), uintptr(unsafe.Pointer(u16(again)))) })
+	if got := read(again); got != "from backup/yes" {
+		t.Fatalf("the replaced hive file: %q", got)
 	}
 }
 
@@ -185,7 +191,8 @@ func TestLater(t *testing.T) {
 	ops, _, err := k.GetStringsValue("PendingFileRenameOperations")
 	found := false
 	for i := 0; i+1 < len(ops); i++ {
-		if ops[i] == `\??\`+tmp && ops[i+1] == `!\??\`+dest {
+		// Newer Windows versions put a marker such as *1 in front.
+		if strings.HasSuffix(ops[i], `\??\`+tmp) && strings.HasSuffix(ops[i+1], `!\??\`+dest) {
 			found = true
 		}
 	}

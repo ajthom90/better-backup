@@ -34,7 +34,8 @@ var machineHives = []string{"SOFTWARE", "SAM", "SECURITY", "DEFAULT", "SYSTEM"}
 const (
 	fileOrdinary = iota
 	fileHive     // a machine hive: staged and swapped in by the registry
-	fileSkip     // a hive's log: belongs to the live hive, never restored
+	fileHiveLog  // a hive's log: staged beside it, so the hive can be loaded
+	fileSkip     // belongs to the live hive, never restored
 )
 
 // classify says how a system state file bound for dest is handled.
@@ -50,7 +51,10 @@ func classify(configDir, dest string) (kind int, hive string) {
 		if name == h {
 			return fileHive, h
 		}
-		// SYSTEM.LOG1, SOFTWARE{guid}.TM.blf and the like.
+		if strings.HasPrefix(name, h+".LOG") {
+			return fileHiveLog, name
+		}
+		// SOFTWARE{guid}.TM.blf and the like: transaction logs.
 		if strings.HasPrefix(name, h+".") || strings.HasPrefix(name, h+"{") {
 			return fileSkip, ""
 		}
