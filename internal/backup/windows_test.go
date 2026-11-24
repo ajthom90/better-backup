@@ -3,6 +3,8 @@
 package backup_test
 
 import (
+	wreg "golang.org/x/sys/windows/registry"
+
 	"context"
 	"os"
 	"os/exec"
@@ -192,5 +194,40 @@ func TestWindowsSystemState(t *testing.T) {
 	b, err := os.ReadFile(hive)
 	if err != nil || len(b) < 4096 || string(b[:4]) != "regf" {
 		t.Fatalf("restored SYSTEM hive: %d bytes, %v", len(b), err)
+	}
+	// Put the registry back over the running system. This replaces the
+	// machine's hives at its next restart, so it only runs on the
+	// throwaway machines of the checks.
+	if os.Getenv("CI") == "" {
+		return
+	}
+	var warnings []string
+	rs, err = restore.Run(ctx, func(id keys.ID) ([]byte, error) { return r.Get(id) },
+		restore.Options{Sources: sources, SourceOS: "windows", Include: []string{"System state"},
+			SystemState: &restore.SystemState{Registry: true}, Warn: func(m string) { warnings = append(warnings, m) }})
+	t.Logf("in-place restore: %+v, warnings: %q", rs, warnings)
+	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "restart Windows to finish") || rs.Files < 5 {
+		t.Fatalf("in-place restore: %+v %v", rs, err)
+	}
+	k, err := wreg.OpenKey(wreg.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\BackupRestore\SystemStateRestore`, wreg.QUERY_VALUE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	if id, _, err := k.GetStringValue("LastRestoreId"); err != nil || len(id) < 30 {
+		t.Fatalf("LastRestoreId: %q %v", id, err)
+	}
+	// Each hive was swapped: the file under the live name is the restored
+	// one, and the one in use until the restart was moved aside.
+	olds, _ := filepath.Glob(filepath.Join(root, "System32", "config", "bb-restore", "*.old"))
+	if len(olds) < 5 {
+		t.Fatalf("hives moved aside: %v", olds)
+	}
+	// Without being asked, a system state is not restored in place.
+	warnings = nil
+	rs, err = restore.Run(ctx, func(id keys.ID) ([]byte, error) { return r.Get(id) },
+		restore.Options{Sources: sources, SourceOS: "windows", Include: []string{"System state"}, Warn: func(m string) { warnings = append(warnings, m) }})
+	if err != nil || rs.Files != 0 || len(warnings) != 1 {
+		t.Fatalf("unasked in-place restore: %+v %v %q", rs, err, warnings)
 	}
 }
