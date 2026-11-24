@@ -38,7 +38,10 @@ Usage:
         [--vm NAME ...]        (virtual machine on the agent's host: Hyper-V,
                                 Proxmox VE or KVM with libvirt; '*' for all
                                 on the host)
-        [--hypervisor hyperv|libvirt|proxmox]  (default: whichever the host is)
+        [--hypervisor hyperv|libvirt|proxmox|vmware]  (default: whichever
+                                the host is)
+        [--vmware-server NAME] (with --hypervisor vmware: the server the
+                                machines are on; see "bb vmware")
         [--vm-tracking on|check]  (read only what changed in each machine's
                                 disks; check reads all and tests the tracking)
         [--system-state]       (Windows: registry, boot and system files,
@@ -56,6 +59,9 @@ Usage:
   bb ls SNAPSHOT [PATH]                  browse a snapshot
   bb restore SNAPSHOT [--path PATH ...] [--target DIR] [--agent AGENT]
         [--overwrite if-changed|always|never] [--name NEW-VM-NAME] [--wait]
+        [--vmware-server NAME] (for a VMware machine: where it goes, if not
+                                the server its policy names; --target is
+                                then a datastore)
                                          without --target, restores in place;
                                          a virtual machine is restored as a new
                                          machine with its files under --target
@@ -77,6 +83,13 @@ Usage:
                                          SMTP password is read from $BB_SMTP_PASSWORD
   bb alerts test                         send a test message
   bb alerts off                          stop sending alerts
+  bb vmware                              list the VMware servers
+  bb vmware add --name NAME --url ADDRESS --user USER
+        [--thumbprint SHA256 | --insecure]
+                                         add a vCenter Server or ESXi host, or
+                                         change the one of that name; the
+                                         password is read from $BB_VMWARE_PASSWORD
+  bb vmware rm NAME
   bb offsite                             show the offsite copy and how it is doing
   bb offsite set --folder DIR [--daily-at 03:00]
                                          keep a copy on another disk or share
@@ -136,6 +149,11 @@ var (
 	fVMTrack = fs.String("vm-tracking", "", "")
 	fHyper   = fs.String("hypervisor", "", "")
 	fNoSnap  = fs.Bool("no-snapshot", false, "")
+	fVMware  = fs.String("vmware-server", "", "")
+	fURL     = fs.String("url", "", "")
+	fVUser   = fs.String("user", "", "")
+	fThumb   = fs.String("thumbprint", "", "")
+	fInsec   = fs.Bool("insecure", false, "")
 	fSMTP    = fs.String("smtp", "", "")
 	fSec     = fs.String("security", "", "")
 	fFrom    = fs.String("from", "", "")
@@ -408,7 +426,7 @@ func main() {
 				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state"))
 			}
 			var p api.Policy
-			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, Hypervisor: *fHyper, VMTracking: *fVMTrack, SystemState: *fSysSt,
+			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, Hypervisor: *fHyper, VMwareServer: vmwareID(*fVMware), VMTracking: *fVMTrack, SystemState: *fSysSt,
 				Schedule: api.Schedule{Interval: *fEvery, DailyAt: *fDaily}, Retention: fKeep, NoSnapshot: *fNoSnap, Enabled: true}, &p)
 			fmt.Printf("created policy %s (%s)\n", p.Name, p.ID)
 		case "run":
@@ -471,7 +489,7 @@ func main() {
 		}
 	case "restore":
 		need(pos, 2, "bb restore SNAPSHOT")
-		req := api.RestoreRequest{SnapshotID: pos[1], Include: fPaths, Target: *fTarget, Overwrite: *fOver, VMName: *fName}
+		req := api.RestoreRequest{SnapshotID: pos[1], Include: fPaths, Target: *fTarget, Overwrite: *fOver, VMName: *fName, VMwareServer: vmwareID(*fVMware)}
 		if *fSysRest {
 			req.SystemState = &api.SystemStateRestore{Registry: !*fNoReg, AuthoritativeSYSVOL: *fAuthSys, AuthoritativeSubtrees: fAuthDN, Restart: *fRestart}
 		} else if *fNoReg || *fAuthSys || len(fAuthDN) > 0 || *fRestart {
@@ -544,6 +562,62 @@ func main() {
 		default:
 			cli.Fatal(errors.New("usage: bb alerts [set|test|off]"))
 		}
+	case "vmware":
+		var list []api.VMwareServer
+		do("GET", "/api/v1/vmware-servers", nil, &list)
+		switch sub {
+		case "":
+			if len(list) == 0 {
+				fmt.Println("no VMware servers; add one with: bb vmware add")
+				break
+			}
+			fmt.Fprintln(tabs, "ID\tNAME\tADDRESS\tSIGNS IN AS\tCERTIFICATE")
+			for _, v := range list {
+				cert := "checked against known authorities"
+				if v.Insecure {
+					cert = "not checked"
+				} else if v.Thumbprint != "" {
+					cert = "pinned to " + v.Thumbprint
+				}
+				fmt.Fprintf(tabs, "%s\t%s\t%s\t%s\t%s\n", v.ID, v.Name, v.URL, v.Username, cert)
+			}
+		case "add":
+			if *fName == "" {
+				cli.Fatal(errors.New("vmware add needs --name"))
+			}
+			v := api.VMwareServer{Name: *fName}
+			method, path := "POST", "/api/v1/vmware-servers"
+			for _, old := range list {
+				if strings.EqualFold(old.Name, *fName) {
+					v, method, path = old, "PUT", path+"/"+old.ID
+				}
+			}
+			set := map[string]bool{}
+			fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+			if set["url"] {
+				v.URL = *fURL
+			}
+			if set["user"] {
+				v.Username = *fVUser
+			}
+			if set["thumbprint"] {
+				v.Thumbprint = *fThumb
+			}
+			if set["insecure"] {
+				v.Insecure = *fInsec
+			}
+			if pw, ok := os.LookupEnv("BB_VMWARE_PASSWORD"); ok {
+				v.Password, v.PasswordSet = pw, false
+			}
+			do(method, path, v, &v)
+			fmt.Printf("saved the VMware server %s (%s)\n", v.Name, v.ID)
+		case "rm":
+			need(pos, 3, "bb vmware rm NAME")
+			do("DELETE", "/api/v1/vmware-servers/"+vmwareID(pos[2]), nil, nil)
+			fmt.Println("removed")
+		default:
+			cli.Fatal(errors.New("usage: bb vmware [add|rm]"))
+		}
 	case "offsite":
 		var st api.OffsiteStatus
 		switch sub {
@@ -610,6 +684,22 @@ func main() {
 		fs.Usage()
 		os.Exit(2)
 	}
+}
+
+// vmwareID finds a VMware server by id or name.
+func vmwareID(ref string) string {
+	if ref == "" {
+		return ""
+	}
+	var list []api.VMwareServer
+	do("GET", "/api/v1/vmware-servers", nil, &list)
+	for _, v := range list {
+		if v.ID == ref || strings.EqualFold(v.Name, ref) {
+			return v.ID
+		}
+	}
+	cli.Fatal(fmt.Errorf("no VMware server %q; list them with: bb vmware", ref))
+	return ""
 }
 
 func printOffsite(st *api.OffsiteStatus) {

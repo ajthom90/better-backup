@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/ajthom90/better-backup/internal/hypervisor"
 	"github.com/ajthom90/better-backup/internal/restore"
 	"github.com/ajthom90/better-backup/internal/tree"
 )
@@ -55,7 +56,28 @@ type Agent struct {
 }
 
 // Hypervisors are the kinds of virtual machine host a policy can name.
-var Hypervisors = []string{"hyperv", "libvirt", "proxmox"}
+var Hypervisors = []string{"hyperv", "libvirt", "proxmox", "vmware"}
+
+// VMwareServer is a vCenter Server or ESXi host whose machines can be
+// backed up. The server keeps the list and hands the address and
+// account to the agent that runs a job, with the job.
+type VMwareServer struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// URL is the address of the management service, such as
+	// vcenter.example.com.
+	URL      string `json:"url"`
+	Username string `json:"username"`
+	// Password is never returned by the server. When saving, leave it
+	// empty and set PasswordSet to keep the stored password.
+	Password    string `json:"password,omitempty"`
+	PasswordSet bool   `json:"password_set,omitempty"`
+	// Thumbprint is the SHA-256 or SHA-1 thumbprint of the service's
+	// certificate, for one that no authority vouches for.
+	Thumbprint string `json:"thumbprint,omitempty"`
+	// Insecure accepts any certificate.
+	Insecure bool `json:"insecure,omitempty"`
+}
 
 type Schedule struct {
 	Interval string `json:"interval,omitempty"` // Go duration, e.g. "24h"
@@ -85,6 +107,9 @@ type Policy struct {
 	// Hypervisor says what kind of host the machines are on: one of
 	// Hypervisors, or empty for whichever the agent's computer is.
 	Hypervisor string `json:"hypervisor,omitempty"`
+	// VMwareServer is the id of the VMwareServer the machines are on,
+	// for the hypervisor "vmware".
+	VMwareServer string `json:"vmware_server,omitempty"`
 	// VMTracking says how the disks of virtual machines are read: ""
 	// reads them in full every time, "on" reads only what the
 	// hypervisor's change tracking says was written since the last
@@ -115,6 +140,11 @@ type BackupSpec struct {
 	SystemState bool         `json:"system_state,omitempty"`
 	NoSnapshot  bool         `json:"no_snapshot,omitempty"`
 	Parent      []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
+	// VMwareServer is as in Policy. Connection is that server's address
+	// and account; like Parent it is only set when the job is handed
+	// to the agent, and never stored with the job.
+	VMwareServer string                 `json:"vmware_server,omitempty"`
+	Connection   *hypervisor.Connection `json:"connection,omitempty"`
 }
 
 type RestoreSpec struct {
@@ -125,6 +155,9 @@ type RestoreSpec struct {
 	Target     string       `json:"target,omitempty"` // empty: restore in place
 	Overwrite  string       `json:"overwrite,omitempty"`
 	VMName     string       `json:"vm_name,omitempty"` // name for a restored virtual machine
+	// VMwareServer and Connection are as in BackupSpec.
+	VMwareServer string                 `json:"vmware_server,omitempty"`
+	Connection   *hypervisor.Connection `json:"connection,omitempty"`
 	// SystemState, if set, restores the system state over the running
 	// system.
 	SystemState *SystemStateRestore `json:"system_state,omitempty"`
@@ -182,6 +215,9 @@ type RestoreRequest struct {
 	Overwrite  string   `json:"overwrite,omitempty"`
 	// VMName names a restored virtual machine. Default: its old name.
 	VMName string `json:"vm_name,omitempty"`
+	// VMwareServer is the id of the VMwareServer a VMware machine is
+	// restored to. Default: the one its policy names.
+	VMwareServer string `json:"vmware_server,omitempty"`
 	// SystemState restores the snapshot's system state over the running
 	// system. It needs an empty Target and the machine the backup came
 	// from.

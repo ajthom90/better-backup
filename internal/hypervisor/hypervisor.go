@@ -32,6 +32,22 @@ type Options struct {
 	// StateDir is a folder where a driver may remember things between
 	// backups.
 	StateDir string
+	// Connection says how to reach a hypervisor that is managed over
+	// the network. It is nil for the host the agent runs on.
+	Connection *Connection
+}
+
+// Connection is the address of a hypervisor's management service and
+// an account on it.
+type Connection struct {
+	URL      string `json:"url"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	// Thumbprint pins the service's TLS certificate (SHA-1 or SHA-256,
+	// as hex pairs). Empty checks it against the system's authorities.
+	Thumbprint string `json:"thumbprint,omitempty"`
+	// Insecure accepts any certificate.
+	Insecure bool `json:"insecure,omitempty"`
 }
 
 // Frozen is a machine whose disks hold still until Release.
@@ -62,6 +78,20 @@ type Target struct {
 	// OpenFile creates a disk image file the way a plain image restore
 	// would; drivers whose disks are ordinary files use it.
 	OpenFile func(path string, size int64) (w io.WriterAt, fresh bool, done func() error, err error)
+	// Connection is as in Options.
+	Connection *Connection
+}
+
+// DiskSpec describes a disk image about to be restored.
+type DiskSpec struct {
+	// Name is the image's name in the snapshot.
+	Name string
+	Size int64
+	// The image arrives as blocks of BlockSize bytes, in ascending
+	// order; Data says which blocks hold data. The others are holes
+	// and are not written to a destination that reads as zeros.
+	BlockSize int64
+	Data      []bool
 }
 
 // Restore builds one machine. Disk is called for every disk image in
@@ -70,13 +100,17 @@ type Restore interface {
 	// Disk returns where a disk's contents are written. fresh says the
 	// destination already reads as zeros; done is called after the last
 	// write.
-	Disk(name string, size int64) (w io.WriterAt, fresh bool, done func() error, err error)
+	Disk(d DiskSpec) (w io.WriterAt, fresh bool, done func() error, err error)
 	// Finish builds the machine around the restored disks and leaves it
 	// switched off. It returns warnings about what could not be put back.
 	Finish() ([]string, error)
 	// Where says where the disks went, for messages.
 	Where() string
 }
+
+// Aborter is a Restore that has something to undo when the restore
+// fails before Finish.
+type Aborter interface{ Abort() }
 
 // Driver backs up and restores the machines of one kind of hypervisor.
 type Driver interface {
@@ -87,10 +121,12 @@ type Driver interface {
 	// ConfigFile names the entry that holds a machine's configuration in
 	// a snapshot. It is how a restore knows which driver made a backup.
 	ConfigFile() string
-	// Available returns nil when this computer is such a host.
+	// Available returns nil when this computer is such a host, or the
+	// hypervisor is one that is reached over the network.
 	Available() error
-	// List names the machines on this host.
-	List(ctx context.Context) ([]string, error)
+	// List names the machines on this host, or on the one conn leads
+	// to.
+	List(ctx context.Context, conn *Connection) ([]string, error)
 	// Freeze prepares a machine to be read.
 	Freeze(ctx context.Context, vm string, o Options) (*Frozen, error)
 	// NewRestore starts building a machine from the configuration a

@@ -218,7 +218,7 @@ bb restore SNAPSHOT --path web01/disk-vda --target /tmp/vda.img --wait
 
 The agent works out by itself whether its host runs Hyper-V, Proxmox VE or
 libvirt; a policy can also say so (`--hypervisor libvirt`, "Hypervisor" in
-the web UI).
+the web UI). VMware is different: see below.
 
 A running machine is backed up through a libvirt backup job (libvirt 7.2 and
 QEMU 4.2 or later): QEMU serves every disk as it was when the job began while
@@ -309,6 +309,54 @@ check a restore.
 Known gaps: the contents of a TPM are not backed up, disks passed through
 from the host are skipped with a warning, cloud-init passwords have to be set
 again, and a machine cannot yet be restored over the original.
+
+### VMware vSphere virtual machines (ESXi and vCenter)
+
+VMware is the one hypervisor that is backed up over the network: no agent
+goes on the ESXi host. Tell the server about the vCenter Server or the ESXi
+host ("VMware servers" in the web UI, or `bb vmware add`), then make a policy
+that names it and any agent that can reach its management address on port
+443. With a vCenter Server the disks come from the ESXi hosts themselves, so
+the agent has to reach those on port 443 as well. The agent reads the disks
+and sends them on, so pick one close to the hosts.
+
+```sh
+BB_VMWARE_PASSWORD=... bb vmware add --name lab --url vcenter.example.com --user backup@vsphere.local
+bb policy add --name vmware --agent files01 --hypervisor vmware --vmware-server lab --vm web01 --vm db01 --daily-at 23:00
+bb restore SNAPSHOT --path web01 --name web01-restored --wait
+bb restore SNAPSHOT --path web01 --name web01-restored --target datastore2 --vmware-server lab --wait
+```
+
+Most servers present a certificate they made themselves. Leave the
+thumbprint empty at first: the first backup then fails with the SHA-256
+thumbprint the server shows. Compare it with what the server itself displays
+and save it with the server (`--thumbprint`), and from then on only that
+certificate is accepted. The password is stored on the better-backup server
+and handed to the agent with each job; it is not written to the agent's disk
+and the API never returns it.
+
+A backup takes a snapshot of the machine (quiesced through VMware Tools when
+they are running), downloads the snapshot's disks the way "Export OVF
+template" does, and removes the snapshot. A restore imports the machine again
+as a new one, switched off, with thin disks, on the datastore named as the
+target or else the one it was on, on a host that has that datastore, in its
+old folder and resource pool if they are still there. Its network adapters
+are connected to the networks of the same names and get new MAC addresses.
+
+**This has not run on a real ESXi host or vCenter Server.** The automated
+tests run against the vSphere simulator of VMware's own Go library, which
+answers the management calls but holds no real disks, and the disk format is
+checked both ways against QEMU. What that leaves untested: whether a real
+host accepts the disks this program uploads on restore, what a real server
+puts in a machine's description, vSAN and other special datastores, and
+speed. Try it on a machine that does not matter first, and check a restore.
+
+Known gaps: every backup downloads the disks in full (only what changed is
+stored, but Changed Block Tracking is not used yet, so backups of large
+machines are slow); the free ESXi license does not allow backups at all;
+independent disks and physical-mode raw device mappings are left out with a
+warning; encrypted machines and virtual TPMs cannot be exported; and a
+machine cannot yet be restored over the original.
 
 ### Windows system state
 
@@ -480,7 +528,7 @@ Then use the two commands above, or start a new server with
 | 2. Windows VSS (done) | VSS snapshots, NTFS owners, permissions and alternate data streams, policies in the web UI, email alerts |
 | 3. Hyper-V and images (in progress) | Done: volume and virtual disk images, VM backup from checkpoints and restore as a copy, change tracking for VM backups (untested on a real host). To do: VM restore in place |
 | 4. System state and AD (in progress) | Done: system state backup through VSS writers, including the AD database and SYSVOL on a domain controller. restore over the running system with the registry, non-authoritative and authoritative Active Directory restore in DSRM (little tested on real machines) |
-| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node). To do: VMware provider, Postgres option, user roles |
+| 5. Scale and offsite (in progress) | Done: offsite copy to S3-compatible storage or a second disk. Done also: KVM virtual machines through libvirt, Proxmox VE virtual machines (untested on a real node), VMware vSphere virtual machines over the network (untested on a real host, full reads only). To do: VMware Changed Block Tracking, Postgres option, user roles |
 | 6. Full recovery | Bare-metal recovery media, SQL Server and Exchange writers, object-level AD restore |
 
 See [docs/architecture.md](docs/architecture.md) for the design and the
