@@ -152,8 +152,7 @@ jobs:
           SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
           SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
         run: |
-          ./packaging/windows/build.ps1 -Version ${{ github.ref_name }} -Arch amd64
-          ./packaging/windows/build.ps1 -Version ${{ github.ref_name }} -Arch arm64
+          ./packaging/windows/build.ps1 -Version ${{ github.ref_name }} -Arch amd64,arm64
       - name: Attach to the release
         shell: pwsh
         env:

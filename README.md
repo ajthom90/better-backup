@@ -59,6 +59,41 @@ backup until it has run beside your current one for a while.
   needs only the repository folder and its key.
 - **Runs in Docker or natively** as a systemd unit, launchd daemon or Windows
   service. One static binary each for server, agent and CLI.
+- **x64 and ARM64** on every system; see [Processors](#processors).
+
+## Processors
+
+Everything is built for Intel/AMD (x64) and for ARM64 machines:
+
+| | x64 | ARM64 |
+| --- | --- | --- |
+| Windows: programs, server and agent installers (`.msi`) | yes | yes |
+| Linux: programs, `.deb` and `.rpm` packages | yes | yes |
+| macOS: programs, agent installer (`.pkg`) | yes | yes (one installer for both) |
+| Docker images, server and agent | yes | yes (one tag for both) |
+| Bare-metal recovery disc | yes | not yet |
+
+Every commit is tested on both kinds of processor on Windows, Linux and
+macOS, and the installers are installed and used on both.
+
+What to know about ARM64:
+
+- **Windows on ARM** needs Windows 11. Open-file snapshots (VSS) work as on
+  x64. The agent's settings app shows its page with WebView2, which
+  Windows 11 includes; without it the page opens in the browser instead.
+  Install the ARM64 installer there, not the x64 one: Windows would run the
+  x64 agent, but an emulated program is not expected to be able to take
+  snapshots.
+- **Hyper-V on ARM64** (Windows 11 on ARM can host ARM64 guests) goes
+  through the same code as on x64, but nobody has run it there yet. The
+  same holds for KVM, Proxmox VE and ZFS on ARM64 Linux.
+- **Linux on ARM** means 64-bit (`uname -m` prints `aarch64`): a Raspberry
+  Pi 4 or 5 with a 64-bit system, an ARM server or cloud machine. There is
+  no build for 32-bit ARM systems.
+- **The recovery disc** starts x64 machines only. A whole-machine backup of
+  an ARM64 machine can still be restored as files and disks, and as disk
+  images to attach to a new virtual machine.
+- A server of either kind hands out agent installers for both.
 
 ## Quick start
 
@@ -190,6 +225,7 @@ after:
 
 ```sh
 sudo apt install ./better-backup-agent_VERSION_linux_amd64.deb   # or: sudo dnf install ./...rpm
+                                                                 # on ARM64: ..._linux_arm64.deb
 sudo bb-agent enroll          # asks for the code; or: sudo bb-agent enroll CODE
 ```
 
@@ -246,7 +282,8 @@ certificate, because the server uses its own private certificate authority.
 
 ### Windows installers
 
-Each release has two installers for Windows, for x64 and ARM64:
+Each release has two installers for Windows, each for x64 (`amd64` in the
+file name) and for ARM64 (`arm64`):
 `better-backup-server_VERSION_windows_amd64.msi` and
 `better-backup-agent_VERSION_windows_amd64.msi`.
 
@@ -257,8 +294,8 @@ puts "better-backup web UI" in the Start menu. The first visit to the web UI
 asks you to create the administrator's name and password.
 
 **The agent installer** asks for an enrollment code. Get one in the web UI:
-"Add an agent" shows the installer to download (the server carries the one
-that matches it), the code, and reports the machine when it has registered.
+"Add an agent" shows the installer to download (the server carries the
+matching ones, for x64 and ARM64), the code, and reports the machine when it has registered.
 The code holds the server's address, a one-time token and the server's
 fingerprint. The agent runs as the service "better-backup agent" and
 connects out to the server, so it needs no firewall rule.
@@ -289,8 +326,8 @@ backups, `repo.key` and the server's database, and the agent's identity in
 agent. The installers close both data folders to everyone but administrators
 and SYSTEM. The services log to `server.log` and `agent.log` in those folders.
 
-A server in Docker carries the Windows agent installer too (the `:edge`
-image carries the newest build, version `0.0.N`). To offer another installer
+A server in Docker carries the Windows agent installers too, for x64 and
+ARM64 (the `:edge` image carries the newest build, version `0.0.N`). To offer another installer
 from any server, put it in the folder `installers` in the server's data
 directory.
 

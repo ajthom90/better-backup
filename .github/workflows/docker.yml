@@ -18,8 +18,8 @@ concurrency:
 
 jobs:
   msi:
-    # The Windows agent installer, which the server image carries so that
-    # its web UI can hand it out. Between releases it is version
+    # The Windows agent installers, for x64 and ARM64, which the server
+    # image carries so that its web UI can hand them out. Between releases it is version
     # 0.0.RUN, so that a newer one upgrades an older one.
     name: Windows installers
     runs-on: windows-latest
@@ -30,7 +30,7 @@ jobs:
           go-version-file: go.mod
       - name: Build
         shell: pwsh
-        run: ./packaging/windows/build.ps1 -Version 0.0.${{ github.run_number }}
+        run: ./packaging/windows/build.ps1 -Version 0.0.${{ github.run_number }} -Arch amd64,arm64
       - uses: actions/upload-artifact@v4
         with:
           name: better-backup-windows-installers
@@ -47,7 +47,7 @@ jobs:
         with:
           name: better-backup-windows-installers
           path: dist
-      - name: Put the agent installer in the server image
+      - name: Put the agent installers in the server image
         run: cp dist/better-backup-agent_*.msi packaging/installers/
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
