@@ -33,15 +33,21 @@ jobs:
   recovery:
     name: Recovery disc
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - name: Install the disc and emulator tools
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xorriso mtools grub-pc-bin grub-common grub-efi-amd64-bin \
+          # The runner's regional mirror is sometimes very slow; the main
+          # archive is not.
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|' /etc/apt/sources.list.d/ubuntu.sources
+          apt="sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30"
+          $apt update
+          $apt install -y --no-install-recommends xorriso mtools grub-pc-bin grub-common grub-efi-amd64-bin \
             grub-efi-amd64-signed shim-signed kmod zstd busybox-static cpio file gdisk fdisk e2fsprogs \
             qemu-system-x86 ovmf
           # Let the emulator use hardware virtualization where the runner has it.
@@ -52,9 +58,11 @@ jobs:
           path: bin/recovery-cache
           key: recovery-packages-${{ hashFiles('packaging/recovery/build.py') }}
       - name: Build the recovery disc
+        timeout-minutes: 10
         run: make recovery VERSION="ci-$(git rev-parse --short=12 HEAD)"
       - name: Recover a machine in an emulator (UEFI and BIOS)
-        run: BB_RECOVERY_ISO="$PWD/bin/recovery.iso" go test -count=1 -v -timeout 30m -run TestRecoveryDisc ./internal/recovery/
+        timeout-minutes: 15
+        run: BB_RECOVERY_ISO="$PWD/bin/recovery.iso" go test -count=1 -v -timeout 14m -run TestRecoveryDisc ./internal/recovery/
       - name: Upload the recovery disc
         uses: actions/upload-artifact@v4
         with:

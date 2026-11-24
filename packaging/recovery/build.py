@@ -11,15 +11,19 @@ It needs no root. On Ubuntu 24.04 install the tools with:
 Usage:  build.py --agent bin/bb-agent --out recovery.iso [--firmware]
 
 The kernel, its drivers and the boot loaders are Ubuntu's own signed
-packages, fetched with apt-get download. Nothing is compiled.
+packages, downloaded from the Ubuntu archive and checked against apt's
+signed package lists. Nothing is compiled.
 """
 import argparse
 import glob
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
 
 PLACEHOLDER = "@@BB-RECOVERY-CONFIG@@"
 CONFIG_SIZE = 384
@@ -85,6 +89,69 @@ def run(*cmd, **kw):
 
 def out(*cmd):
     return subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True).stdout
+
+
+# A download slower than this for half a minute is given up on and tried
+# again, from the next place if there is one. Some mirrors crawl.
+MIN_SPEED = 250 << 10
+ARCHIVES = ["http://archive.ubuntu.com/ubuntu", "http://security.ubuntu.com/ubuntu"]
+
+
+def download(url, dest, size):
+    """Fetches url to dest, picking up where an earlier try stopped."""
+    have = os.path.getsize(dest) if os.path.exists(dest) else 0
+    req = urllib.request.Request(url, headers=dict({"User-Agent": "recovery-disc-build"}, **({"Range": "bytes=%d-" % have} if have else {})))
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        if have and resp.status != 206:
+            have = 0
+        with open(dest, "ab" if have else "wb") as f:
+            mark, got = time.monotonic(), 0
+            while True:
+                block = resp.read(1 << 20)
+                if not block:
+                    break
+                f.write(block)
+                got += len(block)
+                if time.monotonic() - mark > 30:
+                    if got < MIN_SPEED * 30:
+                        raise OSError("too slow: %d kB/s" % (got / (time.monotonic() - mark) / 1024))
+                    mark, got = time.monotonic(), 0
+    if os.path.getsize(dest) != size:
+        raise OSError("got %d of %d bytes" % (os.path.getsize(dest), size))
+
+
+def fetch(pkg, cache):
+    """Puts a package's .deb in cache, checked against the hash in apt's
+    signed package lists."""
+    url, name, size, digest = out("apt-get", "download", "--print-uris", pkg).split()[-4:]
+    url, size, (algo, want) = url.strip("'"), int(size), digest.split(":")
+    part = os.path.join(cache, name + ".part")
+    urls = [a + url[url.index("/pool/"):] for a in ARCHIVES if "/pool/" in url]
+    if url.startswith("http") and url not in urls:
+        urls.append(url)
+    last = None
+    for attempt in range(6):
+        for u in urls:
+            print("+ fetch", u, flush=True)
+            try:
+                download(u, part, size)
+            except Exception as e:  # the next place, or the next try
+                print("  failed:", e, flush=True)
+                last = e
+                continue
+            h = hashlib.new(algo.lower())
+            with open(part, "rb") as f:
+                for block in iter(lambda: f.read(1 << 20), b""):
+                    h.update(block)
+            if h.hexdigest() != want:
+                os.remove(part)
+                last = "wrong %s for %s" % (algo, name)
+                print("  failed:", last, flush=True)
+                continue
+            os.rename(part, os.path.join(cache, name))
+            return
+        time.sleep(3)
+    sys.exit("could not download %s: %s" % (pkg, last))
 
 
 def cpio(root, dest):
@@ -158,7 +225,7 @@ def main():
     tree = os.path.join(work, "pkg")
     for p in pkgs:
         if not glob.glob(os.path.join(cache, p + "_*.deb")):
-            run("apt-get", "download", "-q", p, cwd=cache)
+            fetch(p, cache)
         run("dpkg-deb", "-x", glob.glob(os.path.join(cache, p + "_*.deb"))[0], tree)
     # Newer packages keep everything under /usr.
     def find(*parts):
