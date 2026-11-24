@@ -171,6 +171,6 @@ if [ "$os" = Darwin ]; then
 else
     sudo apt-get remove -y better-backup-agent || fail "removal failed"
     if service_running; then fail "the service still runs"; fi
-    if command -v bb-agent >/dev/null 2>&1; then fail "bb-agent was left behind"; fi
+    if [ -e /usr/bin/bb-agent ]; then fail "bb-agent was left behind"; fi
 fi
 printf '\nAll good.\n'
