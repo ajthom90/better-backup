@@ -98,7 +98,9 @@ if [ "$os" = Darwin ]; then
     app="/Applications/Better Backup.app"
     "$app/Contents/MacOS/better-backup" version || fail "the app does not run"
     codesign --verify --strict "$app" /usr/local/bin/bb-agent || fail "bad signature"
-    lipo -archs "$app/Contents/MacOS/better-backup" /usr/local/bin/bb-agent
+    for f in "$app/Contents/MacOS/better-backup" /usr/local/bin/bb-agent; do
+        lipo "$f" -verify_arch arm64 x86_64 || fail "$f is not built for both kinds of Mac"
+    done
     open "$app"
     until_ok 20 pgrep -x better-backup || fail "the app did not start"
     sleep 8
