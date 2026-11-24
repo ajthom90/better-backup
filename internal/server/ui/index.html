@@ -124,7 +124,7 @@ async function refresh() {
       a.revoked ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
   table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
-    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : []).join(", "),
+    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : []).join(", "),
       (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
       keeps(p.retention),
       el("div", { className: "acts" },
@@ -158,7 +158,7 @@ function policyDialog(p) {
   if (p) agent.value = p.agent_id;
   const paths = el("textarea", { rows: 3, value: p ? (p.paths || []).join("\n") : "", placeholder: "One folder or file per line, for example D:\\Shares or /home" });
   const excludes = el("textarea", { rows: 2, value: p && p.excludes ? p.excludes.join("\n") : "", placeholder: "One pattern per line, for example *.tmp or node_modules" });
-  const volumes = el("textarea", { rows: 2, value: p && p.volumes ? p.volumes.join("\n") : "", placeholder: "One per line, for example C: on Windows or /dev/vg0/data on Linux" });
+  const volumes = el("textarea", { rows: 2, value: p && p.volumes ? p.volumes.join("\n") : "", placeholder: "One per line, for example C: on Windows, /dev/vg0/data on Linux or /dev/zvol/tank/vm-disk on TrueNAS" });
   const vms = el("textarea", { rows: 2, value: p && p.vms ? p.vms.join("\n") : "", placeholder: "One name per line, or * for every machine on the host" });
   const kind = el("select", null, el("option", { value: "daily", textContent: "Every day at a set time" }),
     el("option", { value: "interval", textContent: "Repeating, every so often" }), el("option", { value: "manual", textContent: "Only when started by hand" }));
@@ -176,6 +176,7 @@ function policyDialog(p) {
   const enabled = el("input", { type: "checkbox", checked: p ? p.enabled : true });
   const noSnap = el("input", { type: "checkbox", checked: p ? !!p.no_snapshot : false });
   const sysState = el("input", { type: "checkbox", id: "sysState", checked: p ? !!p.system_state : false });
+  const trueNAS = el("input", { type: "checkbox", id: "trueNAS", checked: p ? !!p.truenas_config : false });
   const vmTracking = el("select", { id: "vmTracking" },
     el("option", { value: "", textContent: "Read every disk in full" }),
     el("option", { value: "on", textContent: "Read only what changed since the last backup" }),
@@ -186,7 +187,7 @@ function policyDialog(p) {
   save.onclick = async () => {
     const retention = {};
     for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
-    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), vm_tracking: vmTracking.value, system_state: sysState.checked,
+    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), vm_tracking: vmTracking.value, system_state: sysState.checked, truenas_config: trueNAS.checked,
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
     try {
@@ -209,21 +210,24 @@ function policyDialog(p) {
     el("label", { textContent: "Name" }), name,
     el("label", { textContent: "Machine to back up" }), agent,
     el("label", { textContent: "Folders and files to back up" }), paths,
+    el("div", { className: "hint", textContent: "Files are read from a snapshot where there is one, so files in use are backed up as they were at one instant: VSS on Windows, and ZFS on TrueNAS and other systems with ZFS, where every dataset under these folders is included." }),
     el("label", { textContent: "Leave out (optional)" }), excludes,
     el("label", { textContent: "Whole volumes to back up as images (optional)" }), volumes,
-    el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS." }),
+    el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS. A ZFS volume (zvol) is read from a snapshot taken together with the folders above." }),
     el("label", { textContent: "Hyper-V virtual machines (optional)" }), vms,
     el("div", { className: "hint", textContent: "Choose the agent on the Hyper-V host. Each machine is backed up while it runs, from a checkpoint." }),
     el("label", { textContent: "How virtual machine disks are read" }), vmTracking,
     el("div", { className: "hint", textContent: "Reading only what changed is much faster and relies on Hyper-V's change tracking. Run a few backups with the checking option first: it reads everything and warns if the tracking missed a change." }),
     el("label", { className: "check" }, sysState, "Windows: back up the system state"),
     el("div", { className: "hint", textContent: "The registry, boot and system files, and on a domain controller the Active Directory database and SYSVOL. It can be restored to a folder; restoring it over a running system is not built yet." }),
+    el("label", { className: "check" }, trueNAS, "TrueNAS: back up the system configuration"),
+    el("div", { className: "hint", textContent: "Every setting of the TrueNAS system (pools, shares, users, apps, network) and the secret seed that unlocks the passwords saved in it. It is restored to a folder as truenas-config.tar, which TrueNAS takes back under System, General Settings, Manage Configuration, Upload File." }),
     el("label", { textContent: "Schedule" }), el("div", { className: "two" }, kind, el("div", null, at, every)),
     el("div", { className: "hint", textContent: "Times are in the server's time zone." }),
     el("label", { textContent: "Snapshots to keep" }), grid,
     el("div", { className: "hint", textContent: "Leave every box empty to keep all snapshots." }),
     el("label", { className: "check" }, enabled, "Run on schedule"),
-    el("label", { className: "check" }, noSnap, "Windows: read live files instead of a VSS snapshot"),
+    el("label", { className: "check" }, noSnap, "Read live files instead of a VSS or ZFS snapshot"),
     err, buttons);
   $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
 }
@@ -456,7 +460,23 @@ $("moreJobs").onclick = () => { jobLimit = jobLimit === 15 ? 100 : 15; $("moreJo
 $("newToken").onclick = async () => {
   try {
     const t = await call("POST", "/api/v1/enroll-tokens", { ttl: "24h", uses: 1 });
-    notice("Add an agent", "Install bb-agent on the machine, then run this there within 24 hours:\n\nbb-agent enroll --server " + location.origin + " --token " + t.token + " --fingerprint " + t.fingerprint + "\n\nThen start it with: bb-agent service install && bb-agent service start");
+    const st = await call("GET", "/api/v1/status");
+    const tag = /^v?\d+\.\d+\.\d+$/.test(st.version || "") ? "latest" : "edge";
+    const folder = el("input", { id: "nasFolder", value: "/mnt/tank/better-backup-agent" });
+    const yaml = el("pre", { id: "nasYaml" });
+    const fill = () => { yaml.textContent = "services:\n  better-backup-agent:\n    image: ghcr.io/ajthom90/better-backup-agent:" + tag + "\n    restart: unless-stopped\n    privileged: true\n    pid: host\n    network_mode: host\n    environment:\n      BB_HOST_ROOT: /proc/1/root\n      BB_AGENT_DIR: " + JSON.stringify(folder.value.trim()) + "\n      BB_SERVER: " + location.origin + "\n      BB_ENROLL_TOKEN: " + t.token + "\n      BB_FINGERPRINT: " + t.fingerprint + "\n"; };
+    folder.oninput = fill; fill();
+    openDialog(true, el("h3", { textContent: "Add an agent" }),
+      el("div", { textContent: "Install bb-agent on the machine, then run this there within 24 hours:" }),
+      el("pre", { textContent: "bb-agent enroll --server " + location.origin + " --token " + t.token + " --fingerprint " + t.fingerprint }),
+      el("div", { textContent: "Then start it with: bb-agent service install && bb-agent service start" }),
+      el("h3", { textContent: "On TrueNAS SCALE", style: "margin-top:22px" }),
+      el("div", { textContent: "The agent runs as an app. In TrueNAS open Apps, Discover Apps, the menu at the top right, Install via YAML. Name it better-backup-agent and paste the text below. It needs TrueNAS SCALE 24.10 or newer." }),
+      el("label", { textContent: "A folder on one of its pools, where the agent keeps its identity" }), folder,
+      el("div", { className: "hint", textContent: "Replace tank with the name of a pool. The folder is created on first start." }),
+      yaml,
+      el("div", { className: "hint", textContent: "The app is privileged and works in the file system of TrueNAS itself, so policies use the real paths (/mnt/tank/documents), files are read from ZFS snapshots, and a restore can write them back in place." }),
+      el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
   } catch (e) { notice("Could not create a token", e.message); }
 };
 function signOut() { token = ""; sessionStorage.removeItem("bb-token"); $("app").hidden = true; $("login").hidden = false; }

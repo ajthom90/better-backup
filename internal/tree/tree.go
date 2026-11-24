@@ -30,6 +30,11 @@ const (
 	// original paths.
 	SystemStateName = "System state"
 
+	// TrueNASConfigName is the name of the source entry that holds the
+	// configuration of a TrueNAS system: a folder with the file TrueNAS
+	// takes back under Manage Configuration.
+	TrueNASConfigName = "TrueNAS configuration"
+
 	// pageSize is the target size of one page of directory entries.
 	pageSize = 1 << 20
 	// inlineContent is the most chunk ids kept inline in a file entry.

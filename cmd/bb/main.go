@@ -41,7 +41,8 @@ Usage:
         [--system-state]       (Windows: registry, boot and system files,
                                 Active Directory and SYSVOL on a domain controller)
         [--exclude PATTERN ...] [--every 24h | --daily-at 02:00]
-        [--no-snapshot]  (Windows: read live files instead of a VSS snapshot)
+        [--truenas-config]     (TrueNAS SCALE: the system configuration)
+        [--no-snapshot]  (read live files instead of a VSS or ZFS snapshot)
         [--keep-last N] [--keep-daily N] [--keep-weekly N]
         [--keep-monthly N] [--keep-yearly N]
   bb policy run POLICY [--wait]          back up now
@@ -116,6 +117,7 @@ var (
 	fOver    = fs.String("overwrite", "", "")
 	fWait    = fs.Bool("wait", false, "")
 	fSysSt   = fs.Bool("system-state", false, "")
+	fTrueNAS = fs.Bool("truenas-config", false, "")
 	fVMTrack = fs.String("vm-tracking", "", "")
 	fNoSnap  = fs.Bool("no-snapshot", false, "")
 	fSMTP    = fs.String("smtp", "", "")
@@ -380,16 +382,19 @@ func main() {
 			if p.SystemState {
 				what = append(what, "system state")
 			}
+			if p.TrueNASConfig {
+				what = append(what, "TrueNAS configuration")
+			}
 			fmt.Fprintf(tabs, "%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.AgentID, sched, strings.Join(keep, ", "), strings.Join(what, ", "))
 		}
 	case "policy":
 		switch sub {
 		case "add":
-			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols)+len(fVMs) == 0 && !*fSysSt {
-				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state"))
+			if *fName == "" || *fAgent == "" || len(fPaths)+len(fVols)+len(fVMs) == 0 && !*fSysSt && !*fTrueNAS {
+				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state or --truenas-config"))
 			}
 			var p api.Policy
-			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, VMTracking: *fVMTrack, SystemState: *fSysSt,
+			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, VMTracking: *fVMTrack, SystemState: *fSysSt, TrueNASConfig: *fTrueNAS,
 				Schedule: api.Schedule{Interval: *fEvery, DailyAt: *fDaily}, Retention: fKeep, NoSnapshot: *fNoSnap, Enabled: true}, &p)
 			fmt.Printf("created policy %s (%s)\n", p.Name, p.ID)
 		case "run":

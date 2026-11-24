@@ -93,6 +93,10 @@ func Run(ctx context.Context, get tree.Getter, opts Options) (Stats, error) {
 			r.warn("the system state was not restored: it cannot be restored over a running system yet. Restore it to a folder instead")
 			continue
 		}
+		if e.Name == tree.TrueNASConfigName && e.Type == tree.TypeDir && opts.Target == "" {
+			r.warn("the TrueNAS configuration was not restored: restore it to a folder, then upload truenas-config.tar in the TrueNAS web interface under System, General Settings, Manage Configuration, Upload File")
+			continue
+		}
 		if err := r.entry(e, e.Name, r.dest(e.Name), m == matchFull); err != nil {
 			return r.stats, err
 		}

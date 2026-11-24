@@ -33,6 +33,8 @@ better-backup has three programs:
 | `internal/agent` | Agent: enrollment, job loop |
 | `internal/api` | Wire types and the pinned-TLS client configuration |
 | `internal/vss` | Windows Volume Shadow Copy requester and backup privileges |
+| `internal/zfs` | ZFS snapshots of datasets and volumes for the length of a backup |
+| `internal/truenas` | The configuration of a TrueNAS system as one file |
 | `internal/svc` | Windows service, systemd and launchd integration |
 
 Data sources other than files (volume images, Hyper-V and other hypervisors,

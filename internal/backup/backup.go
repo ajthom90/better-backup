@@ -38,6 +38,8 @@ type Options struct {
 	// SystemState, if set, backs up the files a Windows system state
 	// consists of.
 	SystemState *SystemState
+	// Folders are stored under a name of their own instead of their path.
+	Folders []Folder
 	// Parent holds the sources of the previous snapshot. Files whose size
 	// and modification time match it are not read again.
 	Parent []tree.Entry
@@ -49,6 +51,10 @@ type Options struct {
 	Progress func(tree.Stats)
 	Warn     func(string)
 }
+
+// Folder is a folder to back up as a source called Name, whatever its
+// path. It is read as it is, not through MapPath.
+type Folder struct{ Name, Path string }
 
 // SystemState names the files that make up a system state: everything
 // under Roots that Match accepts. Match is asked about folders too, and
@@ -93,7 +99,7 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 	if a.opts.MapPath == nil {
 		a.opts.MapPath = func(p string) string { return p }
 	}
-	if len(opts.Paths) == 0 && len(opts.Images) == 0 && len(opts.VMs) == 0 && opts.SystemState == nil {
+	if len(opts.Paths) == 0 && len(opts.Images) == 0 && len(opts.VMs) == 0 && len(opts.Folders) == 0 && opts.SystemState == nil {
 		return nil, a.stats, errors.New("no paths to back up")
 	}
 	parents := map[string]*tree.Entry{}
@@ -121,6 +127,23 @@ func Run(ctx context.Context, store Store, opts Options) ([]tree.Entry, tree.Sta
 	}
 	if opts.SystemState != nil {
 		e, err := a.systemState(opts.SystemState, parents[tree.SystemStateName])
+		if err != nil {
+			return nil, a.stats, err
+		}
+		if e != nil {
+			sources = append(sources, *e)
+		}
+	}
+	for _, f := range opts.Folders {
+		fi, err := os.Lstat(f.Path)
+		if err != nil {
+			a.warn("%v", err)
+			continue
+		}
+		mapped := a.opts.MapPath
+		a.opts.MapPath = func(p string) string { return p }
+		e, err := a.node(f.Path, f.Name, fi, parents[f.Name])
+		a.opts.MapPath = mapped
 		if err != nil {
 			return nil, a.stats, err
 		}

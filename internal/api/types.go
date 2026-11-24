@@ -87,26 +87,31 @@ type Policy struct {
 	// SystemState backs up what Windows needs to bring a machine's
 	// identity back: the registry, boot and system files, and on a domain
 	// controller the Active Directory database and SYSVOL.
-	SystemState bool      `json:"system_state,omitempty"`
-	Schedule    Schedule  `json:"schedule"`
-	Retention   Retention `json:"retention"`
-	// NoSnapshot backs up the live file system instead of a volume
-	// snapshot. It only matters on Windows, where snapshots are the
-	// default.
+	SystemState bool `json:"system_state,omitempty"`
+	// TrueNASConfig backs up the configuration of a TrueNAS system:
+	// every setting, and the secret seed that decrypts the passwords
+	// stored with them.
+	TrueNASConfig bool      `json:"truenas_config,omitempty"`
+	Schedule      Schedule  `json:"schedule"`
+	Retention     Retention `json:"retention"`
+	// NoSnapshot backs up the live file system instead of a snapshot.
+	// Snapshots are the default where there are any: VSS on Windows,
+	// and ZFS for the paths that are on ZFS datasets.
 	NoSnapshot bool      `json:"no_snapshot,omitempty"`
 	Enabled    bool      `json:"enabled"`
 	Created    time.Time `json:"created"`
 }
 
 type BackupSpec struct {
-	Paths       []string     `json:"paths"`
-	Excludes    []string     `json:"excludes,omitempty"`
-	Volumes     []string     `json:"volumes,omitempty"`
-	VMs         []string     `json:"vms,omitempty"`
-	VMTracking  string       `json:"vm_tracking,omitempty"`
-	SystemState bool         `json:"system_state,omitempty"`
-	NoSnapshot  bool         `json:"no_snapshot,omitempty"`
-	Parent      []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
+	Paths         []string     `json:"paths"`
+	Excludes      []string     `json:"excludes,omitempty"`
+	Volumes       []string     `json:"volumes,omitempty"`
+	VMs           []string     `json:"vms,omitempty"`
+	VMTracking    string       `json:"vm_tracking,omitempty"`
+	SystemState   bool         `json:"system_state,omitempty"`
+	TrueNASConfig bool         `json:"truenas_config,omitempty"`
+	NoSnapshot    bool         `json:"no_snapshot,omitempty"`
+	Parent        []tree.Entry `json:"parent,omitempty"` // set when the job is handed to the agent
 }
 
 type RestoreSpec struct {
