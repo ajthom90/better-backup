@@ -315,8 +315,9 @@ VMware is the one hypervisor that is backed up over the network: no agent
 goes on the ESXi host. Tell the server about the vCenter Server or the ESXi
 host ("VMware servers" in the web UI, or `bb vmware add`), then make a policy
 that names it and any agent that can reach its management address on port
-443. That agent reads the disks and sends them on, so pick one close to the
-hosts.
+443. With a vCenter Server the disks come from the ESXi hosts themselves, so
+the agent has to reach those on port 443 as well. The agent reads the disks
+and sends them on, so pick one close to the hosts.
 
 ```sh
 BB_VMWARE_PASSWORD=... bb vmware add --name lab --url vcenter.example.com --user backup@vsphere.local

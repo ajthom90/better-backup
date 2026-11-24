@@ -344,11 +344,17 @@ type stream struct {
 	r    *vmdk.Reader
 	err  error
 	read int64
+	// whole says the disk was read to its end and the stream ended
+	// the way the format says it must.
+	whole bool
 }
 
 func (s *stream) start() error {
 	if s.r != nil || s.err != nil {
 		return s.err
+	}
+	if s.whole {
+		return errors.New("the download has ended")
 	}
 	body, err := s.open()
 	if err != nil {
@@ -385,32 +391,39 @@ func (s *stream) ReadAt(p []byte, off int64) (int, error) {
 		}
 		s.read = end
 	}
+	if s.read == s.size && !s.whole {
+		// What follows the last block says whether the stream is
+		// complete. It is read now, while the download is open.
+		if derr := s.r.Drain(); derr != nil {
+			s.err = fmt.Errorf("downloading %s: %w", s.name, derr)
+			return n, s.err
+		}
+		s.whole = true
+	}
 	return n, err
 }
 
-// finish checks that the whole disk arrived and the stream ended the
-// way the format says it must.
+// finish says whether the whole disk arrived.
 func (s *stream) finish() error {
 	if s.err != nil {
 		return s.err
 	}
-	if s.r == nil || s.read != s.size {
+	if !s.whole {
 		return fmt.Errorf("the disk %s was not read to its end", s.name)
-	}
-	if err := s.r.Drain(); err != nil {
-		return fmt.Errorf("downloading %s: %w", s.name, err)
 	}
 	return nil
 }
 
+// close ends the download. Nothing can be read after it.
 func (s *stream) close() {
 	if s.body != nil {
 		s.body.Close()
 		s.body = nil
 	}
-	if s.err == nil && s.r == nil {
-		s.err = errors.New("the download has ended")
+	if s.err == nil && !s.whole {
+		s.err = fmt.Errorf("the download of %s was ended early", s.name)
 	}
+	s.r = nil
 }
 
 func gz(b []byte) []byte {
@@ -726,7 +739,7 @@ func (driver) Freeze(ctx context.Context, name string, o hypervisor.Options) (fz
 	fz.Release = func() error {
 		ok := true
 		for _, s := range streams {
-			ok = ok && s.err == nil && s.r != nil
+			ok = ok && s.whole
 			s.close()
 		}
 		alive.end()
