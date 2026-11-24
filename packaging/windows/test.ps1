@@ -14,7 +14,7 @@ $repo = 'C:\bb-test-repo'
 $data = "$env:ProgramData\better-backup"
 $state = "$env:ProgramData\better-backup-agent"
 
-function Check([bool] $ok, [string] $what) {
+function Check($ok, [string] $what) {
   if (-not $ok) { throw "FAILED: $what" }
   Write-Host "ok: $what"
 }
@@ -55,7 +55,7 @@ Check ((Get-NetFirewallRule -DisplayName 'better-backup server' | Get-NetFirewal
 Check (-not ((Readers $data) -match 'Users')) "ordinary users cannot read $data"
 Check ((sc.exe qfailure better-backup-server | Out-String) -match 'RESTART') 'the server service restarts after a failure'
 $inst = Api '/api/v1/installers'
-$file = $inst.files | Where-Object { $_.os -eq 'windows' }
+$file = $inst.files | Where-Object { $_.os -eq 'windows' -and $_.arch -eq 'amd64' }
 Check ($file.name -eq "better-backup-agent_${Old}_windows_amd64.msi") 'the server offers the agent installer'
 Invoke-WebRequest "https://localhost:$Port$($file.url)" -SkipCertificateCheck -OutFile "$Dir\downloaded-agent.msi"
 Check ((Get-FileHash "$Dir\downloaded-agent.msi").Hash -eq (Get-FileHash "$Dir\$($file.name)").Hash) 'the downloaded agent installer is the one that was built'
