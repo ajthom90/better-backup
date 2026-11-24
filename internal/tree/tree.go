@@ -75,6 +75,10 @@ type Entry struct {
 	// Subtree lists the pages holding a directory's entries.
 	Subtree []keys.ID `json:"subtree,omitempty"`
 
+	// Xattrs are the extended attributes of a file, directory or link on
+	// Linux and macOS, by name. Access control lists are among them.
+	Xattrs map[string][]byte `json:"xattrs,omitempty"`
+
 	// Streams are the NTFS alternate data streams of a file or directory.
 	Streams []Stream `json:"streams,omitempty"`
 }

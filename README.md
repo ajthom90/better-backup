@@ -192,9 +192,10 @@ TrueNAS under System, General Settings, Manage Configuration, Upload File.
 After a rebuild that brings back the pools, shares, users and apps settings;
 then restore the data.
 
-Not yet backed up: extended attributes and ACLs (owner, group and mode are).
-If your SMB shares rely on ACLs, set them again after a restore, or keep ZFS
-snapshots of your own beside these backups for now.
+**Permissions.** On Linux and macOS a backup keeps each file's extended
+attributes beside its owner, group and mode, and a restore puts them back.
+That covers POSIX ACLs, the NFSv4 ACLs TrueNAS uses for SMB shares, and what
+Samba stores for Windows clients, such as the hidden and read-only flags.
 
 ### Hyper-V virtual machines
 

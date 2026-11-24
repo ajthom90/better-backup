@@ -297,6 +297,14 @@ func (s *Session) Snapshots() []string { return s.snaps }
 // the dataset that holds it, or the path itself when there is none.
 func (s *Session) Path(p string) string {
 	for _, m := range s.mounts {
+		if p == m {
+			// The trailing slash matters. A snapshot is mounted on its
+			// folder under .zfs, and asking about that folder without
+			// following it (lstat, listing its attributes) answers
+			// for the empty folder underneath instead of the
+			// dataset's own top folder.
+			return filepath.Join(m, ".zfs", "snapshot", s.tag) + "/"
+		}
 		if under(p, m) {
 			return filepath.Join(m, ".zfs", "snapshot", s.tag, strings.TrimPrefix(p, m))
 		}

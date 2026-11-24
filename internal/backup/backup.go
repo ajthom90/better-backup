@@ -519,6 +519,15 @@ func (a *archiver) dir(path string, parent *tree.Entry) ([]keys.ID, error) {
 			}
 			continue
 		}
+		if mapped := a.opts.MapPath(child); mapped != filepath.Join(a.opts.MapPath(path), d.Name()) {
+			// The child is read from somewhere else than this folder:
+			// it is where another dataset is mounted. What the folder
+			// lists is the empty mount point; the real one has its own
+			// owner and permissions.
+			if real, err := os.Lstat(mapped); err == nil {
+				fi = real
+			}
+		}
 		e, err := a.node(child, d.Name(), fi, prev[d.Name()])
 		if err != nil {
 			return nil, err

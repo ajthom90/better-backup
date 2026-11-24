@@ -34,6 +34,7 @@ better-backup has three programs:
 | `internal/api` | Wire types and the pinned-TLS client configuration |
 | `internal/vss` | Windows Volume Shadow Copy requester and backup privileges |
 | `internal/zfs` | ZFS snapshots of datasets and volumes for the length of a backup |
+| `internal/xattr` | Extended attributes, and with them ACLs, on Linux and macOS |
 | `internal/truenas` | The configuration of a TrueNAS system as one file |
 | `internal/svc` | Windows service, systemd and launchd integration |
 

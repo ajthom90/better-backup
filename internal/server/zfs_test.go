@@ -6,14 +6,18 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/ajthom90/better-backup/internal/adminclient"
 	"github.com/ajthom90/better-backup/internal/agent"
@@ -91,6 +95,42 @@ func TestZFS(t *testing.T) {
 	write(t, filepath.Join(shares, "report.txt"), []byte("as it was when the backup began"))
 	write(t, filepath.Join(shares, "gone-later.txt"), []byte("deleted during the backup"))
 	write(t, filepath.Join(shares, "media", "video.bin"), rnd(22, 2<<20))
+	// A dataset's top folder has an owner and a mode of its own, which
+	// differ from the empty folder it is mounted on.
+	if err := os.Chmod(filepath.Join(shares, "media"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	os.Chown(filepath.Join(shares, "media"), 4321, 4321)
+	os.Chmod(shares, 0o770)
+
+	// Permissions beyond owner and mode: a POSIX ACL that lets user 1234
+	// read the report, a default ACL on a folder, and plain attributes
+	// of the kind Samba keeps.
+	sh("zfs", "set", "acltype=posix", "xattr=sa", base+"/shares")
+	acl := func(entries ...[3]uint32) []byte {
+		b := binary.LittleEndian.AppendUint32(nil, 2)
+		for _, e := range entries {
+			b = binary.LittleEndian.AppendUint16(b, uint16(e[0]))
+			b = binary.LittleEndian.AppendUint16(b, uint16(e[1]))
+			b = binary.LittleEndian.AppendUint32(b, e[2])
+		}
+		return b
+	}
+	const none = 0xFFFFFFFF
+	fileACL := acl([3]uint32{1, 6, none}, [3]uint32{2, 4, 1234}, [3]uint32{4, 4, none}, [3]uint32{0x10, 4, none}, [3]uint32{0x20, 0, none})
+	dirACL := acl([3]uint32{1, 7, none}, [3]uint32{2, 5, 1234}, [3]uint32{4, 5, none}, [3]uint32{0x10, 5, none}, [3]uint32{0x20, 0, none})
+	wantAttrs := map[string]map[string][]byte{
+		filepath.Join(shares, "report.txt"): {"system.posix_acl_access": fileACL, "user.DOSATTRIB": []byte("0x20\x00"), "user.comment": rnd(25, 3000)},
+		filepath.Join(shares, "media"):      {"system.posix_acl_default": dirACL},
+	}
+	for path, attrs := range wantAttrs {
+		for name, v := range attrs {
+			if err := unix.Setxattr(path, name, v, 0); err != nil {
+				t.Fatalf("setting %s on %s: %v", name, path, err)
+			}
+		}
+	}
+
 	// A snapshot of the user's own, visible under .zfs: it must not be
 	// backed up as files, and must still be there afterwards.
 	sh("zfs", "snapshot", base+"/shares@mine")
@@ -194,6 +234,22 @@ exit 0
 		t.Fatalf("backed-up folder holds %q", got)
 	}
 
+	for _, l := range ls {
+		if l.Name == "media" && l.Mode&0o777 != 0o750 {
+			t.Fatalf("the child dataset's folder was recorded with mode %o", l.Mode&0o777)
+		}
+	}
+	os.Chmod(filepath.Join(shares, "media"), 0o700)
+	os.Chown(filepath.Join(shares, "media"), 0, 0)
+	os.Chmod(shares, 0o700)
+	for path, attrs := range wantAttrs {
+		for name := range attrs {
+			if err := unix.Removexattr(path, name); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
 	// Restore everything in place: the files and the volume go back to
 	// the moment of the snapshot. The configuration says how it is
 	// restored instead.
@@ -211,6 +267,21 @@ exit 0
 	}
 	if b, _ := os.ReadFile(filepath.Join(shares, "media", "video.bin")); !bytes.Equal(b, rnd(22, 2<<20)) {
 		t.Fatal("the file in the child dataset differs after the restore")
+	}
+	for path, attrs := range wantAttrs {
+		for name, want := range attrs {
+			got := make([]byte, 8192)
+			n, err := unix.Getxattr(path, name, got)
+			if err != nil || !bytes.Equal(got[:n], want) {
+				t.Fatalf("%s of %s after the restore: %d bytes, %v", name, path, n, err)
+			}
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(shares, "media")); err != nil || fi.Mode().Perm() != 0o750 || fi.Sys().(*syscall.Stat_t).Uid != 4321 {
+		t.Fatalf("the child dataset's folder after the restore: %v %v", fi.Mode(), err)
+	}
+	if fi, err := os.Stat(shares); err != nil || fi.Mode().Perm() != 0o770 {
+		t.Fatalf("the dataset's folder after the restore: %v %v", fi.Mode(), err)
 	}
 	if !bytes.Equal(readDev(), wantDisk) {
 		t.Fatal("the volume differs from what it held when the backup began")

@@ -60,6 +60,8 @@ type restorer struct {
 	last  time.Time
 	// imageDest is set once an image was written to the target itself.
 	imageDest bool
+	// xattrWarned holds the extended-attribute failures already reported.
+	xattrWarned map[string]bool
 	// sys is set while a system state is restored in place.
 	sys *sysRun
 }
@@ -275,6 +277,9 @@ func (r *restorer) entry(e *tree.Entry, orig, dest string, full bool) error {
 			return nil
 		}
 		r.chown(dest, e)
+		if runtime.GOOS != "windows" {
+			r.platformMeta(dest, e)
+		}
 		r.stats.Files++
 	}
 	return nil
