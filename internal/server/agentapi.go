@@ -162,6 +162,9 @@ func (s *Server) dispatch(a *api.Agent) (*api.Job, error) {
 		if j.Backup.VMwareServer != "" {
 			j.Backup.Connection = s.vmwareConnection(j.Backup.VMwareServer)
 		}
+		if j.Backup.M365 != nil {
+			j.Backup.M365Connection = s.m365Connection(j.Backup.M365.Tenant)
+		}
 	}
 	if j.Restore != nil && j.Restore.VMwareServer != "" {
 		j.Restore.Connection = s.vmwareConnection(j.Restore.VMwareServer)

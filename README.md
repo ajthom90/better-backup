@@ -42,6 +42,11 @@ backup until it has run beside your current one for a while.
   like the original. A whole machine can also be restored as virtual disks,
   with a new Hyper-V machine built around them. Tested in emulators; a
   restored Windows server has not been started on real hardware yet.
+- **Microsoft 365**: the mailboxes and OneDrive of a tenant, read through
+  Microsoft Graph. After the first backup only new and changed messages and
+  files are downloaded. They are restored into a folder, each message as an
+  `.eml` file. Tested against a stand-in for Microsoft Graph, not yet
+  against a real tenant.
 - **Agents for Windows, macOS and Linux**, enrolled with a one-time token and
   authenticated with per-agent TLS certificates. Agents dial out to the
   server, so only the server needs an open port.
@@ -580,6 +585,63 @@ independent disks and physical-mode raw device mappings are left out with a
 warning; encrypted machines and virtual TPMs cannot be exported; and a
 machine cannot yet be restored over the original.
 
+### Microsoft 365 (mailboxes and OneDrive)
+
+better-backup reads a tenant as an application that you register in it and
+allow to read mail and files. It cannot change or delete anything there.
+
+Register the app once, in the Microsoft Entra admin center
+(<https://entra.microsoft.com>), as an administrator:
+
+1. **App registrations**, **New registration**. Name it, for example
+   `better-backup`. Leave **Accounts in this organizational directory only**
+   selected and the redirect address empty. **Register**.
+2. From the overview, note the **Application (client) ID** and the
+   **Directory (tenant) ID**.
+3. **API permissions**, **Add a permission**, **Microsoft Graph**,
+   **Application permissions**: tick `User.Read.All`, `Mail.Read` and
+   `Files.Read.All`. Then **Grant admin consent**.
+4. **Certificates & secrets**, **New client secret**. Copy its **Value** (not
+   the Secret ID); it is shown only once. Microsoft lets a secret last two
+   years at most. When it runs out, backups fail and say so: create a new
+   one and paste it over the old.
+
+In the web UI choose **Microsoft 365** at the top, **Add a tenant**, and
+fill in the three values. **Test the connection** signs in and counts the
+users. The same steps are shown there.
+
+Then create a policy and, under **Microsoft 365**, choose the tenant, mail,
+OneDrive or both, and the users: `*` for every user who has a licence and is
+not a guest, or sign-in names, one per line. A shared mailbox has no
+licence, so name it by its address. The machine the policy names only runs
+the backup: any agent that reaches the internet will do, for example one on
+the backup server itself.
+
+What a snapshot holds:
+
+```
+Microsoft 365/
+  alice@example.com/
+    Mail/Inbox/2026-11-20 0930 Quarterly numbers [ca0df2c9].eml
+    Mail/Inbox/Projects/...
+    OneDrive/Reports/2026.docx
+```
+
+A message is stored once and not downloaded again; a draft is downloaded
+again when it changes. A OneDrive file is downloaded again when its content
+changes. If Microsoft refuses or fails for one message, file or folder, the
+backup keeps what the last snapshot held of it and finishes with a warning,
+so a passing failure does not make data vanish from the newest snapshot.
+
+Restore from **Browse** on a snapshot, into a folder on any agent. `.eml`
+files open in Outlook and other mail programs.
+
+Not built yet: restoring straight back into a mailbox or OneDrive; calendars,
+contacts, SharePoint sites and Teams; the read and flagged marks of
+messages; older versions of OneDrive files; the "recoverable items" of a
+mailbox. Every backup lists each mailbox folder and OneDrive folder again,
+which on very large tenants takes a while.
+
 ### Windows system state
 
 ```sh
@@ -853,6 +915,9 @@ bb-server fetch --repo /mnt/new-disk/repo \
 - No MSI installer yet; `service install` does the same job on Windows.
 - The macOS installer is not signed or notarized until the release workflow is
   given an Apple Developer ID (see `.github/workflows/release.yml`).
+- Microsoft 365 backup has only met a stand-in for Microsoft Graph, and
+  restores into a folder only. See the Microsoft 365 section for what it
+  leaves out.
 - The repository itself lives on a local disk or mounted share; S3 is for the
   offsite copy. The copy holds what the repository holds, so a snapshot
   forgotten here is also removed there at the next run.
