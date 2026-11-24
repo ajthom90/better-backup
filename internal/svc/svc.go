@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -21,6 +22,9 @@ type Spec struct {
 	DisplayName string
 	Description string
 	Args        []string // arguments the service manager starts the binary with
+	// LogFile receives the log when Windows runs the program as a
+	// service, where there is no terminal or journal to write to.
+	LogFile string
 }
 
 type program struct {
@@ -73,7 +77,24 @@ func Run(spec Spec, run func(context.Context) error) error {
 		return err
 	}
 	safeBoot(spec.Name, true) // for services installed by an older version
+	if spec.LogFile != "" {
+		if f, err := openLog(spec.LogFile); err == nil {
+			defer f.Close()
+			slog.SetDefault(slog.New(slog.NewTextHandler(f, nil)))
+		}
+	}
 	return s.Run()
+}
+
+// openLog opens the log for appending. A log that has grown large is
+// set aside first, so at most two files of that size exist.
+func openLog(path string) (*os.File, error) {
+	if st, err := os.Stat(path); err == nil && st.Size() > 20<<20 {
+		os.Remove(path + ".old")
+		os.Rename(path, path+".old")
+	}
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 }
 
 // Control installs, removes, starts, stops or queries the service.

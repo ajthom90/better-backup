@@ -292,6 +292,8 @@ func (s *Server) routes() http.Handler {
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok\n") })
 
+	mux.HandleFunc("GET /installers/{name}", s.handleInstallerFile)
+
 	mux.HandleFunc("POST /agent/v1/enroll", s.handleEnroll)
 	ag := func(pattern string, h func(http.ResponseWriter, *http.Request, *api.Agent)) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -322,6 +324,7 @@ func (s *Server) routes() http.Handler {
 	}
 	ad("GET /api/v1/status", s.handleStatus)
 	ad("POST /api/v1/enroll-tokens", s.handleCreateToken)
+	ad("GET /api/v1/installers", s.handleInstallers)
 	ad("GET /api/v1/agents", s.handleAgents)
 	ad("DELETE /api/v1/agents/{id}", s.handleRevokeAgent)
 	ad("GET /api/v1/policies", s.handlePolicies)

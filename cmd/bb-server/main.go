@@ -75,8 +75,15 @@ func parse(args []string) (*options, []string) {
 	fs := flag.NewFlagSet("bb-server", flag.ExitOnError)
 	fs.Usage = func() { fmt.Fprintf(os.Stderr, usage, paths.ServerData()) }
 	fs.StringVar(&o.data, "data", paths.ServerData(), "")
-	fs.StringVar(&o.repo, "repo", os.Getenv("BB_REPO"), "")
-	fs.StringVar(&o.listen, "listen", cli.Env("BB_LISTEN", ":8443"), "")
+	// What the Windows installer was told comes after the environment
+	// and before the built-in defaults.
+	inst := installed()
+	fs.StringVar(&o.repo, "repo", cli.Env("BB_REPO", inst.repo), "")
+	listen := ":8443"
+	if inst.port != "" {
+		listen = ":" + inst.port
+	}
+	fs.StringVar(&o.listen, "listen", cli.Env("BB_LISTEN", listen), "")
 	fs.Var(&o.names, "tls-name", "")
 	fs.StringVar(&o.snapshot, "snapshot", "", "")
 	fs.StringVar(&o.target, "target", "", "")
@@ -103,7 +110,8 @@ func (o *options) spec() svc.Spec {
 		args = append(args, "--tls-name", n)
 	}
 	return svc.Spec{Name: "better-backup-server", DisplayName: "better-backup server",
-		Description: "better-backup server: stores backups and coordinates agents.", Args: args}
+		Description: "better-backup server: stores backups and coordinates agents.", Args: args,
+		LogFile: filepath.Join(o.data, "server.log")}
 }
 
 func main() {
