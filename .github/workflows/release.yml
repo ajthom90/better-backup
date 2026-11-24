@@ -1,8 +1,9 @@
 name: Release
 
 # Runs when a version tag such as v0.1.0 is pushed: builds archives and
-# .deb/.rpm packages for every platform, attaches them to a GitHub
-# release, and publishes the Docker images to ghcr.io.
+# .deb/.rpm packages for every platform and the Windows installers,
+# attaches them to a GitHub release, and publishes the Docker images to
+# ghcr.io.
 on:
   push:
     tags: ["v*"]
@@ -58,3 +59,29 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}-agent:${{ github.ref_name }}
             ghcr.io/${{ github.repository }}-agent:latest
+
+  msi:
+    # Windows installers, added to the release made above. They are
+    # signed when the repository has the secrets SIGN_PFX_BASE64 (a code
+    # signing certificate as a base64 PFX) and SIGN_PFX_PASSWORD.
+    name: Windows installers
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        shell: pwsh
+        env:
+          SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
+          SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
+        run: |
+          ./packaging/windows/build.ps1 -Version ${{ github.ref_name }} -Arch amd64
+          ./packaging/windows/build.ps1 -Version ${{ github.ref_name }} -Arch arm64
+      - name: Attach to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} (Get-ChildItem dist/*.msi).FullName --clobber

@@ -62,6 +62,39 @@ jobs:
           cd internal/server
           sudo env BB_TEST_LIBVIRT=/var/lib/libvirt/images /tmp/server.test -test.v -test.run 'TestLibvirt|TestProxmox'
 
+  msi:
+    # Builds the Windows installers and uses them for real: installs the
+    # server, enrolls an agent from an enrollment code, upgrades both and
+    # removes them.
+    name: Windows installers
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build two versions
+        shell: pwsh
+        run: |
+          ./packaging/windows/build.ps1 -Version 0.0.0
+          ./packaging/windows/build.ps1 -Version 0.0.${{ github.run_number }}
+      - name: Install, enroll, upgrade, remove
+        shell: pwsh
+        run: ./packaging/windows/test.ps1 -Dir dist -Old 0.0.0 -New 0.0.${{ github.run_number }} -NoAgent
+      - name: Upload the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: better-backup-windows-installers
+          path: dist/*_0.0.${{ github.run_number }}_windows_amd64.msi
+          retention-days: 30
+      - name: Upload the installer logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-logs
+          path: dist/*.log
+          retention-days: 7
+
   build:
     name: Lint, cross-compile, Docker
     runs-on: ubuntu-latest
