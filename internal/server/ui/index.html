@@ -56,6 +56,12 @@ dt { color:var(--muted); } dd { margin:0; word-break:break-word; }
 button.danger { color:var(--bad); }
 dialog .row { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
 pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:10px; border-radius:6px; }
+.machine { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin:10px 0; }
+.machine h4 { margin:0 0 6px; font-size:15px; display:flex; gap:10px; align-items:center; }
+.code { font:600 18px ui-monospace,Consolas,monospace; letter-spacing:1px; }
+.machine .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+.steps { margin:8px 0; padding-left:20px; } .steps li { margin:4px 0; }
+.warnbox { color:var(--warn); margin:8px 0; }
 </style>
 </head>
 <body>
@@ -66,7 +72,7 @@ pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:
   <div id="err"></div><button class="primary">Sign in</button></form>
 </div>
 <div id="app" hidden>
-<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="vmware">VMware servers</button><button id="offsite">Offsite copy</button><button id="alerts">Email alerts</button><button id="logout">Sign out</button></header>
+<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="recovery">Bare-metal recovery</button><button id="vmware">VMware servers</button><button id="offsite">Offsite copy</button><button id="alerts">Email alerts</button><button id="logout">Sign out</button></header>
 <main>
   <section><h2><span>Repository</span><button id="runVerify">Verify all data</button><button id="runGC">Reclaim space</button></h2><div class="stats" id="stats"></div></section>
   <section><h2><span>Agents</span><button id="newToken">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
@@ -82,6 +88,7 @@ const $ = id => document.getElementById(id);
 let token = sessionStorage.getItem("bb-token") || "";
 let agentNames = {};
 let agentList = [];
+let snapList = [];
 let vmwareList = [];
 let jobLimit = 15;
 
@@ -111,13 +118,15 @@ function notice(title, text) {
 }
 
 async function refresh() {
-  const [st, agents, policies, jobs, snaps, off, vmw] = await Promise.all([
+  const [st, allAgents, policies, jobs, snaps, off, vmw] = await Promise.all([
     call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
     call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers")]);
   vmwareList = vmw;
   $("version").textContent = "version " + st.version;
+  agentNames = Object.fromEntries(allAgents.map(a => [a.id, a.name]));
+  const agents = allAgents.filter(a => !a.recovery); // machines at the recovery disc are not machines to back up
   agentList = agents;
-  agentNames = Object.fromEntries(agents.map(a => [a.id, a.name]));
+  snapList = snaps;
   const stat = (v, label) => el("div", { className: "stat" }, el("b", { textContent: v }), el("small", { textContent: label }));
   $("stats").replaceChildren(stat(st.agents, "agents"), stat(st.snapshots, "snapshots"), stat(size(st.stored_bytes), "used on disk"),
     stat(size(st.raw_bytes), "unique data before compression"), stat(st.running_jobs, "jobs running"),
@@ -127,7 +136,7 @@ async function refresh() {
       a.revoked ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
   table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
-    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : []).join(", "),
+    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : [], p.bare_metal ? ["whole machine"] : []).join(", "),
       (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
       keeps(p.retention),
       el("div", { className: "acts" },
@@ -179,6 +188,8 @@ function policyDialog(p) {
   const enabled = el("input", { type: "checkbox", checked: p ? p.enabled : true });
   const noSnap = el("input", { type: "checkbox", checked: p ? !!p.no_snapshot : false });
   const sysState = el("input", { type: "checkbox", id: "sysState", checked: p ? !!p.system_state : false });
+  const bareMetal = el("input", { type: "checkbox", id: "bareMetal", checked: p ? !!p.bare_metal : false });
+  const machineDisks = el("input", { id: "machineDisks", value: p && p.machine_disks ? p.machine_disks.join(", ") : "", placeholder: "Leave empty for the disk the system starts from" });
   const trueNAS = el("input", { type: "checkbox", id: "trueNAS", checked: p ? !!p.truenas_config : false });
   const vmTracking = el("select", { id: "vmTracking" },
     el("option", { value: "", textContent: "Read every disk in full" }),
@@ -205,6 +216,7 @@ function policyDialog(p) {
     const retention = {};
     for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
     const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "", vm_tracking: hypervisor.value === "vmware" ? "" : vmTracking.value, system_state: sysState.checked, truenas_config: trueNAS.checked,
+      bare_metal: bareMetal.checked, machine_disks: machineDisks.value.split(",").map(x => x.trim()).filter(Boolean),
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
     try {
@@ -229,6 +241,10 @@ function policyDialog(p) {
     el("label", { textContent: "Folders and files to back up" }), paths,
     el("div", { className: "hint", textContent: "Files are read from a snapshot where there is one, so files in use are backed up as they were at one instant: VSS on Windows, and ZFS on TrueNAS and other systems with ZFS, where every dataset under these folders is included." }),
     el("label", { textContent: "Leave out (optional)" }), excludes,
+    el("label", { className: "check" }, bareMetal, "Back up the whole machine, for bare-metal recovery"),
+    el("div", { className: "hint", textContent: "Windows and Linux. Saves the layout of the disk the system starts from and an image of every partition on it, including the hidden boot and recovery partitions. With it the machine can be rebuilt on blank hardware from the recovery disc, or brought up as a virtual machine. See “Bare-metal recovery” at the top of the page." }),
+    el("label", { textContent: "Disks to include in the whole-machine backup (optional)" }), machineDisks,
+    el("div", { className: "hint", textContent: "Only needed for more than the system disk. Disk numbers on Windows, such as 0, 1. Devices on Linux, such as /dev/sda, /dev/sdb." }),
     el("label", { textContent: "Whole volumes to back up as images (optional)" }), volumes,
     el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS. A ZFS volume (zvol) is read from a snapshot taken together with the folders above." }),
     el("label", { textContent: "Virtual machines (optional)" }), vms,
@@ -362,6 +378,141 @@ async function offsiteDialog() {
     el("div", { className: "hint", textContent: "In the server's time zone. Clear the time to copy only when you press “Save and copy now”. The first copy sends everything and can take long; later ones send only what is new." }),
     msg, el("div", { className: "row" }, test, run, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
 }
+
+// Bare-metal recovery: the recovery disc, the machines started from it,
+// and restoring a whole machine onto their disks.
+let recoveryTimer;
+const hasMachine = s => s.sources.some(x => x.type === "machine");
+async function recoveryDialog() {
+  clearTimeout(recoveryTimer);
+  const r = await call("GET", "/api/v1/recovery");
+  const kids = [el("h3", { textContent: "Bare-metal recovery" }),
+    el("div", { className: "hint", textContent: "Rebuilds a whole machine on blank hardware or in a new virtual machine, from a backup taken with “Back up the whole machine” switched on in its policy." }),
+    el("ol", { className: "steps" },
+      el("li", { textContent: "Download the recovery disc below and start the machine from it (as a virtual DVD, burned to a disc, or written to a USB stick)." }),
+      el("li", { textContent: "The machine shows a recovery code on its screen and appears here. Approve it if the codes match." }),
+      el("li", { textContent: "Choose the backup and the disks to restore onto, and restart the machine when the restore is finished." }))];
+  const addr = el("input", { id: "recServer", value: sessionStorage.getItem("bb-rec-server") || location.origin });
+  const msg = el("div", { id: "err" });
+  kids.push(el("label", { textContent: "Recovery disc" }));
+  if (r.iso.available) {
+    const dl = el("button", { className: "primary", id: "recDownload", textContent: "Download the recovery disc (" + size(r.iso.size) + ")" });
+    dl.onclick = async () => {
+      msg.textContent = "";
+      try {
+        sessionStorage.setItem("bb-rec-server", addr.value.trim());
+        const l = await call("POST", "/api/v1/recovery/iso/link", { server: addr.value.trim() });
+        location.href = l.url;
+      } catch (e) { msg.textContent = e.message; }
+    };
+    kids.push(el("div", { className: "two" }, addr, dl),
+      el("div", { className: "hint", textContent: "The address the machine being recovered will reach this server at. It is written into the disc, together with the server's fingerprint, so the machine finds the right server by itself. The disc holds no password or key. It starts on BIOS and UEFI machines; with Secure Boot it needs the “Microsoft UEFI Certificate Authority” to be trusted, which on a Hyper-V machine is a choice in its Security settings (or switch Secure Boot off while recovering)." }));
+  } else {
+    kids.push(el("div", { className: "hint", textContent: "This server was installed without a recovery disc image. The server's Docker image includes one. Otherwise download better-backup-recovery.iso from the project's releases page and upload it here once." }));
+  }
+  const file = el("input", { type: "file", id: "recUpload", accept: ".iso" });
+  const up = el("button", { textContent: r.iso.available ? "Replace the disc image" : "Upload the disc image" });
+  up.onclick = async () => {
+    if (!file.files.length) { msg.textContent = "Choose the .iso file first."; return; }
+    msg.textContent = "Uploading…"; msg.style.color = "var(--good)";
+    try {
+      const resp = await fetch("/api/v1/recovery/iso", { method: "PUT", headers: { Authorization: "Bearer " + token }, body: file.files[0] });
+      if (!resp.ok) throw new Error((await resp.json()).error || resp.statusText);
+      await recoveryDialog();
+    } catch (e) { msg.style.color = ""; msg.textContent = e.message; }
+  };
+  kids.push(el("details", null, el("summary", { className: "hint", textContent: r.iso.available ? "Use another disc image" : "Upload a disc image" }), el("div", { className: "two" }, file, up)), msg);
+
+  kids.push(el("label", { textContent: "Machines started from the recovery disc" }));
+  if (!r.machines.length) kids.push(el("div", { className: "empty", textContent: "No machine is waiting. A machine appears here a minute or so after it starts from the recovery disc." }));
+  for (const m of r.machines) {
+    const hw = m.hardware || { disks: [] };
+    const act = (label, fn, cls) => { const b = button(label, async () => { await fn(); await recoveryDialog(); }); if (cls) b.className = cls; return b; };
+    const acts = el("div", { className: "acts" });
+    const j = m.job;
+    const busy = j && (j.status === "queued" || j.status === "running");
+    if (!m.approved) {
+      acts.append(act("Approve: its screen shows " + m.code, () => call("POST", "/api/v1/recovery/machines/" + m.id + "/approve"), "primary"));
+    } else if (m.agent_id && !busy) {
+      acts.append(el("button", { className: "primary", textContent: "Restore a backup onto it…", onclick: () => { clearTimeout(recoveryTimer); machineRestoreDialog(m).catch(e => notice("Something went wrong", e.message)); } }),
+        act("Look for disks again", () => call("POST", "/api/v1/recovery/machines/" + m.id + "/command", { command: "rescan" })),
+        confirmButton("Restart it", "Click again to restart the machine", async () => { await call("POST", "/api/v1/recovery/machines/" + m.id + "/command", { command: "reboot" }); await recoveryDialog(); }),
+        confirmButton("Switch it off", "Click again to switch the machine off", async () => { await call("POST", "/api/v1/recovery/machines/" + m.id + "/command", { command: "poweroff" }); await recoveryDialog(); }));
+    }
+    if (!busy) acts.append(confirmButton("Forget", "Click again to forget this machine", async () => { await call("DELETE", "/api/v1/recovery/machines/" + m.id); await recoveryDialog(); }));
+    const dl = el("dl");
+    const add = (k, v) => { if (v) dl.append(el("dt", { textContent: k }), el("dd", { textContent: v })); };
+    add("Machine", [hw.product, hw.firmware ? "starts through " + hw.firmware.toUpperCase() : "", hw.memory_bytes ? size(hw.memory_bytes) + " memory" : ""].filter(Boolean).join(", "));
+    add("Address", m.remote.replace(/:\d+$/, ""));
+    add("Disks", hw.disks.filter(d => !d.media).map(d => d.path + ", " + size(d.size) + (d.model ? ", " + d.model : "") + (d.contents ? " (now: " + d.contents + ")" : "")).join("\n") || "none found");
+    add("Status", m.status);
+    if (j) add("Last restore", j.status + (j.error ? ": " + j.error : "") + (j.progress && j.progress.bytes ? ", " + size(j.progress.bytes) + " written" : j.result && j.result.bytes ? ", " + size(j.result.bytes) + " written" : ""));
+    if (j && j.status === "success") dl.append(el("dt", { textContent: "Next" }), el("dd", { textContent: "Remove the recovery disc from the machine, then restart it. If it started with Secure Boot changed or switched off, put that back first." }));
+    kids.push(el("div", { className: "machine" }, el("h4", null, el("span", { className: "code", textContent: m.code }), pill(m.approved ? (busy ? "running" : "online") : "queued")), dl, acts));
+    dl.querySelectorAll("dd").forEach(d => d.style.whiteSpace = "pre-wrap");
+  }
+  kids.push(el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => { clearTimeout(recoveryTimer); $("dlg").close(); } })));
+  // Keep what the administrator typed or opened while the list refreshes.
+  const typed = $("recServer") && document.activeElement === $("recServer") ? $("recServer").value : null;
+  const picking = $("recUpload") && ($("recUpload").files.length || document.activeElement === $("recUpload") || ($("recUpload").closest("details") || {}).open);
+  if (!picking || !$("dlg").open || !$("recServer")) {
+    openDialog(true, ...kids);
+    if (typed !== null) { addr.value = typed; addr.focus(); }
+  }
+  recoveryTimer = setTimeout(() => { if ($("dlg").open) recoveryDialog().catch(() => {}); }, 3000);
+}
+// machineRestoreDialog picks the backup and the disks for a machine
+// waiting at the recovery disc.
+async function machineRestoreDialog(m) {
+  const snaps = snapList.filter(hasMachine);
+  if (!snaps.length) { notice("No whole-machine backup yet", "No snapshot holds a whole machine. Switch on “Back up the whole machine” in a policy and run it; the backup then appears here."); return; }
+  const snap = el("select", { id: "recSnap" }, ...snaps.map(s => el("option", { value: s.id, textContent: s.hostname + ", " + when(s.time) })));
+  const box = el("div");
+  const err = el("div", { id: "err" });
+  const sure = el("input", { type: "checkbox", id: "recSure" });
+  sure.onchange = () => { err.textContent = ""; };
+  const go = el("button", { className: "primary", id: "recStart", textContent: "Erase the chosen disks and restore" });
+  const targets = (m.hardware ? m.hardware.disks : []).filter(d => !d.media);
+  let picks = {};
+  const load = async () => {
+    box.replaceChildren(el("div", { className: "empty", textContent: "Reading the backup…" }));
+    const b = await call("GET", "/api/v1/snapshots/" + snap.value + "/machine");
+    picks = {};
+    const kids = [];
+    if (b.firmware && m.hardware && m.hardware.firmware && b.firmware !== m.hardware.firmware)
+      kids.push(el("div", { className: "warnbox", textContent: "The backup is of a machine that starts through " + b.firmware.toUpperCase() + ", and this machine was started through " + m.hardware.firmware.toUpperCase() + ". A restored system only starts the way the original did: change the machine's firmware setting (on Hyper-V, generation 2 is UEFI and generation 1 is BIOS) before restarting it." }));
+    const taken = new Set();
+    for (const d of b.disks) {
+      const sel = el("select", { id: "recDisk-" + d.name }, el("option", { value: "", textContent: "Do not restore this disk" }));
+      for (const t of targets) {
+        const fits = t.size >= d.needs && (!t.sector_size || t.sector_size === d.sector_size);
+        sel.append(el("option", { value: t.path, disabled: !fits, textContent: t.path + ", " + size(t.size) + (t.model ? ", " + t.model : "") + (fits ? "" : t.size < d.needs ? " (too small)" : " (other sector size)") }));
+      }
+      const first = targets.find(t => t.size >= d.needs && (!t.sector_size || t.sector_size === d.sector_size) && !taken.has(t.path));
+      if (first) { sel.value = first.path; taken.add(first.path); }
+      picks[d.name] = sel;
+      const parts = d.partitions.map(p => [p.mount, p.label, p.fs, p.kind !== "data" ? p.kind.replace(/-/g, " ") : ""].filter(Boolean).join(" ") + " " + size(p.size) + (p.saved ? "" : " (kept empty)")).join("; ");
+      kids.push(el("label", { textContent: "Disk of the backup: " + (d.model || d.device || d.name) + ", " + size(d.size) }),
+        el("div", { className: "hint", textContent: d.style.toUpperCase() + " with " + parts + ". Needs a disk of at least " + size(d.needs) + "." }), sel);
+    }
+    box.replaceChildren(...kids);
+  };
+  snap.onchange = () => load().catch(e => { err.textContent = e.message; });
+  go.onclick = async () => {
+    const disks = {};
+    for (const k in picks) if (picks[k].value) disks[k] = picks[k].value;
+    if (!Object.keys(disks).length) { err.textContent = "Choose a disk of this machine for at least one disk of the backup."; return; }
+    if (new Set(Object.values(disks)).size !== Object.keys(disks).length) { err.textContent = "Two disks of the backup cannot go onto the same disk."; return; }
+    if (!sure.checked) { err.textContent = "Tick the box to confirm that the chosen disks may be erased."; return; }
+    try { await call("POST", "/api/v1/restores", { snapshot_id: snap.value, agent_id: m.agent_id, disks }); await recoveryDialog(); } catch (e) { err.textContent = e.message; }
+  };
+  openDialog(true, el("h3", { textContent: "Restore onto the machine showing " + m.code }),
+    el("label", { textContent: "Backup to restore" }), snap, box,
+    el("label", { className: "check" }, sure, "Everything now on the chosen disks of that machine will be erased"),
+    err, el("div", { className: "row" }, el("button", { textContent: "Back", onclick: () => recoveryDialog().catch(() => {}) }), go));
+  await load();
+}
+$("recovery").onclick = () => recoveryDialog().catch(e => notice("Something went wrong", e.message));
 // vmwareDialog lists the VMware servers; vmwareEdit adds or changes one.
 async function vmwareDialog() {
   vmwareList = await call("GET", "/api/v1/vmware-servers");
@@ -422,7 +573,7 @@ function confirmButton(label, sure, fn) {
 function openDialog(wide, ...kids) { $("dlg").className = wide ? "wide" : ""; $("dlgBody").replaceChildren(...kids); if (!$("dlg").open) $("dlg").showModal(); }
 const sepOf = s => s.os === "windows" ? "\\" : "/";
 const joinPath = (s, dir, name) => !dir ? name : dir.endsWith(sepOf(s)) ? dir + name : dir + sepOf(s) + name;
-const kinds = { dir: "Folder", file: "File", symlink: "Link", image: "Disk image", vm: "Virtual machine" };
+const kinds = { dir: "Folder", file: "File", symlink: "Link", image: "Disk image", vm: "Virtual machine", machine: "Whole machine" };
 
 // restoreDialog starts a restore of a whole snapshot, or of one path.
 function restoreDialog(s, path) {
@@ -483,6 +634,7 @@ function restoreDialog(s, path) {
     el("label", { textContent: "Existing files" }), mode,
     el("label", { textContent: "Name for a restored virtual machine" }), vmName,
     el("div", { className: "hint", textContent: "Only for virtual machines. One is restored as a new machine, switched off, with its disks in the place above. Restore it onto a host of the same kind it was backed up from: Hyper-V, Proxmox VE, or KVM with libvirt (there a folder such as /var/lib/libvirt/images)." }),
+    el("div", { className: "hint", textContent: "A whole-machine backup goes into the folder above as virtual disks (.vhdx on Windows) that start like the original. Give a name here and a Hyper-V host above to have a new virtual machine built around them, switched off and not connected to the network. To rebuild a physical machine, use “Bare-metal recovery” at the top of the page." }),
     vmwareBox);
   $("dlgBody").append(err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
 }
@@ -497,7 +649,7 @@ async function browseDialog(s, path, trail) {
   items.sort((a, b) => (a.type === "dir" ? 0 : 1) - (b.type === "dir" ? 0 : 1) || a.name.localeCompare(b.name));
   for (const it of items) {
     const full = joinPath(s, path, it.name);
-    const open = it.type === "dir" || it.type === "vm";
+    const open = it.type === "dir" || it.type === "vm" || it.type === "machine";
     const name = open ? el("button", { className: "link", textContent: it.name, onclick: () => browseDialog(s, full, trail.concat({ label: it.name, path: full })).catch(e => notice("Something went wrong", e.message)) }) : it.name;
     t.append(el("tr", null, el("td", { className: "wrap" }, name), el("td", { textContent: kinds[it.type] || it.type }),
       el("td", { textContent: open ? "" : size(it.size) }), el("td", { textContent: when(it.mtime) }),
@@ -536,7 +688,10 @@ async function jobDialog(id) {
   add("Machine", agentNames[j.agent_id] || (j.agent_id ? j.agent_id : "the server"));
   add("Queued", when(j.created)); add("Started", j.started ? when(j.started) : ""); add("Finished", j.finished ? when(j.finished) : "");
   add("Snapshot", j.snapshot_id || "");
-  if (j.restore) { add("Restored to", j.restore.target || "the original location"); add("Only", (j.restore.include || []).join(", ")); }
+  if (j.restore) {
+    const disks = Object.entries(j.restore.disks || {}).map(([k, v]) => k + " onto " + v).join(", ");
+    add("Restored to", disks || j.restore.target || "the original location"); add("Only", (j.restore.include || []).join(", "));
+  }
   add("Error", j.error || "");
   facts(dl, j.result || j.progress);
   const title = { offsite: "Offsite copy", gc: "Reclaim space", verify: "Verify all data" }[j.type] || j.type.charAt(0).toUpperCase() + j.type.slice(1) + " job";
@@ -546,7 +701,7 @@ async function jobDialog(id) {
   openDialog(true, ...kids);
   if (j.status === "queued" || j.status === "running") jobTimer = setTimeout(() => { if ($("dlg").open) jobDialog(id).catch(() => {}); }, 2000);
 }
-$("dlg").addEventListener("close", () => clearTimeout(jobTimer));
+$("dlg").addEventListener("close", () => { clearTimeout(jobTimer); clearTimeout(recoveryTimer); });
 for (const [id, kind] of [["runGC", "gc"], ["runVerify", "verify"]]) {
   $(id).onclick = async () => { try { const j = await call("POST", "/api/v1/repo/" + kind); await refresh(); await jobDialog(j.id); } catch (e) { notice("Something went wrong", e.message); } };
 }

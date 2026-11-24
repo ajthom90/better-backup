@@ -33,6 +33,8 @@ better-backup has three programs:
 | `internal/agent` | Agent: enrollment, job loop |
 | `internal/api` | Wire types and the pinned-TLS client configuration |
 | `internal/vss` | Windows Volume Shadow Copy requester and backup privileges |
+| `internal/disklayout` | Reading and writing GPT and MBR partition tables |
+| `internal/recovery` | The program on the recovery disc: system start-up, console, recovery session |
 | `internal/zfs` | ZFS snapshots of datasets and volumes for the length of a backup |
 | `internal/xattr` | Extended attributes, and with them ACLs, on Linux and macOS |
 | `internal/truenas` | The configuration of a TrueNAS system as one file |
@@ -201,6 +203,52 @@ timer, and after the disks are read the driver checks that every stream ended
 the way the format says and that the lease is still good, or the machine is
 left out. This path reads whole disks; Changed Block Tracking needs random
 reads of a snapshot's disks (NBD through VDDK, or NBDSSL) and is not built.
+
+## Whole machines and bare-metal recovery
+
+A policy with `bare_metal` set adds one entry of type `machine`, named "Whole
+machine", to the snapshot. Its children are `machine.json` (the layout: every
+disk with its size, sector size, partition table and identifiers) and one
+image entry per partition worth keeping, named `diskN-partM`. Images use the
+same 1 MiB blocks as volume images, so they deduplicate against them.
+
+On Windows the agent opens `\\.\PhysicalDriveN`, parses the table itself
+(`internal/disklayout`), and matches partitions to volumes by disk extent.
+Volumes with a drive letter and NTFS or ReFS are read from the job's VSS
+snapshot, with free space skipped; partitions without a letter (EFI system,
+recovery) are read from the disk as they are. The Microsoft reserved
+partition and swap contents are not stored. On Linux the system disks are
+found from the mounted file systems through device-mapper and RAID layers.
+
+A restore writes each partition image at its offset on the target and the
+partition table last, so a half-written disk is never mistaken for a usable
+one. GPT disk and partition GUIDs, the MBR disk signature and the boot code
+in front of the first partition are put back unchanged: Windows boot
+configuration refers to partitions by these identifiers, so nothing needs to
+be repaired afterwards. The backup GPT is placed at the end of the target,
+which may be larger than the original. Targets are a block device (on the
+recovery disc), an image file, or a new VHDX on Windows.
+
+The recovery disc (`packaging/recovery/build.py`) is Ubuntu's signed kernel
+and boot loaders with an initramfs that holds a subset of kernel modules,
+busybox and `bb-agent` as `/init`. Running as `init`, the agent mounts the
+system directories, loads drivers for the hardware it finds, configures the
+network by DHCP and opens a recovery session:
+
+1. `POST /agent/v1/recovery/sessions` (no credentials) with the machine's
+   hardware. The server answers with a session secret and a short code, which
+   the machine shows on its screen.
+2. The machine long-polls its session. An administrator who sees the same
+   code in the web UI approves it; the next poll carries a one-time
+   enrollment token.
+3. The machine enrolls as an agent marked `recovery`, which can run restore
+   jobs with a disk map but never backups, and is revoked when the session
+   ends (two minutes of silence, a restart, or "Forget").
+
+The server's address and certificate fingerprint reach the disc through the
+kernel command line. The image has a 384-byte placeholder there, and the
+server overwrites it while streaming the download, so one image serves every
+server and holds no secret.
 
 ## Offsite copy
 

@@ -20,6 +20,7 @@ func (s *Server) background(ctx context.Context) {
 	defer t.Stop()
 	for {
 		s.expireJobs()
+		s.expireRecovery()
 		s.schedule(time.Now())
 		s.scheduleOffsite(time.Now())
 		s.checkMissed(time.Now())

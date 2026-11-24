@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"github.com/ajthom90/better-backup/internal/agent"
 	"github.com/ajthom90/better-backup/internal/cli"
 	"github.com/ajthom90/better-backup/internal/paths"
+	"github.com/ajthom90/better-backup/internal/recovery"
 	"github.com/ajthom90/better-backup/internal/svc"
 )
 
@@ -40,6 +42,12 @@ every file. On macOS also grant it Full Disk Access.
 `
 
 func main() {
+	// On the recovery disc this program is /init, the machine's first
+	// process.
+	if filepath.Base(os.Args[0]) == "init" || (len(os.Args) > 1 && os.Args[1] == "recover") {
+		recovery.Main(agent.Version)
+		return
+	}
 	fs := flag.NewFlagSet("bb-agent", flag.ExitOnError)
 	fs.Usage = func() { fmt.Fprintf(os.Stderr, usage, paths.AgentDir()) }
 	dir := fs.String("dir", paths.AgentDir(), "")
