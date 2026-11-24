@@ -56,21 +56,39 @@ dt { color:var(--muted); } dd { margin:0; word-break:break-word; }
 button.danger { color:var(--bad); }
 dialog .row { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
 pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:10px; border-radius:6px; }
+.machine { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin:10px 0; }
+.machine h4 { margin:0 0 6px; font-size:15px; display:flex; gap:10px; align-items:center; }
+.code { font:600 18px ui-monospace,Consolas,monospace; letter-spacing:1px; }
+.machine .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+.steps { margin:8px 0; padding-left:20px; } .steps li { margin:4px 0; }
+.warnbox { color:var(--warn); margin:8px 0; }
+header { flex-wrap:wrap; }
+header h1 { min-width:140px; }
+#whoami { color:var(--muted); }
+.front { max-width:460px; margin:10vh auto; padding:22px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
+.front h1 { font-size:20px; margin:0 0 6px; }
+.front p { color:var(--muted); }
+.front label { display:block; margin:12px 0 4px; font-weight:600; }
+.front .row { display:flex; gap:8px; margin-top:16px; align-items:center; flex-wrap:wrap; }
+.front .msg, .msg { color:var(--bad); min-height:1.4em; margin-top:8px; }
+.front hr { border:0; border-top:1px solid var(--line); margin:18px 0; }
+.banner { border:1px solid #d97706; border-left-width:4px; border-radius:8px; background:var(--card); padding:10px 14px; margin-bottom:18px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.banner span { flex:1; min-width:240px; }
+progress { width:100%; height:14px; }
+body.role-viewer .need-operator, body.role-viewer .need-admin, body.role-operator .need-admin { display:none !important; }
+h4 { margin:18px 0 4px; }
+[hidden] { display:none !important; }
 </style>
 </head>
 <body>
-<div id="login" hidden>
-  <h1>better-backup</h1>
-  <p>Enter the admin token. It is in <code>admin.json</code> in the server's data directory.</p>
-  <form id="loginForm"><input id="token" type="password" placeholder="Admin token" autocomplete="current-password" required>
-  <div id="err"></div><button class="primary">Sign in</button></form>
-</div>
+<div id="front" class="front" hidden></div>
 <div id="app" hidden>
-<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="vmware">VMware servers</button><button id="offsite">Offsite copy</button><button id="alerts">Email alerts</button><button id="logout">Sign out</button></header>
+<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="recovery" class="need-operator">Bare-metal recovery</button><button id="vmware" class="need-admin">VMware servers</button><button id="offsite" class="need-operator">Offsite copy</button><button id="alerts" class="need-admin">Email alerts</button><button id="users" class="need-admin">Users</button><button id="activity" class="need-admin">Activity log</button><button id="settings" class="need-admin">Settings</button><span id="whoami"></span><button id="account">My password</button><button id="logout">Sign out</button></header>
 <main>
-  <section><h2><span>Repository</span><button id="runVerify">Verify all data</button><button id="runGC">Reclaim space</button></h2><div class="stats" id="stats"></div></section>
-  <section><h2><span>Agents</span><button id="newToken">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
-  <section><h2><span>Backup policies</span><button id="newPolicy">New policy</button></h2><div class="scroll" id="policies"></div></section>
+  <div class="banner need-admin" id="keyBanner" hidden><span><b>Keep a copy of the repository key.</b> Without it, neither the backups on this server nor the offsite copy can be read. Download it and keep it somewhere other than this server.</span><button class="primary" id="keyBannerBtn">Download the key</button></div>
+  <section><h2><span>Repository</span><button id="runVerify" class="need-operator">Verify all data</button><button id="runGC" class="need-operator">Reclaim space</button></h2><div class="stats" id="stats"></div></section>
+  <section><h2><span>Agents</span><button id="newToken" class="need-operator">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
+  <section><h2><span>Backup policies</span><button id="newPolicy" class="need-operator">New policy</button></h2><div class="scroll" id="policies"></div></section>
   <section><h2><span>Recent jobs</span><button id="moreJobs">Show more</button></h2><div class="scroll" id="jobs"></div></section>
   <section><h2><span>Snapshots</span></h2><div class="scroll" id="snapshots"></div></section>
 </main>
@@ -82,12 +100,14 @@ const $ = id => document.getElementById(id);
 let token = sessionStorage.getItem("bb-token") || "";
 let agentNames = {};
 let agentList = [];
+let snapList = [];
 let vmwareList = [];
 let jobLimit = 15;
+let me = null; // the signed-in user
 
 async function call(method, path, body) {
   const r = await fetch(path, { method, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  if (r.status === 401) { signOut(); throw new Error("Invalid admin token"); }
+  if (r.status === 401) { signOut(); throw new Error("You are signed out. Sign in again."); }
   const text = await r.text();
   const data = text ? JSON.parse(text) : null;
   if (!r.ok) throw new Error((data && data.error) || r.statusText);
@@ -111,26 +131,29 @@ function notice(title, text) {
 }
 
 async function refresh() {
-  const [st, agents, policies, jobs, snaps, off, vmw] = await Promise.all([
+  const [st, allAgents, policies, jobs, snaps, off, vmw] = await Promise.all([
     call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
     call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers")]);
   vmwareList = vmw;
   $("version").textContent = "version " + st.version;
+  $("keyBanner").hidden = st.key_saved;
+  agentNames = Object.fromEntries(allAgents.map(a => [a.id, a.name]));
+  const agents = allAgents.filter(a => !a.recovery); // machines at the recovery disc are not machines to back up
   agentList = agents;
-  agentNames = Object.fromEntries(agents.map(a => [a.id, a.name]));
+  snapList = snaps;
   const stat = (v, label) => el("div", { className: "stat" }, el("b", { textContent: v }), el("small", { textContent: label }));
   $("stats").replaceChildren(stat(st.agents, "agents"), stat(st.snapshots, "snapshots"), stat(size(st.stored_bytes), "used on disk"),
     stat(size(st.raw_bytes), "unique data before compression"), stat(st.running_jobs, "jobs running"),
     stat(offsiteSummary(off), "offsite copy"));
   table("agents", ["Name", "Host", "System", "Version", "State", "Last seen", ""],
     agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, a.version, pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen),
-      a.revoked ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
+      a.revoked || !can("operator") ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
   table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
-    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : []).join(", "),
+    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : [], p.bare_metal ? ["whole machine"] : []).join(", "),
       (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
       keeps(p.retention),
-      el("div", { className: "acts" },
+      el("div", { className: "acts need-operator" },
         button("Back up now", async () => { await call("POST", "/api/v1/policies/" + p.id + "/run"); await refresh(); }),
         button("Edit", async () => policyDialog(p)))]),
     "No policies yet. Choose “New policy” to say what to back up and when.");
@@ -141,7 +164,7 @@ async function refresh() {
     "No jobs have run yet.");
   table("snapshots", ["Time", "Host", "Paths", "Files", "Size", "New data", ""],
     snaps.slice(0, 50).map(s => [when(s.time), s.hostname, s.sources.map(x => x.name).join(", "), s.stats.files, size(s.stats.bytes), size(s.stats.bytes_uploaded),
-      el("div", { className: "acts" }, button("Browse", async () => browseDialog(s, "")), button("Restore", async () => restoreDialog(s, "")))]),
+      el("div", { className: "acts" }, button("Browse", async () => browseDialog(s, "")), can("operator") ? button("Restore", async () => restoreDialog(s, "")) : "")]),
     "No snapshots yet.");
 }
 
@@ -179,6 +202,8 @@ function policyDialog(p) {
   const enabled = el("input", { type: "checkbox", checked: p ? p.enabled : true });
   const noSnap = el("input", { type: "checkbox", checked: p ? !!p.no_snapshot : false });
   const sysState = el("input", { type: "checkbox", id: "sysState", checked: p ? !!p.system_state : false });
+  const bareMetal = el("input", { type: "checkbox", id: "bareMetal", checked: p ? !!p.bare_metal : false });
+  const machineDisks = el("input", { id: "machineDisks", value: p && p.machine_disks ? p.machine_disks.join(", ") : "", placeholder: "Leave empty for the disk the system starts from" });
   const trueNAS = el("input", { type: "checkbox", id: "trueNAS", checked: p ? !!p.truenas_config : false });
   const vmTracking = el("select", { id: "vmTracking" },
     el("option", { value: "", textContent: "Read every disk in full" }),
@@ -205,6 +230,7 @@ function policyDialog(p) {
     const retention = {};
     for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
     const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "", vm_tracking: hypervisor.value === "vmware" ? "" : vmTracking.value, system_state: sysState.checked, truenas_config: trueNAS.checked,
+      bare_metal: bareMetal.checked, machine_disks: machineDisks.value.split(",").map(x => x.trim()).filter(Boolean),
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
     try {
@@ -229,6 +255,10 @@ function policyDialog(p) {
     el("label", { textContent: "Folders and files to back up" }), paths,
     el("div", { className: "hint", textContent: "Files are read from a snapshot where there is one, so files in use are backed up as they were at one instant: VSS on Windows, and ZFS on TrueNAS and other systems with ZFS, where every dataset under these folders is included." }),
     el("label", { textContent: "Leave out (optional)" }), excludes,
+    el("label", { className: "check" }, bareMetal, "Back up the whole machine, for bare-metal recovery"),
+    el("div", { className: "hint", textContent: "Windows and Linux. Saves the layout of the disk the system starts from and an image of every partition on it, including the hidden boot and recovery partitions. With it the machine can be rebuilt on blank hardware from the recovery disc, or brought up as a virtual machine. See “Bare-metal recovery” at the top of the page." }),
+    el("label", { textContent: "Disks to include in the whole-machine backup (optional)" }), machineDisks,
+    el("div", { className: "hint", textContent: "Only needed for more than the system disk. Disk numbers on Windows, such as 0, 1. Devices on Linux, such as /dev/sda, /dev/sdb." }),
     el("label", { textContent: "Whole volumes to back up as images (optional)" }), volumes,
     el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS. A ZFS volume (zvol) is read from a snapshot taken together with the folders above." }),
     el("label", { textContent: "Virtual machines (optional)" }), vms,
@@ -362,6 +392,141 @@ async function offsiteDialog() {
     el("div", { className: "hint", textContent: "In the server's time zone. Clear the time to copy only when you press “Save and copy now”. The first copy sends everything and can take long; later ones send only what is new." }),
     msg, el("div", { className: "row" }, test, run, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
 }
+
+// Bare-metal recovery: the recovery disc, the machines started from it,
+// and restoring a whole machine onto their disks.
+let recoveryTimer;
+const hasMachine = s => s.sources.some(x => x.type === "machine");
+async function recoveryDialog() {
+  clearTimeout(recoveryTimer);
+  const r = await call("GET", "/api/v1/recovery");
+  const kids = [el("h3", { textContent: "Bare-metal recovery" }),
+    el("div", { className: "hint", textContent: "Rebuilds a whole machine on blank hardware or in a new virtual machine, from a backup taken with “Back up the whole machine” switched on in its policy." }),
+    el("ol", { className: "steps" },
+      el("li", { textContent: "Download the recovery disc below and start the machine from it (as a virtual DVD, burned to a disc, or written to a USB stick)." }),
+      el("li", { textContent: "The machine shows a recovery code on its screen and appears here. Approve it if the codes match." }),
+      el("li", { textContent: "Choose the backup and the disks to restore onto, and restart the machine when the restore is finished." }))];
+  const addr = el("input", { id: "recServer", value: sessionStorage.getItem("bb-rec-server") || location.origin });
+  const msg = el("div", { id: "err" });
+  kids.push(el("label", { textContent: "Recovery disc" }));
+  if (r.iso.available) {
+    const dl = el("button", { className: "primary", id: "recDownload", textContent: "Download the recovery disc (" + size(r.iso.size) + ")" });
+    dl.onclick = async () => {
+      msg.textContent = "";
+      try {
+        sessionStorage.setItem("bb-rec-server", addr.value.trim());
+        const l = await call("POST", "/api/v1/recovery/iso/link", { server: addr.value.trim() });
+        location.href = l.url;
+      } catch (e) { msg.textContent = e.message; }
+    };
+    kids.push(el("div", { className: "two" }, addr, dl),
+      el("div", { className: "hint", textContent: "The address the machine being recovered will reach this server at. It is written into the disc, together with the server's fingerprint, so the machine finds the right server by itself. The disc holds no password or key. It starts on BIOS and UEFI machines; with Secure Boot it needs the “Microsoft UEFI Certificate Authority” to be trusted, which on a Hyper-V machine is a choice in its Security settings (or switch Secure Boot off while recovering)." }));
+  } else {
+    kids.push(el("div", { className: "hint", textContent: "This server was installed without a recovery disc image. The server's Docker image includes one. Otherwise download better-backup-recovery.iso from the project's releases page and upload it here once." }));
+  }
+  const file = el("input", { type: "file", id: "recUpload", accept: ".iso" });
+  const up = el("button", { textContent: r.iso.available ? "Replace the disc image" : "Upload the disc image" });
+  up.onclick = async () => {
+    if (!file.files.length) { msg.textContent = "Choose the .iso file first."; return; }
+    msg.textContent = "Uploading…"; msg.style.color = "var(--good)";
+    try {
+      const resp = await fetch("/api/v1/recovery/iso", { method: "PUT", headers: { Authorization: "Bearer " + token }, body: file.files[0] });
+      if (!resp.ok) throw new Error((await resp.json()).error || resp.statusText);
+      await recoveryDialog();
+    } catch (e) { msg.style.color = ""; msg.textContent = e.message; }
+  };
+  kids.push(el("details", null, el("summary", { className: "hint", textContent: r.iso.available ? "Use another disc image" : "Upload a disc image" }), el("div", { className: "two" }, file, up)), msg);
+
+  kids.push(el("label", { textContent: "Machines started from the recovery disc" }));
+  if (!r.machines.length) kids.push(el("div", { className: "empty", textContent: "No machine is waiting. A machine appears here a minute or so after it starts from the recovery disc." }));
+  for (const m of r.machines) {
+    const hw = m.hardware || { disks: [] };
+    const act = (label, fn, cls) => { const b = button(label, async () => { await fn(); await recoveryDialog(); }); if (cls) b.className = cls; return b; };
+    const acts = el("div", { className: "acts" });
+    const j = m.job;
+    const busy = j && (j.status === "queued" || j.status === "running");
+    if (!m.approved) {
+      acts.append(act("Approve: its screen shows " + m.code, () => call("POST", "/api/v1/recovery/machines/" + m.id + "/approve"), "primary"));
+    } else if (m.agent_id && !busy) {
+      acts.append(el("button", { className: "primary", textContent: "Restore a backup onto it…", onclick: () => { clearTimeout(recoveryTimer); machineRestoreDialog(m).catch(e => notice("Something went wrong", e.message)); } }),
+        act("Look for disks again", () => call("POST", "/api/v1/recovery/machines/" + m.id + "/command", { command: "rescan" })),
+        confirmButton("Restart it", "Click again to restart the machine", async () => { await call("POST", "/api/v1/recovery/machines/" + m.id + "/command", { command: "reboot" }); await recoveryDialog(); }),
+        confirmButton("Switch it off", "Click again to switch the machine off", async () => { await call("POST", "/api/v1/recovery/machines/" + m.id + "/command", { command: "poweroff" }); await recoveryDialog(); }));
+    }
+    if (!busy) acts.append(confirmButton("Forget", "Click again to forget this machine", async () => { await call("DELETE", "/api/v1/recovery/machines/" + m.id); await recoveryDialog(); }));
+    const dl = el("dl");
+    const add = (k, v) => { if (v) dl.append(el("dt", { textContent: k }), el("dd", { textContent: v })); };
+    add("Machine", [hw.product, hw.firmware ? "starts through " + hw.firmware.toUpperCase() : "", hw.memory_bytes ? size(hw.memory_bytes) + " memory" : ""].filter(Boolean).join(", "));
+    add("Address", m.remote.replace(/:\d+$/, ""));
+    add("Disks", hw.disks.filter(d => !d.media).map(d => d.path + ", " + size(d.size) + (d.model ? ", " + d.model : "") + (d.contents ? " (now: " + d.contents + ")" : "")).join("\n") || "none found");
+    add("Status", m.status);
+    if (j) add("Last restore", j.status + (j.error ? ": " + j.error : "") + (j.progress && j.progress.bytes ? ", " + size(j.progress.bytes) + " written" : j.result && j.result.bytes ? ", " + size(j.result.bytes) + " written" : ""));
+    if (j && j.status === "success") dl.append(el("dt", { textContent: "Next" }), el("dd", { textContent: "Remove the recovery disc from the machine, then restart it. If it started with Secure Boot changed or switched off, put that back first." }));
+    kids.push(el("div", { className: "machine" }, el("h4", null, el("span", { className: "code", textContent: m.code }), pill(m.approved ? (busy ? "running" : "online") : "queued")), dl, acts));
+    dl.querySelectorAll("dd").forEach(d => d.style.whiteSpace = "pre-wrap");
+  }
+  kids.push(el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => { clearTimeout(recoveryTimer); $("dlg").close(); } })));
+  // Keep what the administrator typed or opened while the list refreshes.
+  const typed = $("recServer") && document.activeElement === $("recServer") ? $("recServer").value : null;
+  const picking = $("recUpload") && ($("recUpload").files.length || document.activeElement === $("recUpload") || ($("recUpload").closest("details") || {}).open);
+  if (!picking || !$("dlg").open || !$("recServer")) {
+    openDialog(true, ...kids);
+    if (typed !== null) { addr.value = typed; addr.focus(); }
+  }
+  recoveryTimer = setTimeout(() => { if ($("dlg").open) recoveryDialog().catch(() => {}); }, 3000);
+}
+// machineRestoreDialog picks the backup and the disks for a machine
+// waiting at the recovery disc.
+async function machineRestoreDialog(m) {
+  const snaps = snapList.filter(hasMachine);
+  if (!snaps.length) { notice("No whole-machine backup yet", "No snapshot holds a whole machine. Switch on “Back up the whole machine” in a policy and run it; the backup then appears here."); return; }
+  const snap = el("select", { id: "recSnap" }, ...snaps.map(s => el("option", { value: s.id, textContent: s.hostname + ", " + when(s.time) })));
+  const box = el("div");
+  const err = el("div", { id: "err" });
+  const sure = el("input", { type: "checkbox", id: "recSure" });
+  sure.onchange = () => { err.textContent = ""; };
+  const go = el("button", { className: "primary", id: "recStart", textContent: "Erase the chosen disks and restore" });
+  const targets = (m.hardware ? m.hardware.disks : []).filter(d => !d.media);
+  let picks = {};
+  const load = async () => {
+    box.replaceChildren(el("div", { className: "empty", textContent: "Reading the backup…" }));
+    const b = await call("GET", "/api/v1/snapshots/" + snap.value + "/machine");
+    picks = {};
+    const kids = [];
+    if (b.firmware && m.hardware && m.hardware.firmware && b.firmware !== m.hardware.firmware)
+      kids.push(el("div", { className: "warnbox", textContent: "The backup is of a machine that starts through " + b.firmware.toUpperCase() + ", and this machine was started through " + m.hardware.firmware.toUpperCase() + ". A restored system only starts the way the original did: change the machine's firmware setting (on Hyper-V, generation 2 is UEFI and generation 1 is BIOS) before restarting it." }));
+    const taken = new Set();
+    for (const d of b.disks) {
+      const sel = el("select", { id: "recDisk-" + d.name }, el("option", { value: "", textContent: "Do not restore this disk" }));
+      for (const t of targets) {
+        const fits = t.size >= d.needs && (!t.sector_size || t.sector_size === d.sector_size);
+        sel.append(el("option", { value: t.path, disabled: !fits, textContent: t.path + ", " + size(t.size) + (t.model ? ", " + t.model : "") + (fits ? "" : t.size < d.needs ? " (too small)" : " (other sector size)") }));
+      }
+      const first = targets.find(t => t.size >= d.needs && (!t.sector_size || t.sector_size === d.sector_size) && !taken.has(t.path));
+      if (first) { sel.value = first.path; taken.add(first.path); }
+      picks[d.name] = sel;
+      const parts = d.partitions.map(p => [p.mount, p.label, p.fs, p.kind !== "data" ? p.kind.replace(/-/g, " ") : ""].filter(Boolean).join(" ") + " " + size(p.size) + (p.saved ? "" : " (kept empty)")).join("; ");
+      kids.push(el("label", { textContent: "Disk of the backup: " + (d.model || d.device || d.name) + ", " + size(d.size) }),
+        el("div", { className: "hint", textContent: d.style.toUpperCase() + " with " + parts + ". Needs a disk of at least " + size(d.needs) + "." }), sel);
+    }
+    box.replaceChildren(...kids);
+  };
+  snap.onchange = () => load().catch(e => { err.textContent = e.message; });
+  go.onclick = async () => {
+    const disks = {};
+    for (const k in picks) if (picks[k].value) disks[k] = picks[k].value;
+    if (!Object.keys(disks).length) { err.textContent = "Choose a disk of this machine for at least one disk of the backup."; return; }
+    if (new Set(Object.values(disks)).size !== Object.keys(disks).length) { err.textContent = "Two disks of the backup cannot go onto the same disk."; return; }
+    if (!sure.checked) { err.textContent = "Tick the box to confirm that the chosen disks may be erased."; return; }
+    try { await call("POST", "/api/v1/restores", { snapshot_id: snap.value, agent_id: m.agent_id, disks }); await recoveryDialog(); } catch (e) { err.textContent = e.message; }
+  };
+  openDialog(true, el("h3", { textContent: "Restore onto the machine showing " + m.code }),
+    el("label", { textContent: "Backup to restore" }), snap, box,
+    el("label", { className: "check" }, sure, "Everything now on the chosen disks of that machine will be erased"),
+    err, el("div", { className: "row" }, el("button", { textContent: "Back", onclick: () => recoveryDialog().catch(() => {}) }), go));
+  await load();
+}
+$("recovery").onclick = () => recoveryDialog().catch(e => notice("Something went wrong", e.message));
 // vmwareDialog lists the VMware servers; vmwareEdit adds or changes one.
 async function vmwareDialog() {
   vmwareList = await call("GET", "/api/v1/vmware-servers");
@@ -422,7 +587,7 @@ function confirmButton(label, sure, fn) {
 function openDialog(wide, ...kids) { $("dlg").className = wide ? "wide" : ""; $("dlgBody").replaceChildren(...kids); if (!$("dlg").open) $("dlg").showModal(); }
 const sepOf = s => s.os === "windows" ? "\\" : "/";
 const joinPath = (s, dir, name) => !dir ? name : dir.endsWith(sepOf(s)) ? dir + name : dir + sepOf(s) + name;
-const kinds = { dir: "Folder", file: "File", symlink: "Link", image: "Disk image", vm: "Virtual machine" };
+const kinds = { dir: "Folder", file: "File", symlink: "Link", image: "Disk image", vm: "Virtual machine", machine: "Whole machine" };
 
 // restoreDialog starts a restore of a whole snapshot, or of one path.
 function restoreDialog(s, path) {
@@ -483,6 +648,7 @@ function restoreDialog(s, path) {
     el("label", { textContent: "Existing files" }), mode,
     el("label", { textContent: "Name for a restored virtual machine" }), vmName,
     el("div", { className: "hint", textContent: "Only for virtual machines. One is restored as a new machine, switched off, with its disks in the place above. Restore it onto a host of the same kind it was backed up from: Hyper-V, Proxmox VE, or KVM with libvirt (there a folder such as /var/lib/libvirt/images)." }),
+    el("div", { className: "hint", textContent: "A whole-machine backup goes into the folder above as virtual disks (.vhdx on Windows) that start like the original. Give a name here and a Hyper-V host above to have a new virtual machine built around them, switched off and not connected to the network. To rebuild a physical machine, use “Bare-metal recovery” at the top of the page." }),
     vmwareBox);
   $("dlgBody").append(err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
 }
@@ -497,7 +663,7 @@ async function browseDialog(s, path, trail) {
   items.sort((a, b) => (a.type === "dir" ? 0 : 1) - (b.type === "dir" ? 0 : 1) || a.name.localeCompare(b.name));
   for (const it of items) {
     const full = joinPath(s, path, it.name);
-    const open = it.type === "dir" || it.type === "vm";
+    const open = it.type === "dir" || it.type === "vm" || it.type === "machine";
     const name = open ? el("button", { className: "link", textContent: it.name, onclick: () => browseDialog(s, full, trail.concat({ label: it.name, path: full })).catch(e => notice("Something went wrong", e.message)) }) : it.name;
     t.append(el("tr", null, el("td", { className: "wrap" }, name), el("td", { textContent: kinds[it.type] || it.type }),
       el("td", { textContent: open ? "" : size(it.size) }), el("td", { textContent: when(it.mtime) }),
@@ -536,7 +702,10 @@ async function jobDialog(id) {
   add("Machine", agentNames[j.agent_id] || (j.agent_id ? j.agent_id : "the server"));
   add("Queued", when(j.created)); add("Started", j.started ? when(j.started) : ""); add("Finished", j.finished ? when(j.finished) : "");
   add("Snapshot", j.snapshot_id || "");
-  if (j.restore) { add("Restored to", j.restore.target || "the original location"); add("Only", (j.restore.include || []).join(", ")); }
+  if (j.restore) {
+    const disks = Object.entries(j.restore.disks || {}).map(([k, v]) => k + " onto " + v).join(", ");
+    add("Restored to", disks || j.restore.target || "the original location"); add("Only", (j.restore.include || []).join(", "));
+  }
   add("Error", j.error || "");
   facts(dl, j.result || j.progress);
   const title = { offsite: "Offsite copy", gc: "Reclaim space", verify: "Verify all data" }[j.type] || j.type.charAt(0).toUpperCase() + j.type.slice(1) + " job";
@@ -546,7 +715,7 @@ async function jobDialog(id) {
   openDialog(true, ...kids);
   if (j.status === "queued" || j.status === "running") jobTimer = setTimeout(() => { if ($("dlg").open) jobDialog(id).catch(() => {}); }, 2000);
 }
-$("dlg").addEventListener("close", () => clearTimeout(jobTimer));
+$("dlg").addEventListener("close", () => { clearTimeout(jobTimer); clearTimeout(recoveryTimer); });
 for (const [id, kind] of [["runGC", "gc"], ["runVerify", "verify"]]) {
   $(id).onclick = async () => { try { const j = await call("POST", "/api/v1/repo/" + kind); await refresh(); await jobDialog(j.id); } catch (e) { notice("Something went wrong", e.message); } };
 }
@@ -574,19 +743,329 @@ $("newToken").onclick = async () => {
       el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
   } catch (e) { notice("Could not create a token", e.message); }
 };
-function signOut() { token = ""; sessionStorage.removeItem("bb-token"); $("app").hidden = true; $("login").hidden = false; }
+const ranks = { viewer: 1, operator: 2, admin: 3 };
+function can(role) { return !!me && ranks[me.role] >= ranks[role]; }
+const roleNames = { admin: "Administrator", operator: "Operator", viewer: "Viewer" };
+const roleHints = { admin: "Everything, including users and the server's settings.", operator: "Runs backups and restores, and manages agents and policies.", viewer: "Only looks: nothing can be changed or restored." };
+
+// open requests need no sign-in: the pages shown before the app.
+async function pub(method, path, body) {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = "Bearer " + token;
+  const r = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const text = await r.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch (e) {}
+  if (!r.ok) throw new Error((data && data.error) || r.statusText);
+  return data;
+}
+function front(...kids) { clearInterval(timer); $("app").hidden = true; if ($("dlg").open) $("dlg").close(); $("front").hidden = false; $("front").replaceChildren(...kids); }
+function field(label, input, hint) { const kids = [el("label", { textContent: label }), input]; if (hint) kids.push(el("div", { className: "hint", textContent: hint })); return kids; }
+function keyField() {
+  const key = el("textarea", { id: "repoKey", rows: 2, placeholder: "Paste the key, or choose the file", autocomplete: "off", spellcheck: false });
+  const file = el("input", { type: "file", id: "repoKeyFile" });
+  file.onchange = async () => { if (file.files[0]) key.value = (await file.files[0].text()).trim(); };
+  return { key, nodes: [el("label", { textContent: "Repository key" }), key, el("div", { className: "hint", textContent: "The contents of repo.key from the old server, or the copy downloaded from its settings page." }), el("div", { style: "margin-top:6px" }, file)] };
+}
+function setSession(s) { token = s.token; sessionStorage.setItem("bb-token", token); }
+
+function loginPage(note) {
+  const name = el("input", { id: "loginName", autocomplete: "username", required: true });
+  const pass = el("input", { id: "loginPassword", type: "password", autocomplete: "current-password", required: true });
+  const tok = el("input", { id: "token", type: "password", placeholder: "Admin token", autocomplete: "off" });
+  const msg = el("div", { className: "msg", id: "err" });
+  const byUser = el("div", null, ...field("Name", name), ...field("Password", pass));
+  const byToken = el("div", { hidden: true }, ...field("Admin token", tok, "It is in admin.json in the server's data directory. Use it if you are locked out."));
+  const swap = el("button", { type: "button", className: "link", id: "useToken", textContent: "Use the admin token instead" });
+  swap.onclick = () => { byToken.hidden = !byToken.hidden; byUser.hidden = !byUser.hidden; name.required = pass.required = !byUser.hidden; swap.textContent = byToken.hidden ? "Use the admin token instead" : "Sign in with a name and password"; };
+  const form = el("form", { id: "loginForm" }, byUser, byToken, msg, el("div", { className: "row" }, el("button", { className: "primary", textContent: "Sign in" }), swap));
+  form.onsubmit = async ev => {
+    ev.preventDefault(); msg.textContent = "";
+    try {
+      if (!byToken.hidden) { token = tok.value.trim(); await pub("GET", "/api/v1/me"); sessionStorage.setItem("bb-token", token); }
+      else setSession(await pub("POST", "/api/v1/login", { name: name.value, password: pass.value }));
+      await boot();
+    } catch (e) { token = ""; msg.textContent = e.message; }
+  };
+  front(el("h1", { textContent: "better-backup" }), note ? el("p", { textContent: note }) : el("p", { textContent: "Sign in to manage backups." }), form);
+  name.focus();
+}
+
+function setupPage(st, note) {
+  const name = el("input", { id: "setupName", autocomplete: "username", required: true });
+  const pass = el("input", { id: "setupPassword", type: "password", autocomplete: "new-password", required: true, minLength: 10 });
+  const again = el("input", { id: "setupPassword2", type: "password", autocomplete: "new-password", required: true });
+  const tok = el("input", { id: "setupToken", type: "password", autocomplete: "off" });
+  const msg = el("div", { className: "msg", id: "err" });
+  const form = el("form", { id: "setupForm" }, ...field("Your name", name, "You sign in with it. For example: andrew"),
+    ...field("Password", pass, "At least 10 characters."), ...field("Password again", again),
+    ...(st.needs_token ? field("Admin token", tok, "This server is already in use, so creating its first user takes the admin token. It is in admin.json in the server's data directory.") : []),
+    msg, el("div", { className: "row" }, el("button", { className: "primary", textContent: "Create the administrator" })));
+  form.onsubmit = async ev => {
+    ev.preventDefault(); msg.textContent = "";
+    if (pass.value !== again.value) { msg.textContent = "The two passwords differ."; return; }
+    try { setSession(await pub("POST", "/api/v1/setup", { name: name.value, password: pass.value, token: tok.value.trim() })); await boot(); } catch (e) { msg.textContent = e.message; }
+  };
+  const kids = [el("h1", { textContent: "Set up better-backup" }),
+    el("p", { textContent: note || "Create the first administrator. More users, with fewer rights if you like, can be added afterwards." }), form];
+  if (st.can_recover) {
+    const rec = el("button", { id: "startRecover", textContent: "Recover a lost server instead…" });
+    rec.onclick = () => recoverPage(st);
+    kids.push(el("hr"), el("p", { textContent: "Replacing a server that was lost? Its offsite copy brings back the backups, and with them the users, agents, policies and settings." }), rec);
+  }
+  front(...kids);
+  name.focus();
+}
+
+function recoverPage(st) {
+  const kind = el("select", { id: "recKind" }, el("option", { value: "s3", textContent: "S3-compatible storage (Amazon S3, Backblaze B2, Wasabi, MinIO)" }),
+    el("option", { value: "folder", textContent: "A folder on a disk or network share of this server" }));
+  const folder = el("input", { id: "recFolder", placeholder: "For example /mnt/offsite/better-backup or E:\\better-backup" });
+  const endpoint = el("input", { id: "recEndpoint", placeholder: "https://s3.us-west-2.amazonaws.com" });
+  const region = el("input", { id: "recRegion", placeholder: "us-east-1" });
+  const bucket = el("input", { id: "recBucket", placeholder: "Bucket name" });
+  const prefix = el("input", { id: "recPrefix", placeholder: "Folder in the bucket (optional)" });
+  const access = el("input", { id: "recAccess", placeholder: "Access key", autocomplete: "off" });
+  const secret = el("input", { id: "recSecret", type: "password", placeholder: "Secret key", autocomplete: "new-password" });
+  const vhost = el("input", { type: "checkbox" });
+  const s3 = el("div", null, el("label", { textContent: "Service address and region" }), el("div", { className: "two" }, endpoint, region),
+    el("label", { textContent: "Bucket" }), el("div", { className: "two" }, bucket, prefix),
+    el("label", { textContent: "Access key and secret key" }), el("div", { className: "two" }, access, secret),
+    el("label", { className: "check", style: "font-weight:400;display:flex;gap:8px;align-items:center" }, vhost, "The bucket name goes in the host name (needed by a few services)"));
+  vhost.style.width = "auto";
+  const dir = el("div", { hidden: true }, ...field("Folder on this server", folder));
+  kind.onchange = () => { s3.hidden = kind.value !== "s3"; dir.hidden = kind.value !== "folder"; };
+  const k = keyField();
+  const msg = el("div", { className: "msg", id: "err" });
+  const go = el("button", { className: "primary", id: "recoverGo", textContent: "Recover this server" });
+  go.onclick = async () => {
+    msg.textContent = ""; go.disabled = true;
+    try {
+      await pub("POST", "/api/v1/setup/recover", { key: k.key.value.trim(), offsite: { kind: kind.value, folder: folder.value.trim(), endpoint: endpoint.value.trim(),
+        region: region.value.trim(), bucket: bucket.value.trim(), prefix: prefix.value.trim(), access_key: access.value.trim(), secret_key: secret.value, virtual_host: vhost.checked } });
+      await boot();
+    } catch (e) { msg.textContent = e.message; go.disabled = false; }
+  };
+  front(el("h1", { textContent: "Recover a lost server" }),
+    el("p", { textContent: "This downloads the offsite copy onto this new server. The old server's users, agents, policies and settings come back with it, and agents carry on without being enrolled again if this server has the old one's address." }),
+    ...(st.key_from_env ? [el("div", { className: "warn", textContent: "This server gets its repository key from BB_REPO_PASSPHRASE. It must be the old server's key." })] : []),
+    el("label", { textContent: "Where the offsite copy is" }), kind, s3, dir, ...k.nodes, msg,
+    el("div", { className: "row" }, go, el("button", { textContent: "Back", onclick: () => setupPage(st) })));
+}
+
+let recoverTimer;
+function recoverProgress(st) {
+  const r = st.recovery;
+  const kids = [el("h1", { textContent: "Recovering this server" })];
+  if (r.error) {
+    kids.push(el("div", { className: "msg", id: "err", textContent: r.error }), el("div", { className: "row" }, el("button", { className: "primary", textContent: "Try again", onclick: () => recoverPage(st) })));
+    front(...kids);
+    return;
+  }
+  if (r.restarting) kids.push(el("p", { id: "recState", textContent: "The download is complete. The server is starting again on the recovered backups." }));
+  else kids.push(el("p", { id: "recState", textContent: r.total ? "Downloaded " + size(r.done) + " of " + size(r.total) + "." : "Reading what the copy holds…" }), el("progress", { max: r.total || 1, value: r.done || 0 }));
+  kids.push(el("p", { className: "hint", textContent: "This page follows along by itself and may be closed: the download carries on. If the page stops updating once the download is complete, reload it. The browser may then ask you to accept the server's certificate again, because the recovered server uses the old server's certificate authority." }));
+  front(...kids);
+  clearTimeout(recoverTimer);
+  recoverTimer = setTimeout(() => boot(true), 2000);
+}
+
+function lockedPage() {
+  const k = keyField();
+  const msg = el("div", { className: "msg", id: "err" });
+  const go = el("button", { className: "primary", id: "unlockGo", textContent: "Open the repository" });
+  go.onclick = async () => {
+    msg.textContent = ""; go.disabled = true;
+    try {
+      const r = await pub("POST", "/api/v1/setup/unlock", { key: k.key.value.trim() });
+      token = ""; sessionStorage.removeItem("bb-token");
+      front(el("h1", { textContent: "The server is starting again" }), el("p", { id: "recState", textContent: r.restores_configuration
+        ? "The key fits. The repository also holds the old server's users, agents, policies and settings, and they are being put back."
+        : "The key fits." }), el("p", { className: "hint", textContent: "If this page stops updating, reload it. The browser may ask you to accept the server's certificate again." }));
+      setTimeout(() => boot(true), 2500);
+    } catch (e) { msg.textContent = e.message; go.disabled = false; }
+  };
+  front(el("h1", { textContent: "Enter the repository key" }),
+    el("p", { textContent: "This server found a repository with backups in it, but not the key that opens it. That is what a repository disk moved over from a lost server looks like." }),
+    ...k.nodes, msg, el("div", { className: "row" }, go));
+}
+
+function signOut() {
+  if (token) fetch("/api/v1/logout", { method: "POST", headers: { Authorization: "Bearer " + token } }).catch(() => {});
+  token = ""; me = null; sessionStorage.removeItem("bb-token"); loginPage();
+}
 $("logout").onclick = signOut;
-$("loginForm").onsubmit = async ev => {
-  ev.preventDefault(); token = $("token").value.trim(); $("err").textContent = "";
-  try { await call("GET", "/api/v1/status"); sessionStorage.setItem("bb-token", token); start(); } catch (e) { $("err").textContent = e.message; }
-};
+
 let timer;
-function start() {
-  $("login").hidden = true; $("app").hidden = false;
+async function start() {
+  me = await pub("GET", "/api/v1/me");
+  document.body.className = "role-" + me.role;
+  $("whoami").textContent = me.token ? "admin token" : me.name + " (" + roleNames[me.role].toLowerCase() + ")";
+  $("account").hidden = !!me.token;
+  $("front").hidden = true; $("app").hidden = false;
   refresh().catch(() => {});
   clearInterval(timer); timer = setInterval(() => { if (token && !$("dlg").open) refresh().catch(() => {}); }, 5000);
 }
-if (token) start(); else $("login").hidden = false;
+
+// boot decides which page to show: recovery progress, the key prompt,
+// first-run setup, sign-in, or the app.
+async function boot(waiting) {
+  let st;
+  try { st = await pub("GET", "/api/v1/setup"); }
+  catch (e) {
+    // The server is restarting, or cannot be reached.
+    if (waiting) { clearTimeout(recoverTimer); recoverTimer = setTimeout(() => boot(true), 2000); return; }
+    front(el("h1", { textContent: "better-backup" }), el("div", { className: "msg", textContent: "The server cannot be reached: " + e.message }),
+      el("div", { className: "row" }, el("button", { textContent: "Try again", onclick: () => boot() })));
+    return;
+  }
+  if (st.recovery) return recoverProgress(st);
+  if (st.locked) {
+    if (st.locked_needs_sign_in && !token) return loginPage("This server is waiting for its repository key. Sign in as an administrator to enter it.");
+    return lockedPage();
+  }
+  if (token) {
+    try { await start(); return; } catch (e) { token = ""; sessionStorage.removeItem("bb-token"); }
+  }
+  if (st.needs_setup) return setupPage(st, waiting ? "The server is ready, but what it recovered held no users. Create the first administrator." : "");
+  loginPage(waiting ? "The server is back. Sign in with your name and password from the old server." : "");
+}
+
+// download saves text as a file from the browser.
+function download(name, text) {
+  const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "application/octet-stream" })), download: name });
+  document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+// withPassword asks for the user's password again before fn(password).
+function withPassword(title, why, action, fn, back) {
+  const pass = el("input", { id: "confirmPassword", type: "password", autocomplete: "current-password" });
+  const msg = el("div", { className: "msg", id: "err" });
+  const go = el("button", { className: "primary", id: "confirmGo", textContent: action });
+  const run = async () => { msg.textContent = ""; try { await fn(pass.value); } catch (e) { msg.textContent = e.message; } };
+  go.onclick = run;
+  pass.onkeydown = ev => { if (ev.key === "Enter") run(); };
+  if (me && me.token) { fn("").catch(e => notice("Something went wrong", e.message)); return; }
+  openDialog(false, el("h3", { textContent: title }), el("div", { className: "hint", textContent: why }), el("label", { textContent: "Your password" }), pass, msg,
+    el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => back ? back().catch(() => $("dlg").close()) : $("dlg").close() }), go));
+  pass.focus();
+}
+function downloadKey(back) {
+  withPassword("Download the repository key", "The key opens every backup on this server and in the offsite copy. Keep the file somewhere other than this server, such as a password manager or a printout in a safe.", "Download the key", async password => {
+    const r = await call("POST", "/api/v1/settings/repo-key", { password });
+    download("repo.key", r.key + "\n");
+    openDialog(false, el("h3", { textContent: "The key was downloaded" }),
+      el("p", { textContent: "The file is called repo.key. To recover a lost server, give this file to the new server's setup page." }),
+      el("div", { className: "hint", textContent: "Repository " + r.repo_id }),
+      el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => { $("dlg").close(); refresh().catch(() => {}); } })));
+  }, back);
+}
+$("keyBannerBtn").onclick = () => downloadKey();
+
+async function settingsDialog() {
+  const st = await call("GET", "/api/v1/settings");
+  const names = el("textarea", { id: "tlsNames", rows: 3, value: (st.tls_names || []).join("\n"), placeholder: "One per line, for example backup.example.com or 192.168.1.20" });
+  const msg = el("div", { className: "msg", id: "err" });
+  const say = (text, good) => { msg.textContent = text; msg.style.color = good ? "var(--good)" : ""; };
+  const save = el("button", { className: "primary", id: "saveSettings", textContent: "Save" });
+  save.onclick = async () => { try { await call("PUT", "/api/v1/settings", { tls_names: lines(names.value) }); say("Saved. The server's certificate now carries these names.", true); } catch (e) { say(e.message); } };
+  const fixed = ["localhost", st.hostname].concat(st.fixed_tls_names || []).filter(Boolean);
+  const newToken = el("button", { id: "newAdminToken", textContent: "Replace the admin token…" });
+  newToken.onclick = () => withPassword("Replace the admin token", "The admin token is what the bb command line signs in with, and a way in if every administrator is locked out. Replacing it stops the old one from working.", "Replace the token", async password => {
+    const r = await call("POST", "/api/v1/settings/admin-token", { password });
+    openDialog(false, el("h3", { textContent: "The new admin token" }), el("pre", { id: "adminToken", textContent: r.token }),
+      el("div", { className: "hint", textContent: "It is also in admin.json in the server's data directory, where the bb command on the server finds it by itself. It is not shown again." }),
+      el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => settingsDialog().catch(() => $("dlg").close()) })));
+  }, settingsDialog);
+  const key = el("button", { id: "downloadKey", textContent: "Download the repository key…", onclick: () => downloadKey(settingsDialog) });
+  openDialog(true, el("h3", { textContent: "Settings" }),
+    el("h4", { textContent: "Repository key" }),
+    el("div", { className: "hint", textContent: (st.key_source === "environment" ? "The key comes from BB_REPO_PASSPHRASE. " : "The key is in repo.key in the data folder. ") + "Last downloaded: " + when(st.key_saved || "") + "." }),
+    el("div", { style: "margin-top:8px" }, key),
+    el("h4", { textContent: "Names and addresses of this server" }),
+    el("div", { className: "hint", textContent: "Agents and browsers check the server's certificate against the address they use. It always carries: " + fixed.join(", ") + ". Add every other name or IP address the server is reached by." }),
+    names,
+    el("h4", { textContent: "Command line access" }),
+    el("div", { style: "margin-top:8px" }, newToken),
+    el("h4", { textContent: "Where things are" }),
+    el("dl", null, el("dt", { textContent: "Data folder" }), el("dd", { textContent: st.data_dir }), el("dt", { textContent: "Repository" }), el("dd", { textContent: st.repo_dir }),
+      el("dt", { textContent: "Listens on" }), el("dd", { textContent: st.listen }), el("dt", { textContent: "Certificate fingerprint" }), el("dd", { textContent: st.fingerprint }),
+      el("dt", { textContent: "Own configuration saved" }), el("dd", { textContent: when(st.state_saved || "") })),
+    el("div", { className: "hint", textContent: "The folders and the port are chosen when the server is installed. The server saves its own configuration (users, agents, policies, settings) into the repository every day and before each offsite copy, so a recovered server gets it back." }),
+    msg, el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
+}
+$("settings").onclick = () => settingsDialog().catch(e => notice("Something went wrong", e.message));
+
+function roleSelect(value) {
+  const sel = el("select", { id: "userRole" }, ...Object.keys(roleNames).map(r => el("option", { value: r, textContent: roleNames[r] + ": " + roleHints[r] })));
+  sel.value = value || "operator";
+  return sel;
+}
+async function usersDialog() {
+  const users = await call("GET", "/api/v1/users");
+  const t = el("table", { id: "userTable" }, el("tr", null, ...["Name", "Role", "Last signed in", ""].map(h => el("th", { textContent: h }))));
+  for (const u of users) t.append(el("tr", null, el("td", { textContent: u.name }), el("td", { textContent: roleNames[u.role] + (u.disabled ? " (may not sign in)" : "") }),
+    el("td", { textContent: when(u.last_login || "") }), el("td", null, button("Edit", async () => userDialog(u)))));
+  openDialog(true, el("h3", { textContent: "Users" }),
+    el("div", { className: "hint", textContent: "Everyone who signs in to this page. " + Object.keys(roleNames).map(r => roleNames[r] + "s: " + roleHints[r].toLowerCase()).join(" ") }),
+    el("div", { className: "list", style: "margin-top:10px" }, t),
+    el("div", { className: "row" }, el("button", { id: "addUser", textContent: "Add a user", style: "margin-right:auto", onclick: () => userDialog(null) }), el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
+}
+function userDialog(u) {
+  const name = el("input", { id: "userName", value: u ? u.name : "", autocomplete: "off" });
+  const role = roleSelect(u && u.role);
+  const pass = el("input", { id: "userPassword", type: "password", autocomplete: "new-password", placeholder: u ? "Leave empty to keep the password" : "At least 10 characters" });
+  const active = el("input", { type: "checkbox", id: "userActive", checked: !u || !u.disabled });
+  const msg = el("div", { className: "msg", id: "err" });
+  const back = () => usersDialog().catch(e => notice("Something went wrong", e.message));
+  const save = el("button", { className: "primary", id: "saveUser", textContent: u ? "Save" : "Add the user" });
+  save.onclick = async () => {
+    const body = { name: name.value.trim(), role: role.value, password: pass.value, disabled: !active.checked };
+    try { await call(u ? "PUT" : "POST", "/api/v1/users" + (u ? "/" + u.id : ""), body); await back(); } catch (e) { msg.textContent = e.message; }
+  };
+  const buttons = el("div", { className: "row" });
+  if (u) buttons.append(Object.assign(confirmButton("Remove user", "Click again to remove " + u.name, async () => {
+    try { await call("DELETE", "/api/v1/users/" + u.id); await back(); } catch (e) { msg.textContent = e.message; }
+  }), { style: "margin-right:auto", id: "removeUser" }));
+  buttons.append(el("button", { textContent: "Cancel", onclick: back }), save);
+  openDialog(false, el("h3", { textContent: u ? "Edit " + u.name : "Add a user" }), el("label", { textContent: "Name" }), name, el("label", { textContent: "Role" }), role,
+    el("label", { textContent: u ? "New password" : "Password" }), pass,
+    el("div", { className: "hint", textContent: "Tell them the password yourself. They can change it under “My password” once signed in." }),
+    el("label", { className: "check" }, active, "May sign in"), msg, buttons);
+}
+$("users").onclick = () => usersDialog().catch(e => notice("Something went wrong", e.message));
+
+function passwordDialog() {
+  const old = el("input", { id: "oldPassword", type: "password", autocomplete: "current-password" });
+  const pass = el("input", { id: "newPassword", type: "password", autocomplete: "new-password", placeholder: "At least 10 characters" });
+  const again = el("input", { id: "newPassword2", type: "password", autocomplete: "new-password" });
+  const msg = el("div", { className: "msg", id: "err" });
+  const save = el("button", { className: "primary", id: "savePassword", textContent: "Change the password" });
+  save.onclick = async () => {
+    if (pass.value !== again.value) { msg.textContent = "The two new passwords differ."; return; }
+    try { await call("PUT", "/api/v1/me/password", { old: old.value, new: pass.value }); notice("Password changed", "Your other sign-ins, on other computers or browsers, have ended."); } catch (e) { msg.textContent = e.message; }
+  };
+  openDialog(false, el("h3", { textContent: "Change your password" }), el("label", { textContent: "Current password" }), old, el("label", { textContent: "New password" }), pass,
+    el("label", { textContent: "New password again" }), again, msg, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), save));
+}
+$("account").onclick = passwordDialog;
+
+async function activityDialog() {
+  let entries = await call("GET", "/api/v1/audit?limit=100");
+  const t = el("table", { id: "auditTable" }, el("tr", null, ...["When", "Who", "From", "What", "Detail"].map(h => el("th", { textContent: h }))));
+  const add = list => { for (const e of list) t.append(el("tr", null, el("td", { textContent: when(e.time) }), el("td", { textContent: e.user }), el("td", { textContent: e.remote || "" }), el("td", { textContent: e.action }), el("td", { className: "wrap", style: "word-break:break-word", textContent: e.detail || "" }))); };
+  add(entries);
+  const more = el("button", { textContent: "Show older", style: "margin-right:auto" });
+  more.hidden = entries.length < 100;
+  more.onclick = async () => {
+    try { const older = await call("GET", "/api/v1/audit?limit=100&before=" + entries[entries.length - 1].id); add(older); entries = entries.concat(older); more.hidden = older.length < 100; } catch (e) { notice("Something went wrong", e.message); }
+  };
+  openDialog(true, el("h3", { textContent: "Activity log" }),
+    el("div", { className: "hint", textContent: "Who signed in and who changed or started what, newest first. Kept for two years." }),
+    el("div", { className: "list", style: "margin-top:10px" }, entries.length ? t : el("div", { className: "empty", textContent: "Nothing yet." })),
+    el("div", { className: "row" }, more, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
+}
+$("activity").onclick = () => activityDialog().catch(e => notice("Something went wrong", e.message));
+
+boot();
 </script>
 </body>
 </html>
