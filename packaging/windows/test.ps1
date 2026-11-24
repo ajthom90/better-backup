@@ -104,7 +104,7 @@ Check (Test-Path "$repo\config.json") 'the upgraded server kept its repository f
 Check ((Get-ItemProperty 'HKLM:\SOFTWARE\better-backup\Server').Repo -eq $repo) 'the repository setting survived the upgrade'
 Msi @('/i', "`"$Dir\better-backup-agent_${New}_windows_amd64.msi`"") 'upgrade the agent'
 Wait { (Api '/api/v1/agents' | Where-Object { $_.id -eq $agentId -and $_.online -and $_.version -eq $New }) } 'the upgraded agent is the same agent, online'
-Check (@(Get-Package -ProviderName msi -Name 'better-backup*').Count -eq 2) 'one server and one agent are installed after the upgrade'
+Check (@(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object { $_.DisplayName -like 'better-backup*' }).Count -eq 2) 'one server and one agent are installed after the upgrade'
 
 # --- removal --------------------------------------------------------------
 Msi @('/x', "`"$Dir\better-backup-agent_${New}_windows_amd64.msi`"") 'remove the agent'
