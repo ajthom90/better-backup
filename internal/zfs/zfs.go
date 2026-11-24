@@ -259,13 +259,16 @@ func Begin(ctx context.Context, o Options) (s *Session, warnings []string, err e
 	// A volume's snapshot has no device of its own, so it is read
 	// through a clone: a second volume that shares the snapshot's blocks.
 	for name, v := range wantVol {
-		clone := name + "-better-backup-" + o.Tag
+		clone := name + "-" + o.Tag
+		// Listed before it is known to exist: a clone command that
+		// fails half way can still leave the clone behind, and the
+		// snapshot cannot be removed while it is there.
+		s.clones = append(s.clones, clone)
 		if _, cerr := run(ctx, "clone", "-o", Property+"="+o.Agent, "-o", "volmode=dev", "-o", "readonly=on", name+"@"+o.Tag, clone); cerr != nil {
 			warn("volume %s was not backed up: %v", v, cerr)
 			s.failed[v] = true
 			continue
 		}
-		s.clones = append(s.clones, clone)
 		dev := DevicePrefix + clone
 		if !waitFor(ctx, dev, deviceWait) {
 			warn("volume %s was not backed up: the device of its snapshot, %s, did not appear", v, dev)

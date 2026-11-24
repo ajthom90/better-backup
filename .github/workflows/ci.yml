@@ -49,6 +49,11 @@ jobs:
         run: |
           go test -c -o server.test ./internal/server
           sudo BB_TEST_ZPOOL=bbtest ./server.test -test.run TestZFS -test.v
+      - name: Kernel log
+        if: failure()
+        run: |
+          zfs version || true
+          sudo dmesg | tail -n 120
 
   build:
     name: Lint, cross-compile, Docker
