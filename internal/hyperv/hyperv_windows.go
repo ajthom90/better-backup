@@ -426,7 +426,7 @@ func Create(cfg Config, dir, name string) ([]string, error) {
 	}
 	out, err := run(createScript, map[string]string{"BB_CFG": f.Name(), "BB_NAME": name, "BB_DIR": dir})
 	if err != nil {
-		return nil, fmt.Errorf("creating the virtual machine %s: %w", name, err)
+		return nil, err
 	}
 	var warnings []string
 	for _, line := range strings.Split(string(out), "\n") {

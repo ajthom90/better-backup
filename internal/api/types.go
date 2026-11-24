@@ -54,6 +54,9 @@ type Agent struct {
 	Revoked    bool      `json:"revoked"`
 }
 
+// Hypervisors are the kinds of virtual machine host a policy can name.
+var Hypervisors = []string{"hyperv", "libvirt"}
+
 type Schedule struct {
 	Interval string `json:"interval,omitempty"` // Go duration, e.g. "24h"
 	DailyAt  string `json:"daily_at,omitempty"` // "HH:MM" in server local time
@@ -76,13 +79,17 @@ type Policy struct {
 	// Volumes are backed up as block-level images: drive letters such as
 	// "C:" on Windows, or block devices such as /dev/vg0/data elsewhere.
 	Volumes []string `json:"volumes,omitempty"`
-	// VMs are Hyper-V virtual machines to back up from their host, by
-	// name. "*" means every machine on the host.
+	// VMs are virtual machines to back up from their host, by name. "*"
+	// means every machine on the host.
 	VMs []string `json:"vms,omitempty"`
+	// Hypervisor says what kind of host the machines are on: one of
+	// Hypervisors, or empty for whichever the agent's computer is.
+	Hypervisor string `json:"hypervisor,omitempty"`
 	// VMTracking says how the disks of virtual machines are read: ""
-	// reads them in full every time, "on" reads only what Hyper-V's
-	// change tracking says was written since the last backup, and
-	// "check" reads them in full and warns where the tracking was wrong.
+	// reads them in full every time, "on" reads only what the
+	// hypervisor's change tracking says was written since the last
+	// backup, and "check" reads them in full and warns where the
+	// tracking was wrong.
 	VMTracking string `json:"vm_tracking,omitempty"`
 	// SystemState backs up what Windows needs to bring a machine's
 	// identity back: the registry, boot and system files, and on a domain
@@ -103,6 +110,7 @@ type BackupSpec struct {
 	Excludes    []string     `json:"excludes,omitempty"`
 	Volumes     []string     `json:"volumes,omitempty"`
 	VMs         []string     `json:"vms,omitempty"`
+	Hypervisor  string       `json:"hypervisor,omitempty"`
 	VMTracking  string       `json:"vm_tracking,omitempty"`
 	SystemState bool         `json:"system_state,omitempty"`
 	NoSnapshot  bool         `json:"no_snapshot,omitempty"`
