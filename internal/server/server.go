@@ -59,6 +59,10 @@ type Config struct {
 
 	// Tick is how often schedules and timeouts are checked.
 	Tick time.Duration
+	// ProtectionWait is how long a change that weakens the ransomware
+	// protection waits before it applies. Default: three days. Negative:
+	// not at all, which is for tests; no command-line flag sets it.
+	ProtectionWait time.Duration
 }
 
 // AdminFile is written to the data directory so the CLI on the same
@@ -86,8 +90,13 @@ type Server struct {
 	// vmwareMu is held while the list of VMware servers is changed.
 	vmwareMu sync.Mutex
 	snaps    map[string]*tree.Snapshot
-	running  map[string]string // agent id -> its running job
-	maint    bool              // GC or verify in progress: no agent jobs start
+	// trashed are the snapshots that were deleted and can still be
+	// brought back. Their data is kept like that of the others.
+	trashed map[string]*tree.Snapshot
+	// jobData is what was measured of the chunks each running job sent.
+	jobData map[string]*jobData
+	running map[string]string // agent id -> its running job
+	maint   bool              // GC or verify in progress: no agent jobs start
 	// offsiteBusy is set while the offsite copy is being updated;
 	// garbage collection waits for it.
 	offsiteBusy bool
@@ -157,7 +166,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Tick == 0 {
 		cfg.Tick = 20 * time.Second
 	}
-	s := &Server{cfg: cfg, log: cfg.Log, snaps: map[string]*tree.Snapshot{}, running: map[string]string{},
+	s := &Server{cfg: cfg, log: cfg.Log, snaps: map[string]*tree.Snapshot{}, trashed: map[string]*tree.Snapshot{}, jobData: map[string]*jobData{}, running: map[string]string{},
 		wake: map[string]chan struct{}{}, kick: make(chan struct{}, 1), stop: make(chan struct{}), mail: make(chan mailMsg, 64),
 		recovery: map[string]*recoverySession{}, isoLinks: map[string]isoLink{}, indexKick: make(chan struct{}, 1)}
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
@@ -206,6 +215,10 @@ func New(cfg Config) (*Server, error) {
 		}
 		for _, sn := range snaps {
 			s.snaps[sn.ID] = sn
+		}
+		if err := s.sortTrash(); err != nil {
+			s.Close()
+			return nil, err
 		}
 		s.openIndex()
 	}
@@ -476,7 +489,14 @@ func (s *Server) routes() http.Handler {
 	route("POST /api/v1/alerts/summary", admin, "", s.handleTestSummary)
 	route("GET /api/v1/snapshots", viewer, "", s.handleSnapshots)
 	route("GET /api/v1/snapshots/{id}", viewer, "", s.handleSnapshot)
-	route("DELETE /api/v1/snapshots/{id}", operator, "Deleted a snapshot", s.handleDeleteSnapshot)
+	route("DELETE /api/v1/snapshots/{id}", admin, "Deleted a snapshot", s.handleDeleteSnapshot)
+	route("GET /api/v1/protection", viewer, "", s.handleProtection)
+	route("PUT /api/v1/protection", admin, "Changed the ransomware protection", s.handleSaveProtection)
+	route("DELETE /api/v1/protection/pending", admin, "Cancelled the weakening of the ransomware protection", s.handleCancelProtection)
+	route("GET /api/v1/deleted-snapshots", viewer, "", s.handleDeletedSnapshots)
+	route("POST /api/v1/deleted-snapshots/{id}/restore", operator, "Brought back a deleted snapshot", s.handleUndelete)
+	route("GET /api/v1/suspicions", viewer, "", s.handleSuspicions)
+	route("POST /api/v1/suspicions/{id}/review", admin, "Said a backup that looked like ransomware was expected", s.handleReviewSuspicion)
 	route("GET /api/v1/snapshots/{id}/ls", viewer, "", s.handleList)
 	route("POST /api/v1/snapshots/{id}/download", operator, "Downloaded from a snapshot", s.handleDownloadLink)
 	mux.HandleFunc("GET /api/v1/downloads/{ticket}", s.handleDownload) // the ticket is the permission
@@ -617,6 +637,7 @@ func (s *Server) finish(j *api.Job, status, errMsg string, result any, warnings 
 	if j.AgentID != "" && s.running[j.AgentID] == j.ID {
 		delete(s.running, j.AgentID)
 	}
+	delete(s.jobData, j.ID)
 	s.mu.Unlock()
 	s.kickBackground()
 	s.alertJob(j, status, errMsg, warnings)

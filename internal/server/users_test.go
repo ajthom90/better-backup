@@ -28,7 +28,9 @@ type web struct {
 	t     *testing.T
 	base  string
 	token string
-	http  *http.Client
+	// password, when set, is sent as the password typed again.
+	password string
+	http     *http.Client
 }
 
 func newWeb(t *testing.T, addr string) *web {
@@ -47,6 +49,9 @@ func (w *web) try(method, path string, in, out any) (int, string) {
 	req, _ := http.NewRequest(method, w.base+path, body)
 	if w.token != "" {
 		req.Header.Set("Authorization", "Bearer "+w.token)
+	}
+	if w.password != "" {
+		req.Header.Set("X-BB-Password", w.password)
 	}
 	resp, err := w.http.Do(req)
 	if err != nil {

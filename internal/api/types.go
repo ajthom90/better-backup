@@ -820,3 +820,81 @@ type ServerSettings struct {
 	// into the repository.
 	StateSaved *time.Time `json:"state_saved,omitempty"`
 }
+
+// ProtectionSettings is how the server guards its backups against
+// someone, or something, that wants them gone: ransomware on a backed-up
+// machine, or an attacker who has an administrator's password.
+type ProtectionSettings struct {
+	// LockDays: a snapshot cannot be deleted, by anyone or by a policy's
+	// retention rules, until it is this many days old. 0: no lock.
+	LockDays int `json:"lock_days"`
+	// DeleteDelayDays: a deleted snapshot, whether a person or a
+	// retention rule deleted it, stays recoverable this many days before
+	// its data is given up. 0: it is gone at once.
+	DeleteDelayDays int `json:"delete_delay_days"`
+	// Detect: look at every backup for the marks ransomware leaves, and
+	// stop forgetting older backups of that policy until someone has
+	// looked.
+	Detect bool `json:"detect"`
+}
+
+// ProtectionStatus is the settings in force and what is waiting.
+type ProtectionStatus struct {
+	ProtectionSettings
+	// Pending are settings that weaken the protection. They take effect
+	// at PendingAt, and can be cancelled until then.
+	Pending   *ProtectionSettings `json:"pending,omitempty"`
+	PendingAt *time.Time          `json:"pending_at,omitempty"`
+	PendingBy string              `json:"pending_by,omitempty"`
+	// WaitHours is how long a weakening change waits.
+	WaitHours int `json:"wait_hours"`
+	// Deleted counts the snapshots that are deleted but still
+	// recoverable, and Suspicious the backups nobody has looked at yet.
+	Deleted    int `json:"deleted"`
+	Suspicious int `json:"suspicious"`
+}
+
+// ProtectionRequest changes the protection settings. Password is the
+// signed-in user's own password, typed again.
+type ProtectionRequest struct {
+	ProtectionSettings
+	Password string `json:"password,omitempty"`
+}
+
+// DeletedSnapshot is a snapshot that was deleted and can still be
+// brought back.
+type DeletedSnapshot struct {
+	ID       string    `json:"id"`
+	Time     time.Time `json:"time"`
+	Hostname string    `json:"hostname"`
+	PolicyID string    `json:"policy_id,omitempty"`
+	Policy   string    `json:"policy,omitempty"`
+	Paths    []string  `json:"paths"`
+	Bytes    int64     `json:"bytes"`
+	Deleted  time.Time `json:"deleted"`
+	// By is who deleted it: a user's name, or "retention".
+	By string `json:"by"`
+	// Purge is when its data is given up.
+	Purge time.Time `json:"purge"`
+	// Held: its policy has a backup that looks like ransomware, so it is
+	// kept past Purge until someone has looked.
+	Held bool `json:"held,omitempty"`
+}
+
+// Suspicion is a backup that looks as if ransomware had been at the
+// files it holds.
+type Suspicion struct {
+	SnapshotID string    `json:"snapshot_id"`
+	PolicyID   string    `json:"policy_id,omitempty"`
+	Policy     string    `json:"policy,omitempty"`
+	AgentID    string    `json:"agent_id"`
+	Agent      string    `json:"agent,omitempty"`
+	Time       time.Time `json:"time"`
+	// Reasons say, in sentences, what was found.
+	Reasons []string `json:"reasons"`
+	// LastGood is the newest snapshot of the policy from before this one.
+	LastGood string `json:"last_good,omitempty"`
+	// ReviewedBy and Reviewed are set once someone said it is fine.
+	ReviewedBy string     `json:"reviewed_by,omitempty"`
+	Reviewed   *time.Time `json:"reviewed,omitempty"`
+}
