@@ -529,7 +529,12 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 	case j.Type == api.JobRestore && j.Restore != nil:
 		var stats restore.Stats
 		get := func(id keys.ID) ([]byte, error) { return a.c.Get(jctx, id) }
-		stats, err = restore.Run(jctx, get, restore.Options{
+		var sys *restore.SystemState
+		if s := j.Restore.SystemState; s != nil {
+			sys = &restore.SystemState{Registry: s.Registry, AuthoritativeSYSVOL: s.AuthoritativeSYSVOL,
+				AuthoritativeSubtrees: s.AuthoritativeSubtrees, Restart: s.Restart}
+		}
+		stats, err = restore.Run(jctx, get, restore.Options{SystemState: sys,
 			Sources: j.Restore.Sources, SourceOS: j.Restore.SourceOS, Include: j.Restore.Include,
 			Target: j.Restore.Target, Overwrite: j.Restore.Overwrite, VMName: j.Restore.VMName,
 			Progress: func(s restore.Stats) { setProgress(s) }, Warn: warn})

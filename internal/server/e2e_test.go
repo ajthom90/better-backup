@@ -180,6 +180,10 @@ func TestEndToEnd(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(src, "media", "video.bin")); !bytes.Equal(b, rnd(7, 3<<20)) {
 		t.Fatal("restored file differs from the original")
 	}
+	// A system state restore needs a snapshot that holds one.
+	if err := e.admin.Do("POST", "/api/v1/restores", api.RestoreRequest{SnapshotID: j1.SnapshotID, SystemState: &api.SystemStateRestore{Registry: true}}, &rj); err == nil || !strings.Contains(err.Error(), "holds no system state") {
+		t.Fatalf("system state restore from a file snapshot: %v", err)
+	}
 	if b, _ := os.ReadFile(filepath.Join(src, "report.txt")); string(b) != "first version" {
 		t.Fatalf("in-place restore of snapshot 1 left report.txt = %q", b)
 	}
