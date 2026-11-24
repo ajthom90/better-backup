@@ -109,7 +109,11 @@ func TestHiveReplace(t *testing.T) {
 		}
 		t.Fatal(missing)
 	}
-	dir := t.TempDir()
+	// Not t.TempDir: Windows keeps the hive files open until a restart.
+	dir, err := os.MkdirTemp("", "bb-hive-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
 	save := func(name, value string) string {
 		const base = `Software\better-backup-hive`
 		procRegDelTree.Call(uintptr(registry.CURRENT_USER), uintptr(unsafe.Pointer(u16(base))))
@@ -142,7 +146,7 @@ func TestHiveReplace(t *testing.T) {
 		return v + "/" + p
 	}
 	liveFile := save("LIVE", "live")
-	restored := save("RESTORED", "from backup")
+	restored := save("RESTORED", "from backup, with a longer value so the two files differ in size: "+strings.Repeat("x", 20000))
 	load(liveFile)
 	t.Cleanup(unload)
 
@@ -150,24 +154,36 @@ func TestHiveReplace(t *testing.T) {
 	if err := h.prepare(); err != nil {
 		t.Fatal(err)
 	}
+	fi, err := os.Stat(h.ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := fi.Size() + 1 // never equal to the live file's by accident
+	if lf, _ := os.Stat(liveFile); lf != nil && lf.Size() != fi.Size() {
+		size = fi.Size()
+	}
 	if err := h.replace(); err != nil {
 		t.Fatal(err)
 	}
-	// Until it is mounted again, which for a machine hive means a
-	// restart, the old contents stay.
+	// Until the hive is mounted afresh, which for a machine hive means
+	// a restart, the old contents stay.
 	if got := read(mount); got != "live/" {
 		t.Fatalf("while mounted: %q", got)
 	}
-	// The file under the hive's name is now the restored one: mounted a
-	// second time, as a restart would, it shows the backup's contents.
-	const again = mount + "-2"
-	if r, _, _ := procRegLoad.Call(uintptr(registry.LOCAL_MACHINE), uintptr(unsafe.Pointer(u16(again))), uintptr(unsafe.Pointer(u16(liveFile)))); r != 0 {
-		t.Fatal(windows.Errno(r))
+	// The files have changed places: the prepared one now carries the
+	// hive's name and the one in use was moved aside. Windows holds on
+	// to both until the restart, so they cannot be read back here.
+	if _, err := os.Stat(h.ready); err == nil {
+		t.Error("the prepared hive is still under its own name")
 	}
-	t.Cleanup(func() { procRegUnload.Call(uintptr(registry.LOCAL_MACHINE), uintptr(unsafe.Pointer(u16(again)))) })
-	if got := read(again); got != "from backup/yes" {
-		t.Fatalf("the replaced hive file: %q", got)
+	if fi, err := os.Stat(liveFile); err != nil || fi.Size() != size {
+		t.Errorf("the file under the hive's name: %v %v, want %d bytes", fi, err, size)
 	}
+	if olds, _ := filepath.Glob(restored + ".*.old"); len(olds) != 1 {
+		t.Errorf("hives moved aside: %v", olds)
+	}
+	r, _, _ := procRegUnload.Call(uintptr(registry.LOCAL_MACHINE), uintptr(unsafe.Pointer(u16(mount))))
+	t.Logf("unloading the replaced hive: %v", windows.Errno(r))
 }
 
 // TestLater schedules a file swap for the next restart.
@@ -192,7 +208,9 @@ func TestLater(t *testing.T) {
 	found := false
 	for i := 0; i+1 < len(ops); i++ {
 		// Newer Windows versions put a marker such as *1 in front.
-		if strings.HasSuffix(ops[i], `\??\`+tmp) && strings.HasSuffix(ops[i+1], `!\??\`+dest) {
+		// The registry holds the long form of a path whose temporary
+		// folder was given in the short form.
+		if strings.HasSuffix(ops[i], `\new.tmp`) && strings.Contains(ops[i], filepath.Base(dir)) && strings.HasSuffix(ops[i+1], `\in-use.dll`) && strings.Contains(ops[i+1], `!\??\`) {
 			found = true
 		}
 	}

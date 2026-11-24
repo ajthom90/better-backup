@@ -28,6 +28,7 @@ var (
 	procRegCopyTree = advapi32.NewProc("RegCopyTreeW")
 	procRegDelTree  = advapi32.NewProc("RegDeleteTreeW")
 	procRegSetValue = advapi32.NewProc("RegSetValueExW")
+	procRegCreate   = advapi32.NewProc("RegCreateKeyExW")
 )
 
 func regErr(r uintptr, what string) error {
@@ -365,14 +366,18 @@ func (h *hive) prepare() error {
 		return err
 	}
 	defer procRegUnload.Call(uintptr(registry.LOCAL_MACHINE), uintptr(unsafe.Pointer(u16(mount))))
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, mount, registry.ALL_ACCESS)
-	if err != nil {
+	// Opened as a backup program: the SAM and SECURITY hives let nobody
+	// but Windows itself in by their permissions.
+	var k registry.Key
+	const backupRestore = 4 // REG_OPTION_BACKUP_RESTORE
+	r, _, _ = procRegCreate.Call(uintptr(registry.LOCAL_MACHINE), uintptr(unsafe.Pointer(u16(mount))), 0, 0, backupRestore, 0, 0, uintptr(unsafe.Pointer(&k)), 0)
+	if err := regErr(r, "opening the restored hive "+h.file); err != nil {
 		return err
 	}
 	defer k.Close()
 	if h.patch != nil {
 		if err := h.patch(k); err != nil {
-			return err
+			return fmt.Errorf("preparing the restored hive %s: %w", h.file, err)
 		}
 	}
 	h.ready = h.file + ".new"
@@ -445,7 +450,7 @@ func (s *sysRun) registry(marks []regValue) error {
 	}
 	live, err := registry.OpenKey(registry.LOCAL_MACHINE, "SYSTEM", registry.READ)
 	if err != nil {
-		return err
+		return fmt.Errorf("opening the live SYSTEM hive: %w", err)
 	}
 	defer live.Close()
 	var hs []*hive
