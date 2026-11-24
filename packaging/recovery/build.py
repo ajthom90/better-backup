@@ -134,7 +134,7 @@ def main():
     ap.add_argument("--agent", required=True, help="a static linux/amd64 bb-agent binary")
     ap.add_argument("--out", required=True)
     ap.add_argument("--kernel", default="", help="kernel version, such as 6.8.0-151-generic (default: the distribution's current one)")
-    ap.add_argument("--firmware", action="store_true", help="include firmware for adapters that need it (a large download)")
+    ap.add_argument("--firmware", action="store_true", help="include firmware for adapters that need it (a larger download)")
     ap.add_argument("--cache", default="", help="directory to keep downloaded packages in")
     ap.add_argument("--version", default="dev")
     a = ap.parse_args()
@@ -153,7 +153,8 @@ def main():
 
     pkgs = ["linux-image-" + kver, "linux-modules-" + kver, "linux-modules-extra-" + kver]
     if a.firmware:
-        pkgs.append("linux-firmware")
+        # linux-firmware itself is an empty package that pulls in these.
+        pkgs += ["linux-firmware-misc", "linux-firmware-qlogic", "linux-firmware-realtek", "linux-firmware-intel-misc"]
     tree = os.path.join(work, "pkg")
     for p in pkgs:
         if not glob.glob(os.path.join(cache, p + "_*.deb")):
@@ -229,8 +230,9 @@ def main():
         f.write("hid_generic usbhid hv_vmbus dm_mod\n")
     if a.firmware:
         fw = find("lib", "firmware")
-        if not any(glob.glob(os.path.join(fw, pat)) for pat in FIRMWARE):
-            sys.exit("the linux-firmware package holds none of the firmware asked for")
+        for pat in FIRMWARE:
+            if not glob.glob(os.path.join(fw, pat)):
+                sys.exit("the firmware packages do not hold " + pat)
         for pat in FIRMWARE:
             for src in glob.glob(os.path.join(fw, pat)):
                 to = os.path.join(root, "lib/firmware", os.path.relpath(src, fw))
