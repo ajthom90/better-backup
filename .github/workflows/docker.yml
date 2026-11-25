@@ -18,8 +18,9 @@ concurrency:
 
 jobs:
   msi:
-    # The Windows agent installers, for x64 and ARM64, which the server
-    # image carries so that its web UI can hand them out. Between releases it is version
+    # The Windows agent installers, for x64 and ARM64. The server image
+    # carries these and the Linux and macOS ones below, so that its web
+    # UI can hand them out before there is a release. Between releases it is version
     # 0.0.RUN, so that a newer one upgrades an older one.
     name: Windows installers
     runs-on: windows-latest
@@ -37,8 +38,54 @@ jobs:
           path: dist/*.msi
           retention-days: 30
 
+  packages:
+    # The Linux agent packages (.deb and .rpm, x64 and ARM64), numbered
+    # like the Windows installers.
+    name: Linux packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish
+        env:
+          BB_SNAPSHOT_VERSION: 0.0.${{ github.run_number }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: better-backup-linux-agent-packages
+          path: |
+            dist/better-backup-agent_*.deb
+            dist/better-backup-agent_*.rpm
+          if-no-files-found: error
+          retention-days: 30
+
+  pkg:
+    # The macOS agent installer, one for Intel and Apple silicon. It is
+    # not signed here: see packaging/macos/build.sh.
+    name: macOS installer
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: packaging/macos/build.sh 0.0.${{ github.run_number }} dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: better-backup-macos-agent-installer
+          path: dist/*.pkg
+          if-no-files-found: error
+          retention-days: 30
+
   images:
-    needs: msi
+    needs: [msi, packages, pkg]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,8 +94,20 @@ jobs:
         with:
           name: better-backup-windows-installers
           path: dist
+      - name: Fetch the Linux packages
+        uses: actions/download-artifact@v4
+        with:
+          name: better-backup-linux-agent-packages
+          path: dist
+      - name: Fetch the macOS installer
+        uses: actions/download-artifact@v4
+        with:
+          name: better-backup-macos-agent-installer
+          path: dist
       - name: Put the agent installers in the server image
-        run: cp dist/better-backup-agent_*.msi packaging/installers/
+        run: |
+          cp dist/better-backup-agent_*.msi dist/better-backup-agent_*.deb dist/better-backup-agent_*.rpm dist/better-backup-agent_*.pkg packaging/installers/
+          ls -l packaging/installers/
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
