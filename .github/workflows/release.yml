@@ -110,6 +110,7 @@ jobs:
       - name: Build the installer
         run: |
           packaging/macos/build.sh "${{ github.ref_name }}" dist
+          packaging/macos/build-server.sh "${{ github.ref_name }}" dist "$(ls dist/better-backup-agent_*.pkg)"
           cd dist
           for f in *.pkg; do shasum -a 256 "$f" > "$f.sha256"; done
       - name: Add it to the release

@@ -278,8 +278,10 @@ func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request, a *api.A
 				req.Warnings = append(req.Warnings, "Older backups of this policy are kept, whatever its retention rules say, until someone has looked at this one under “Ransomware protection”.")
 			}
 		}
-		err = s.finish(j, status, "", sn.Stats, req.Warnings)
+		// Before the job is reported as done: whoever waits for it may
+		// look at the snapshots at once.
 		s.applyRetention(j.PolicyID)
+		err = s.finish(j, status, "", sn.Stats, req.Warnings)
 	default:
 		if req.Restore != nil && req.Restore.Warnings > 0 {
 			status = api.StatusWarning
@@ -433,15 +435,21 @@ func (s *Server) applyRetention(policyID string) {
 		return
 	}
 	prot, now := s.protection(), time.Now()
+	// Each machine of the policy has its own line of snapshots, and the
+	// rules count within it: "keep 14 daily" is 14 for every machine.
 	s.mu.Lock()
-	var snaps []*tree.Snapshot
+	byMachine := map[string][]*tree.Snapshot{}
 	for _, sn := range s.snaps {
 		if sn.PolicyID == policyID {
-			snaps = append(snaps, sn)
+			byMachine[sn.AgentID] = append(byMachine[sn.AgentID], sn)
 		}
 	}
 	s.mu.Unlock()
-	for _, sn := range forget(snaps, p.Retention) {
+	var drop []*tree.Snapshot
+	for _, snaps := range byMachine {
+		drop = append(drop, forget(snaps, p.Retention)...)
+	}
+	for _, sn := range drop {
 		if !lockedUntil(sn, prot, now).IsZero() {
 			continue // forgotten by a later run, once the lock is over
 		}

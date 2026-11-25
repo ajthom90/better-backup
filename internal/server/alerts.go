@@ -280,13 +280,28 @@ func (s *Server) checkMissed(now time.Time) {
 	if err != nil {
 		return
 	}
+	type pair struct {
+		p     *api.Policy
+		agent string
+	}
+	var pairs []pair
 	for _, p := range ps {
+		for _, id := range p.Machines() {
+			pairs = append(pairs, pair{p, id})
+		}
+	}
+	for _, pr := range pairs {
+		p, agentID := pr.p, pr.agent
+		// The first machine keeps the key a policy had when it had one.
 		key := "alert_missed:" + p.ID
+		if agentID != p.AgentID {
+			key += ":" + agentID
+		}
 		var last int64
 		var running int
-		s.db.QueryRow(`SELECT COALESCE(MAX(finished), 0) FROM jobs WHERE policy_id = ? AND type = ? AND status IN (?, ?)`,
-			p.ID, api.JobBackup, api.StatusSuccess, api.StatusWarning).Scan(&last)
-		s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE policy_id = ? AND type = ? AND status = ?`, p.ID, api.JobBackup, api.StatusRunning).Scan(&running)
+		s.db.QueryRow(`SELECT COALESCE(MAX(finished), 0) FROM jobs WHERE policy_id = ? AND agent_id = ? AND type = ? AND status IN (?, ?)`,
+			p.ID, agentID, api.JobBackup, api.StatusSuccess, api.StatusWarning).Scan(&last)
+		s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE policy_id = ? AND agent_id = ? AND type = ? AND status = ?`, p.ID, agentID, api.JobBackup, api.StatusRunning).Scan(&running)
 		// A backup that is still running, such as a large first backup,
 		// is late but not missed.
 		if !overdue(p, fromMS(last), now) {
@@ -299,8 +314,8 @@ func (s *Server) checkMissed(now time.Time) {
 			continue
 		}
 		s.setSetting(key, "1")
-		name, state := p.AgentID, ""
-		if ag, _ := s.agent(p.AgentID); ag != nil {
+		name, state := agentID, ""
+		if ag, _ := s.agent(agentID); ag != nil {
 			name = ag.Name
 			if !ag.Online {
 				state = fmt.Sprintf("\nThe agent on %s is offline. It was last seen %s.\n", ag.Name, ag.LastSeen.Local().Format("2006-01-02 15:04 MST"))

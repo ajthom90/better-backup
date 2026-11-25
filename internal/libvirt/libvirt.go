@@ -385,7 +385,10 @@ func checkpointXML(cfg *Config, name string) string {
 }
 
 // scratchDir is where scratch files for block devices go.
-func scratchDir() string {
+func scratchDir(chosen string) string {
+	if chosen != "" {
+		return chosen
+	}
 	if d := os.Getenv("BB_SCRATCH_DIR"); d != "" {
 		return d
 	}
@@ -394,7 +397,7 @@ func scratchDir() string {
 
 // begin starts a backup job, trying each socket folder in turn. It
 // returns the socket in use.
-func begin(ctx context.Context, vm string, cfg, prev *Config, dirs []string, incremental, checkpoint string) (string, error) {
+func begin(ctx context.Context, vm string, cfg, prev *Config, dirs []string, incremental, checkpoint, scratch string) (string, error) {
 	tmp, err := os.MkdirTemp("", "bb-libvirt-")
 	if err != nil {
 		return "", err
@@ -410,7 +413,7 @@ func begin(ctx context.Context, vm string, cfg, prev *Config, dirs []string, inc
 	var last error
 	for _, dir := range dirs {
 		socket := filepath.Join(dir, "bb-"+keys.RandomHex(8)+".sock")
-		if err := os.WriteFile(filepath.Join(tmp, "backup.xml"), []byte(backupXML(cfg, prev, socket, incremental, scratchDir())), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(tmp, "backup.xml"), []byte(backupXML(cfg, prev, socket, incremental, scratchDir(scratch))), 0o600); err != nil {
 			return "", err
 		}
 		_, last = virsh(ctx, args...)
@@ -474,13 +477,13 @@ func (driver) freezeLive(ctx context.Context, vm string, o hypervisor.Options, c
 		}
 		if prev != nil && prev.Checkpoint != "" && have[prev.Checkpoint] {
 			base = prev.Checkpoint
-			if socket, err = begin(ctx, vm, cfg, prev, dirs, base, cfg.Checkpoint); err != nil {
+			if socket, err = begin(ctx, vm, cfg, prev, dirs, base, cfg.Checkpoint, o.ScratchDir); err != nil {
 				warn("the changes since the last backup could not be asked for, so the disks are read in full: %v", err)
 				base = ""
 			}
 		}
 		if socket == "" {
-			if socket, err = begin(ctx, vm, cfg, nil, dirs, "", cfg.Checkpoint); err != nil {
+			if socket, err = begin(ctx, vm, cfg, nil, dirs, "", cfg.Checkpoint, o.ScratchDir); err != nil {
 				warn("change tracking could not be used, the disks are read in full: %v", err)
 				cfg.Checkpoint = ""
 				for i := range cfg.Disks {
@@ -490,7 +493,7 @@ func (driver) freezeLive(ctx context.Context, vm string, o hypervisor.Options, c
 		}
 	}
 	if socket == "" {
-		socket, err = begin(ctx, vm, cfg, nil, dirs, "", "")
+		socket, err = begin(ctx, vm, cfg, nil, dirs, "", "", o.ScratchDir)
 	}
 	if frozen {
 		if _, terr := virsh(context.WithoutCancel(ctx), "domfsthaw", vm); terr != nil {

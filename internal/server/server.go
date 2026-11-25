@@ -28,6 +28,7 @@ import (
 
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/keys"
+	"github.com/ajthom90/better-backup/internal/logring"
 	"github.com/ajthom90/better-backup/internal/repo"
 	"github.com/ajthom90/better-backup/internal/searchindex"
 	"github.com/ajthom90/better-backup/internal/tree"
@@ -101,9 +102,11 @@ type Server struct {
 	// garbage collection waits for it.
 	offsiteBusy bool
 	wake        map[string]chan struct{}
-	kick        chan struct{}
-	stop        chan struct{} // closed at shutdown to release long polls
-	mail        chan mailMsg  // alerts waiting to be sent
+	// queries are the questions waiting for agents; see browse.go.
+	queries queryHub
+	kick    chan struct{}
+	stop    chan struct{} // closed at shutdown to release long polls
+	mail    chan mailMsg  // alerts waiting to be sent
 	// recovery holds the machines waiting at the recovery disc, and
 	// isoLinks the short-lived download links for the disc image.
 	recovery map[string]*recoverySession
@@ -154,15 +157,23 @@ type Server struct {
 
 // New opens, or on first start creates, the server state and repository.
 func New(cfg Config) (*Server, error) {
+	// What was chosen in the web UI wins over how the server was started.
+	if pl := readPlace(cfg.DataDir); pl != nil {
+		if pl.RepoDir != "" {
+			cfg.RepoDir = pl.RepoDir
+		}
+		if pl.Listen != "" {
+			cfg.Listen = pl.Listen
+		}
+	}
 	if cfg.Listen == "" {
 		cfg.Listen = ":8443"
 	}
 	if cfg.RepoDir == "" {
 		cfg.RepoDir = filepath.Join(cfg.DataDir, "repo")
 	}
-	if cfg.Log == nil {
-		cfg.Log = slog.Default()
-	}
+	// Keep the newest log lines for the web UI to show.
+	cfg.Log = logring.Logger(cfg.Log)
 	if cfg.Tick == 0 {
 		cfg.Tick = 20 * time.Second
 	}
@@ -417,6 +428,8 @@ func (s *Server) routes() http.Handler {
 	ag("GET /agent/v1/chunks/{id}", s.handleGetChunk)
 	ag("GET /agent/v1/summary", s.handleAgentSummary)
 	ag("POST /agent/v1/backup", s.handleAgentBackup)
+	ag("GET /agent/v1/queries/next", s.handleNextQuery)
+	ag("POST /agent/v1/queries/{id}", s.handleQueryAnswer)
 
 	// route registers an admin API call. role is the least role that
 	// may make it. action, when set, is what the activity log says after
@@ -463,6 +476,8 @@ func (s *Server) routes() http.Handler {
 	route("GET /api/v1/audit", admin, "", s.handleAudit)
 	route("GET /api/v1/settings", admin, "", s.handleSettings)
 	route("PUT /api/v1/settings", admin, "Changed the server's names", s.handleSaveSettings)
+	route("PUT /api/v1/settings/place", admin, "Changed where the backups are kept or the server's port", s.handleSavePlace)
+	route("POST /api/v1/settings/log", admin, "", s.handleServerLog)
 	route("POST /api/v1/settings/repo-key", admin, "Downloaded the repository key", s.handleRepoKey)
 	route("POST /api/v1/settings/admin-token", admin, "Replaced the admin token", s.handleNewAdminToken)
 
@@ -470,6 +485,8 @@ func (s *Server) routes() http.Handler {
 	route("POST /api/v1/enroll-tokens", operator, "Created an enrollment token for a new agent", s.handleCreateToken)
 	route("GET /api/v1/installers", operator, "", s.handleInstallers)
 	route("GET /api/v1/agents", viewer, "", s.handleAgents)
+	route("POST /api/v1/agents/{id}/browse", operator, "", s.handleBrowse)
+	route("POST /api/v1/agents/{id}/dsrm", admin, "Restarted a domain controller into or out of Directory Services Restore Mode", s.handleDSRM)
 	route("DELETE /api/v1/agents/{id}", operator, "Revoked an agent", s.handleRevokeAgent)
 	route("GET /api/v1/policies", viewer, "", s.handlePolicies)
 	route("POST /api/v1/policies", operator, "Created a policy", s.handleSavePolicy)

@@ -233,10 +233,10 @@ func (s *Server) health(now time.Time) (*api.Health, error) {
 	bySnap := map[string]*snapInfo{}
 	s.mu.Lock()
 	for _, sn := range s.snaps {
-		i := bySnap[sn.PolicyID]
+		i := bySnap[sn.PolicyID+"/"+sn.AgentID]
 		if i == nil {
 			i = &snapInfo{}
-			bySnap[sn.PolicyID] = i
+			bySnap[sn.PolicyID+"/"+sn.AgentID] = i
 		}
 		i.n++
 		if sn.Time.After(i.newest) {
@@ -247,25 +247,36 @@ func (s *Server) health(now time.Time) (*api.Health, error) {
 		}
 	}
 	s.mu.Unlock()
+	type pair struct {
+		p     *api.Policy
+		agent string
+	}
+	var pairs []pair
 	for _, p := range ps {
-		ph := api.PolicyHealth{PolicyID: p.ID, Policy: p.Name, AgentID: p.AgentID, Agent: p.AgentID}
-		ag, _ := s.agent(p.AgentID)
+		for _, id := range p.Machines() {
+			pairs = append(pairs, pair{p, id})
+		}
+	}
+	for _, pr := range pairs {
+		p, agentID := pr.p, pr.agent
+		ph := api.PolicyHealth{PolicyID: p.ID, Policy: p.Name, AgentID: agentID, Agent: agentID}
+		ag, _ := s.agent(agentID)
 		if ag != nil {
 			ph.Agent = ag.Name
 		}
-		if i := bySnap[p.ID]; i != nil {
+		if i := bySnap[p.ID+"/"+agentID]; i != nil {
 			ph.Size, ph.New7Days, ph.Snapshots = i.size, i.new7, i.n
 		}
 		var good int64
-		s.db.QueryRow(`SELECT COALESCE(MAX(finished), 0) FROM jobs WHERE policy_id = ? AND type = ? AND status IN (?, ?)`,
-			p.ID, api.JobBackup, api.StatusSuccess, api.StatusWarning).Scan(&good)
+		s.db.QueryRow(`SELECT COALESCE(MAX(finished), 0) FROM jobs WHERE policy_id = ? AND agent_id = ? AND type = ? AND status IN (?, ?)`,
+			p.ID, agentID, api.JobBackup, api.StatusSuccess, api.StatusWarning).Scan(&good)
 		if good != 0 {
 			t := fromMS(good)
 			ph.LastGood = &t
 		}
-		last, _ := s.jobs(`WHERE policy_id = ? AND type = ? AND status NOT IN (?, ?) ORDER BY created DESC LIMIT 1`, p.ID, api.JobBackup, api.StatusQueued, api.StatusCancelled)
+		last, _ := s.jobs(`WHERE policy_id = ? AND agent_id = ? AND type = ? AND status NOT IN (?, ?) ORDER BY created DESC LIMIT 1`, p.ID, agentID, api.JobBackup, api.StatusQueued, api.StatusCancelled)
 		var running int
-		s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE policy_id = ? AND type = ? AND status = ?`, p.ID, api.JobBackup, api.StatusRunning).Scan(&running)
+		s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE policy_id = ? AND agent_id = ? AND type = ? AND status = ?`, p.ID, agentID, api.JobBackup, api.StatusRunning).Scan(&running)
 		scheduled := p.Enabled && (p.Schedule.Interval != "" || p.Schedule.DailyAt != "")
 		switch {
 		case ag == nil || ag.Revoked:
@@ -310,7 +321,9 @@ func (s *Server) health(now time.Time) (*api.Health, error) {
 	// Agents nothing backs up.
 	covered := map[string]bool{}
 	for _, p := range ps {
-		covered[p.AgentID] = true
+		for _, id := range p.Machines() {
+			covered[id] = true
+		}
 	}
 	rows, err := s.db.Query(`SELECT id, name FROM agents WHERE revoked = 0 AND recovery = 0`)
 	if err == nil {

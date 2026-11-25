@@ -32,6 +32,9 @@ type Options struct {
 	// StateDir is a folder where a driver may remember things between
 	// backups.
 	StateDir string
+	// ScratchDir, when set, is where a driver that needs scratch space
+	// during a backup puts it, instead of its usual place.
+	ScratchDir string
 	// Connection says how to reach a hypervisor that is managed over
 	// the network. It is nil for the host the agent runs on.
 	Connection *Connection

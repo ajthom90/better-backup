@@ -13,7 +13,7 @@ import (
 // handleAgentSummary tells an agent about its policies and how their
 // last backups went.
 func (s *Server) handleAgentSummary(w http.ResponseWriter, r *http.Request, a *api.Agent) {
-	ps, err := s.policies(`WHERE agent_id = ? ORDER BY created`, a.ID)
+	ps, err := s.policiesOf(a.ID)
 	if err != nil {
 		s.internal(w, err)
 		return
@@ -28,17 +28,17 @@ func (s *Server) handleAgentSummary(w http.ResponseWriter, r *http.Request, a *a
 			sum.Schedule = "every " + p.Schedule.Interval
 		}
 		var n int
-		s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE policy_id = ? AND type = ? AND status IN (?, ?)`,
-			p.ID, api.JobBackup, api.StatusQueued, api.StatusRunning).Scan(&n)
+		s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE policy_id = ? AND agent_id = ? AND type = ? AND status IN (?, ?)`,
+			p.ID, a.ID, api.JobBackup, api.StatusQueued, api.StatusRunning).Scan(&n)
 		sum.Pending = n > 0
 		var finished int64
-		if s.db.QueryRow(`SELECT status, error, finished FROM jobs WHERE policy_id = ? AND type = ? AND finished > 0 ORDER BY finished DESC LIMIT 1`,
-			p.ID, api.JobBackup).Scan(&sum.LastStatus, &sum.LastError, &finished) == nil {
+		if s.db.QueryRow(`SELECT status, error, finished FROM jobs WHERE policy_id = ? AND agent_id = ? AND type = ? AND finished > 0 ORDER BY finished DESC LIMIT 1`,
+			p.ID, a.ID, api.JobBackup).Scan(&sum.LastStatus, &sum.LastError, &finished) == nil {
 			t := fromMS(finished)
 			sum.LastFinished = &t
 		}
-		if s.db.QueryRow(`SELECT finished FROM jobs WHERE policy_id = ? AND type = ? AND status IN (?, ?) ORDER BY finished DESC LIMIT 1`,
-			p.ID, api.JobBackup, api.StatusSuccess, api.StatusWarning).Scan(&finished) == nil {
+		if s.db.QueryRow(`SELECT finished FROM jobs WHERE policy_id = ? AND agent_id = ? AND type = ? AND status IN (?, ?) ORDER BY finished DESC LIMIT 1`,
+			p.ID, a.ID, api.JobBackup, api.StatusSuccess, api.StatusWarning).Scan(&finished) == nil {
 			t := fromMS(finished)
 			sum.LastSuccess = &t
 		}
@@ -51,14 +51,14 @@ func (s *Server) handleAgentSummary(w http.ResponseWriter, r *http.Request, a *a
 // handleAgentBackup runs every policy of the agent's machine now, as
 // "Run now" in the web UI does: someone at the machine asked for it.
 func (s *Server) handleAgentBackup(w http.ResponseWriter, r *http.Request, a *api.Agent) {
-	ps, err := s.policies(`WHERE agent_id = ? ORDER BY created`, a.ID)
+	ps, err := s.policiesOf(a.ID)
 	if err != nil {
 		s.internal(w, err)
 		return
 	}
 	out := api.BackupNow{Policies: len(ps)}
 	for _, p := range ps {
-		j, err := s.enqueueBackup(p)
+		j, err := s.enqueueBackup(p, a.ID)
 		if err != nil {
 			s.internal(w, err)
 			return

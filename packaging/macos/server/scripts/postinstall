@@ -1,0 +1,29 @@
+#!/bin/sh
+# $1 is the package, $3 the volume installed on.
+data="/Library/Application Support/better-backup"
+mkdir -p "$data"
+chown root:wheel "$data"
+chmod 700 "$data"
+chown root:wheel /Library/LaunchDaemons/better-backup-server.plist /usr/local/bin/bb-server /usr/local/bin/bb /usr/local/bin/bb-server-uninstall
+chmod 644 /Library/LaunchDaemons/better-backup-server.plist
+chmod 755 /usr/local/bin/bb-server /usr/local/bin/bb /usr/local/bin/bb-server-uninstall
+
+launchctl bootstrap system /Library/LaunchDaemons/better-backup-server.plist ||
+    launchctl kickstart -k system/better-backup-server || true
+
+# Installed by hand: show the web page once the server answers. Not when
+# a script runs the installer. The port is 8443 unless it was changed
+# under Settings, which an upgrade keeps.
+user=$(stat -f %Su /dev/console 2>/dev/null)
+if [ -z "$COMMAND_LINE_INSTALL" ] && [ -n "$user" ] && [ "$user" != root ]; then
+    port=$(sed -n 's/.*"listen": *"[^"]*:\([0-9]*\)".*/\1/p' "$data/place.json" 2>/dev/null)
+    [ -n "$port" ] || port=8443
+    n=0
+    while [ $n -lt 30 ] && ! curl -ksf -o /dev/null "https://localhost:$port/healthz"; do
+        n=$((n + 1))
+        sleep 1
+    done
+    uid=$(id -u "$user")
+    launchctl asuser "$uid" sudo -u "$user" open "https://localhost:$port/" || true
+fi
+exit 0

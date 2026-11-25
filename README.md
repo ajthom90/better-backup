@@ -156,6 +156,15 @@ The server runs as root inside the app, so the datasets need no special
 permissions. To back up the NAS's own shares as well, add the agent app from
 "Add an agent"; see [TrueNAS SCALE](#truenas-scale-and-other-zfs-systems).
 
+On a Mac, open `better-backup-server_VERSION_darwin_universal.pkg` from the
+[releases](https://github.com/ajthom90/better-backup/releases). It installs
+the server as a background service that starts with the Mac, carries the
+agent installer for other Macs, and opens the server's web page when it is
+done; the folder for the backups and the port are then chosen under
+"Settings". Until the installer is signed, macOS will not open it by
+double-click: allow it under System Settings, Privacy & Security, "Open
+Anyway". Remove it with `sudo bb-server-uninstall`, which keeps the backups.
+
 Or natively (Linux, macOS, Windows), from a release archive:
 
 ```sh
@@ -205,8 +214,16 @@ instead" on the sign-in page). Replace it under "Settings".
 "Settings" also holds the names and IP addresses the server's certificate
 carries (the same as `--tls-name`, without a restart).
 
-Use `--repo DIR` (or mount a volume at `/data/repo`) to put the repository on
-a bigger disk or a NAS mount.
+"Settings" is also where the folder for the backups and the port are
+changed, for a server installed on Windows, macOS or Linux: a new server can
+be pointed at an empty folder on a bigger disk, and a server that already has
+backups at a copy of its folder, which it checks before it switches. (The
+choice is kept in `place.json` in the data folder and wins over `--repo` and
+`--listen`.) A server in a container keeps them where the container is
+defined: mount the disk at `/data/repo` and publish the port you want.
+
+"Settings" shows the server's log, and "Log" beside an agent shows that
+agent's, so nobody has to find a log file on a machine.
 
 ### 2. Enroll a machine
 
@@ -291,10 +308,15 @@ you create one (`sudo groupadd better-backup`, then restart the agent). On
 macOS, administrators need no `sudo`. The desktop app also builds for Linux
 (`make app`), but is not packaged there yet.
 
-On Windows, run `bb-agent enroll CODE` from an elevated prompt, then
-`bb-agent service install` and `bb-agent service start`.
+On Windows the installer does all of this, and "better-backup agent" in the
+Start menu is the same app: see [Windows installers](#windows-installers).
 
 ### 3. Create a policy and back up
+
+In the web UI choose **New policy**: name it, pick the machine, press
+"Browse the machine…" and tick the folders, set a time and how many
+snapshots to keep, and save. **Back up now** on the policy starts the first
+backup. The same from a command line, for scripts:
 
 ```sh
 bb agents
@@ -306,6 +328,10 @@ bb policy run documents --wait
 
 ### 4. Restore
 
+In the web UI, **Browse** on a snapshot walks its folders, and **Restore**
+puts a file, a folder or all of it back, in place or somewhere else. The
+same from a command line:
+
 ```sh
 bb snapshots
 bb ls SNAPSHOT /home/alice
@@ -315,7 +341,8 @@ bb restore SNAPSHOT --target /tmp/restored --wait # to another folder
 bb restore SNAPSHOT --agent other-machine --target /srv/restore --wait
 ```
 
-Everything can be done in the web UI at `https://your-server:8443/`: add and
+Once the server is installed, everything is done in the web UI at
+`https://your-server:8443/` and nothing needs a command line: add and
 revoke agents, create and edit policies, start backups, browse a snapshot and
 restore a file, a folder, a disk or all of it, rebuild a whole machine from
 the recovery disc, follow jobs and read their
@@ -323,6 +350,19 @@ warnings, forget snapshots, verify the repository, reclaim space and set up
 email alerts. The `bb` command line does the same things for scripts. Sign in with the name and
 password you created on the first visit. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
+
+**One policy, several machines.** Tick every machine a policy is for. Each
+is backed up on its own, with the same folders, schedule and rules, and keeps
+its own snapshots: "keep 14 daily" is 14 for each machine, and Health has a
+line for each. A folder one of them does not have is skipped there with a
+warning. Microsoft 365 and VMware policies take a single machine, since they
+are read over the network. From the command line: `--agent pc1,pc2`.
+
+**Choose what to back up without typing.** In a policy, "Browse the
+machine…" asks the agent for its folders and lets you tick them, and the
+buttons beside volumes, disks and virtual machines list what the machine
+has. The machine must be connected and run an agent at least as new as the
+server; the boxes can always be typed in instead.
 
 **Find a file.** The box above the list of snapshots finds files and folders
 by name in every snapshot: part of the name, or a pattern such as `*.xlsx`.
@@ -602,7 +642,7 @@ change: full, tracked and switched-off backups of a machine with qcow2 and
 raw disks and UEFI firmware, and restores that are compared with the
 originals. Not covered by them, and so untested: guests with the guest agent,
 disks on block devices (LVM, for which the scratch file goes to
-`/var/lib/libvirt/images` or `BB_SCRATCH_DIR`), hosts with SELinux, and
+`/var/lib/libvirt/images` or the policy's scratch folder), hosts with SELinux, and
 real workloads writing during a backup.
 
 Known gaps: network disks (Ceph RBD, iSCSI), pass-through and shared disks
@@ -634,7 +674,7 @@ backup does it but with standard QEMU commands: a backup job keeps the old
 contents of whatever the machine overwrites, so every disk is read as it was
 at one instant, on any kind of storage. What the machine overwrites during
 the backup is kept in `/var/tmp` until the backup ends (set
-`BB_SCRATCH_DIR` in the agent's environment to use another folder); a busy
+"Scratch folder" in the policy to use another folder); a busy
 machine needs room there. If the guest agent is enabled for the machine, its
 file systems are flushed and frozen for that instant. A machine that is
 switched off is read from its volumes. Disks marked "no backup" in Proxmox
@@ -821,15 +861,19 @@ Active Directory cannot be replaced while it runs, so the domain controller
 must be in Directory Services Restore Mode (DSRM). The agent, installed as a
 service, starts there too.
 
-1. On the domain controller, as an administrator: `bcdedit /set safeboot dsrepair`,
-   then restart. Sign in as `.\Administrator` with the DSRM password. In DSRM
+1. In the web UI, open Restore on the snapshot, tick "Put the Windows system
+   state back over this machine" and press "Restart NAME into Directory
+   Services Restore Mode…". The agent restarts the machine there within a
+   minute; nobody has to sign in on it. (By hand, as an administrator:
+   `bcdedit /set safeboot dsrepair`, then restart.) In DSRM
    the machine may not be able to look up names, so if the agent reaches the
    server by name, make sure that name still resolves (a hosts file entry
    works).
 2. Start the restore from the web UI or with
    `bb restore SNAPSHOT --system-state-in-place --restart --wait`.
 3. The restart leaves DSRM (the restore runs `bcdedit /deletevalue safeboot`
-   when it restarts the machine; do that yourself if you restart by hand).
+   when it restarts the machine). To leave it without restoring, press
+   "Restart it back to normal…" in the same dialog.
 
 That is a **non-authoritative** restore: the database is put back, Active
 Directory is told it came from a backup, and after the restart the domain
@@ -1125,7 +1169,6 @@ bb-server fetch --repo /mnt/new-disk/repo \
   restored as its own file). Windows keeps most system files as hard links
   into its component store, so a system state restored in place uses more
   disk space than before.
-- No MSI installer yet; `service install` does the same job on Windows.
 - Microsoft 365 backup has only met a stand-in for Microsoft Graph, and
   restores into a folder only. See the Microsoft 365 section for what it
   leaves out.
