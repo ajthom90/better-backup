@@ -14,6 +14,7 @@ import (
 
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/hypervisor"
+	"github.com/ajthom90/better-backup/internal/logring"
 )
 
 // maxEntries bounds one answer. A folder with more files than this is
@@ -39,6 +40,8 @@ func Run(ctx context.Context, req *api.BrowseRequest) *api.BrowseResult {
 	case api.BrowseVMs:
 		res = new(api.BrowseResult)
 		res.Entries, err = machines(ctx, req)
+	case api.BrowseLog:
+		res = &api.BrowseResult{Text: logring.Text()}
 	default:
 		err = fmt.Errorf("this agent version cannot list %q; update the agent", req.Kind)
 	}

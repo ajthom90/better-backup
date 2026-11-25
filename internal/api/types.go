@@ -836,6 +836,20 @@ type ServerSettings struct {
 	// StateSaved is when the server's own configuration was last saved
 	// into the repository.
 	StateSaved *time.Time `json:"state_saved,omitempty"`
+	// Port is the port of Listen.
+	Port int `json:"port,omitempty"`
+	// Container: the server runs in a container, where the folder and
+	// the port belong to the container's definition and cannot be
+	// changed from inside.
+	Container bool `json:"container,omitempty"`
+}
+
+// PlaceRequest changes where the repository is kept and the port the
+// server listens on. The server starts again to apply it.
+type PlaceRequest struct {
+	RepoDir  string `json:"repo_dir"`
+	Port     int    `json:"port"`
+	Password string `json:"password,omitempty"`
 }
 
 // ProtectionSettings is how the server guards its backups against
@@ -922,6 +936,7 @@ const (
 	BrowseVolumes = "volumes" // volumes and block devices that can be imaged
 	BrowseDisks   = "disks"   // whole disks, for a whole-machine backup
 	BrowseVMs     = "vms"     // virtual machines of a hypervisor
+	BrowseLog     = "log"     // not a list: the agent's newest log lines, in Text
 )
 
 // BrowseRequest asks an agent what is on its machine, so that someone
@@ -956,6 +971,8 @@ type BrowseResult struct {
 	Entries   []BrowseEntry `json:"entries"`
 	Truncated bool          `json:"truncated,omitempty"`
 	Error     string        `json:"error,omitempty"`
+	// Text is the answer to BrowseLog.
+	Text string `json:"text,omitempty"`
 }
 
 // AgentQuery is a question the server asks an agent outside its jobs;

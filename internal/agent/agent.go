@@ -35,6 +35,7 @@ import (
 	"github.com/ajthom90/better-backup/internal/hypervisor"
 	_ "github.com/ajthom90/better-backup/internal/hypervisor/all"
 	"github.com/ajthom90/better-backup/internal/keys"
+	"github.com/ajthom90/better-backup/internal/logring"
 	"github.com/ajthom90/better-backup/internal/m365"
 	"github.com/ajthom90/better-backup/internal/restore"
 	"github.com/ajthom90/better-backup/internal/tree"
@@ -298,6 +299,8 @@ func (a *Agent) setState(f func(*state)) {
 
 // New loads the agent identity saved in dir.
 func New(dir string, log *slog.Logger) (*Agent, error) {
+	// Keep the newest log lines, for the server's web UI to show.
+	log = logring.Logger(log)
 	cfg, err := loadConfig(dir)
 	if err != nil {
 		return nil, err

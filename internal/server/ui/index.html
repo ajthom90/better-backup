@@ -174,7 +174,9 @@ async function refresh() {
     stat(offsiteSummary(off), "offsite copy"), stat(health.disk.known ? size(health.disk.free) : "unknown", "free on the repository's disk"));
   table("agents", ["Name", "Host", "System", "Version", "State", "Last seen", ""],
     agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, a.version, pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen),
-      a.revoked || !can("operator") ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
+      a.revoked || !can("operator") ? "" : el("div", { className: "acts" },
+        can("admin") ? button("Log", async () => { const r = await call("POST", "/api/v1/agents/" + a.id + "/browse", { kind: "log" }); if (r.error) throw new Error(r.error); logDialog("Log of the agent on " + a.name, a.name + "-agent.log", r.text); }) : "",
+        confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); }))]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
   table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
     policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : [], p.bare_metal ? ["whole machine"] : [], p.m365 ? [m365Summary(p.m365)] : []).join(", "),
@@ -1465,6 +1467,14 @@ function withPassword(title, why, action, fn, back) {
     el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => back ? back().catch(() => $("dlg").close()) : $("dlg").close() }), go));
   pass.focus();
 }
+// logDialog shows log lines with a way to save them, for whoever is asked "what does the log say?".
+function logDialog(title, file, text, back) {
+  const pre = el("pre", { id: "logText", textContent: text || "Nothing has been logged since the program started.", style: "max-height:60vh;overflow:auto;white-space:pre-wrap;font-size:12px" });
+  openDialog(true, el("h3", { textContent: title }),
+    el("div", { className: "hint", textContent: "The newest lines, since the program last started. The newest are at the bottom." }), pre,
+    el("div", { className: "row" }, el("button", { textContent: "Download", onclick: () => download(file, text) }), el("button", { textContent: "Close", onclick: () => back ? back().catch(() => $("dlg").close()) : $("dlg").close() })));
+  pre.scrollTop = pre.scrollHeight;
+}
 function downloadKey(back) {
   withPassword("Download the repository key", "The key opens every backup on this server and in the offsite copy. Keep the file somewhere other than this server, such as a password manager or a printout in a safe.", "Download the key", async password => {
     const r = await call("POST", "/api/v1/settings/repo-key", { password });
@@ -1524,6 +1534,21 @@ async function settingsDialog() {
       el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => settingsDialog().catch(() => $("dlg").close()) })));
   }, settingsDialog);
   const key = el("button", { id: "downloadKey", textContent: "Download the repository key…", onclick: () => downloadKey(settingsDialog) });
+  const repoDir = el("input", { id: "repoDir", value: st.repo_dir, spellcheck: false });
+  const port = el("input", { id: "port", type: "number", min: 1, max: 65535, value: st.port || "" });
+  const savePlace = el("button", { id: "savePlace", textContent: "Change the folder or the port…" });
+  savePlace.onclick = () => {
+    const want = { repo_dir: repoDir.value.trim(), port: parseInt(port.value, 10) || 0 };
+    if (want.repo_dir === st.repo_dir && want.port === st.port) { say("Nothing was changed."); return; }
+    withPassword("Change the folder or the port", "The server stops for a moment and starts again with the backups in " + want.repo_dir + ", on port " + want.port + ". Running jobs must be done first.", "Change and start again", async password => {
+      const r = await call("PUT", "/api/v1/settings/place", Object.assign({ password }, want));
+      if (!r.restarting) { await settingsDialog(); return; }
+      const url = location.protocol + "//" + location.hostname + ":" + r.port + "/";
+      openDialog(false, el("h3", { textContent: "The server is starting again" }),
+        el("p", { id: "placeDone" }, "In a few seconds it is back at ", el("a", { href: url, textContent: url }), want.port !== st.port ? ". Your browser may ask about the certificate again, because the address is new." : "."),
+        el("div", { className: "row" }, el("button", { className: "primary", textContent: "Open it", onclick: () => { location.href = url; } })));
+    }, settingsDialog);
+  };
   openDialog(true, el("h3", { textContent: "Settings" }),
     el("h4", { textContent: "Repository key" }),
     el("div", { className: "hint", textContent: (st.key_source === "environment" ? "The key comes from BB_REPO_PASSPHRASE. " : "The key is in repo.key in the data folder. ") + "Last downloaded: " + when(st.key_saved || "") + "." }),
@@ -1541,11 +1566,23 @@ async function settingsDialog() {
     ixSay, el("div", { style: "margin-top:8px" }, rebuild),
     el("h4", { textContent: "Command line access" }),
     el("div", { style: "margin-top:8px" }, newToken),
+    el("h4", { textContent: "Where the backups are kept, and the port" }),
+    ...(st.container
+      ? [el("dl", null, el("dt", { textContent: "Folder for the backups" }), el("dd", { textContent: st.repo_dir }), el("dt", { textContent: "Port" }), el("dd", { textContent: String(st.port || st.listen) })),
+         el("div", { className: "hint", id: "placeHint", textContent: "This server runs in a container (Docker or a TrueNAS app), so these two belong to the container: the backups are whatever disk or dataset is mounted at " + st.repo_dir + ", and the port is the one the container publishes. Change them where the container is set up." })]
+      : [el("label", { textContent: "Folder for the backups" }), repoDir,
+         el("div", { className: "hint", textContent: "A new server can be pointed at an empty folder, such as one on a bigger disk. Once there are backups, copy the folder to the new place yourself while no backup runs, then give the new folder here: the server checks the copy is complete before it switches." }),
+         el("label", { textContent: "Port" }), port,
+         el("div", { className: "hint", textContent: "Agents and browsers reach the server on this port. Agents that are already registered keep the old port, so change it before adding agents, or register them again afterwards. On Windows the server opens the new port in Windows Firewall." }),
+         el("div", { style: "margin-top:8px" }, savePlace)]),
+    el("h4", { textContent: "Server log" }),
+    el("div", { style: "margin-top:8px" }, el("button", { id: "showLog", textContent: "Show the server's log", onclick: async () => { try { const r = await call("POST", "/api/v1/settings/log"); logDialog("Server log", "better-backup-server.log", r.text, settingsDialog); } catch (e) { say(e.message); } } })),
+    el("div", { className: "hint", textContent: "Each agent's log is under “Log” in the list of agents." }),
     el("h4", { textContent: "Where things are" }),
-    el("dl", null, el("dt", { textContent: "Data folder" }), el("dd", { textContent: st.data_dir }), el("dt", { textContent: "Repository" }), el("dd", { textContent: st.repo_dir }),
-      el("dt", { textContent: "Listens on" }), el("dd", { textContent: st.listen }), el("dt", { textContent: "Certificate fingerprint" }), el("dd", { textContent: st.fingerprint }),
+    el("dl", null, el("dt", { textContent: "Data folder" }), el("dd", { textContent: st.data_dir }),
+      el("dt", { textContent: "Certificate fingerprint" }), el("dd", { textContent: st.fingerprint }),
       el("dt", { textContent: "Own configuration saved" }), el("dd", { textContent: when(st.state_saved || "") })),
-    el("div", { className: "hint", textContent: "The folders and the port are chosen when the server is installed. The server saves its own configuration (users, agents, policies, settings) into the repository every day and before each offsite copy, so a recovered server gets it back." }),
+    el("div", { className: "hint", textContent: "The server saves its own configuration (users, agents, policies, settings) into the repository every day and before each offsite copy, so a recovered server gets it back." }),
     msg, el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
 }
 $("settings").onclick = () => settingsDialog().catch(e => notice("Something went wrong", e.message));

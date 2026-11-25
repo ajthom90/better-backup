@@ -24,3 +24,11 @@ func SetBrowseWaitUnseen(d time.Duration) func() {
 	browseWaitUnseen = d
 	return func() { browseWaitUnseen = old }
 }
+
+// SetInContainer says whether the server believes it runs in a
+// container, and returns how to put the real answer back.
+func SetInContainer(v bool) func() {
+	old := inContainer
+	inContainer = func() bool { return v }
+	return func() { inContainer = old }
+}

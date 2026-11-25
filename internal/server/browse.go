@@ -162,6 +162,12 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	}
 	switch req.Kind {
 	case api.BrowseFolders, api.BrowseVolumes, api.BrowseDisks:
+	case api.BrowseLog:
+		// The log can name files and people; it is for administrators.
+		if who(r).role != api.RoleAdmin {
+			fail(w, http.StatusForbidden, "Only an administrator can read an agent's log")
+			return
+		}
 	case api.BrowseVMs:
 		req.Connection = nil
 		if req.Hypervisor == "vmware" {

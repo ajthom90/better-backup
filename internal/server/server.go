@@ -28,6 +28,7 @@ import (
 
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/keys"
+	"github.com/ajthom90/better-backup/internal/logring"
 	"github.com/ajthom90/better-backup/internal/repo"
 	"github.com/ajthom90/better-backup/internal/searchindex"
 	"github.com/ajthom90/better-backup/internal/tree"
@@ -156,15 +157,23 @@ type Server struct {
 
 // New opens, or on first start creates, the server state and repository.
 func New(cfg Config) (*Server, error) {
+	// What was chosen in the web UI wins over how the server was started.
+	if pl := readPlace(cfg.DataDir); pl != nil {
+		if pl.RepoDir != "" {
+			cfg.RepoDir = pl.RepoDir
+		}
+		if pl.Listen != "" {
+			cfg.Listen = pl.Listen
+		}
+	}
 	if cfg.Listen == "" {
 		cfg.Listen = ":8443"
 	}
 	if cfg.RepoDir == "" {
 		cfg.RepoDir = filepath.Join(cfg.DataDir, "repo")
 	}
-	if cfg.Log == nil {
-		cfg.Log = slog.Default()
-	}
+	// Keep the newest log lines for the web UI to show.
+	cfg.Log = logring.Logger(cfg.Log)
 	if cfg.Tick == 0 {
 		cfg.Tick = 20 * time.Second
 	}
@@ -467,6 +476,8 @@ func (s *Server) routes() http.Handler {
 	route("GET /api/v1/audit", admin, "", s.handleAudit)
 	route("GET /api/v1/settings", admin, "", s.handleSettings)
 	route("PUT /api/v1/settings", admin, "Changed the server's names", s.handleSaveSettings)
+	route("PUT /api/v1/settings/place", admin, "Changed where the backups are kept or the server's port", s.handleSavePlace)
+	route("POST /api/v1/settings/log", admin, "", s.handleServerLog)
 	route("POST /api/v1/settings/repo-key", admin, "Downloaded the repository key", s.handleRepoKey)
 	route("POST /api/v1/settings/admin-token", admin, "Replaced the admin token", s.handleNewAdminToken)
 

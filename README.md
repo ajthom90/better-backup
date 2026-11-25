@@ -180,8 +180,16 @@ instead" on the sign-in page). Replace it under "Settings".
 "Settings" also holds the names and IP addresses the server's certificate
 carries (the same as `--tls-name`, without a restart).
 
-Use `--repo DIR` (or mount a volume at `/data/repo`) to put the repository on
-a bigger disk or a NAS mount.
+"Settings" is also where the folder for the backups and the port are
+changed, for a server installed on Windows, macOS or Linux: a new server can
+be pointed at an empty folder on a bigger disk, and a server that already has
+backups at a copy of its folder, which it checks before it switches. (The
+choice is kept in `place.json` in the data folder and wins over `--repo` and
+`--listen`.) A server in a container keeps them where the container is
+defined: mount the disk at `/data/repo` and publish the port you want.
+
+"Settings" shows the server's log, and "Log" beside an agent shows that
+agent's, so nobody has to find a log file on a machine.
 
 ### 2. Enroll a machine
 
