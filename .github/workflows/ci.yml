@@ -343,7 +343,7 @@ jobs:
           go-version-file: go.mod
       - name: Check the scripts
         if: matrix.arch == 'amd64'
-        run: shellcheck -S error packaging/install.sh packaging/test/agent.sh packaging/scripts/*.sh packaging/macos/build.sh packaging/macos/uninstall.sh packaging/macos/scripts/*
+        run: shellcheck -S error packaging/install.sh packaging/test/agent.sh packaging/scripts/*.sh packaging/macos/build.sh packaging/macos/uninstall.sh packaging/macos/scripts/* packaging/macos/build-server.sh packaging/macos/server/uninstall.sh packaging/macos/server/scripts/* packaging/test/server-macos.sh
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
@@ -401,7 +401,11 @@ jobs:
         run: |
           mkdir tools
           go build -o tools/ ./cmd/bb ./cmd/bb-server
-          packaging/test/agent.sh "$(ls dist/*.pkg)" tools shots
+          packaging/test/agent.sh "$(ls dist/better-backup-agent_*.pkg)" tools shots
+      - name: Build the server package
+        run: packaging/macos/build-server.sh "0.0.0-ci-$(git rev-parse --short=12 HEAD)" dist "$(ls dist/better-backup-agent_*.pkg)"
+      - name: Install the server package and use it
+        run: packaging/test/server-macos.sh "$(ls dist/better-backup-server_*.pkg)"
       - name: Upload the package
         if: matrix.arch == 'arm64'
         uses: actions/upload-artifact@v4

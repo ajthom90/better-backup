@@ -131,6 +131,15 @@ and `:edge` for the newest commit on `main`. Until the first release exists, use
 
 On Windows, run the server installer: see [Windows installers](#windows-installers).
 
+On a Mac, open `better-backup-server_VERSION_darwin_universal.pkg` from the
+[releases](https://github.com/ajthom90/better-backup/releases). It installs
+the server as a background service that starts with the Mac, carries the
+agent installer for other Macs, and opens the server's web page when it is
+done; the folder for the backups and the port are then chosen under
+"Settings". Until the installer is signed, macOS will not open it by
+double-click: allow it under System Settings, Privacy & Security, "Open
+Anyway". Remove it with `sudo bb-server-uninstall`, which keeps the backups.
+
 Or natively (Linux, macOS, Windows), from a release archive:
 
 ```sh

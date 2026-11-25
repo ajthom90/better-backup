@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stop the server of an earlier version, so its program can be replaced.
+launchctl bootout system/better-backup-server 2>/dev/null || true
+exit 0
