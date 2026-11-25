@@ -84,11 +84,12 @@ jobs:
             ghcr.io/${{ github.repository }}-agent:latest
 
   macos:
-    # The macOS installer: bb-agent, its launchd daemon and the app.
+    # The macOS installers: the agent's (bb-agent, its launchd daemon and
+    # the app) and the server's.
     #
-    # It is signed, notarized and stapled when the repository has the
+    # They are signed, notarized and stapled when the repository has the
     # secrets that packaging/macos/ci-signing.sh lists, and otherwise
-    # built unsigned (it installs, but macOS warns).
+    # built unsigned (they install, but macOS warns).
     name: macOS installer
     needs: release
     runs-on: macos-latest
