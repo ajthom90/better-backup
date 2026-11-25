@@ -105,10 +105,25 @@ func restartService() error {
 // signed has nothing to compare with, and relies on the SHA-256 the
 // server gave over the connection it trusts.
 func verifySigner(ctx context.Context, exe, installer string) error {
-	script := `$ErrorActionPreference='Stop'; foreach ($f in $args) { $s = Get-AuthenticodeSignature -LiteralPath $f; "$($s.Status)|$($s.SignerCertificate.Subject)" }`
+	// The paths go by environment variable: PowerShell joins what follows
+	// -Command into one line and splits it again at the spaces.
+	script := `$ErrorActionPreference='Stop'; foreach ($f in $env:BB_UPDATE_SELF, $env:BB_UPDATE_NEW) { $s = Get-AuthenticodeSignature -LiteralPath $f; "$($s.Status)|$($s.SignerCertificate.Subject)" }`
 	ps := filepath.Join(filepath.Dir(system32("x")), "WindowsPowerShell", "v1.0", "powershell.exe")
-	cmd := exec.CommandContext(ctx, ps, "-NoProfile", "-NonInteractive", "-Command", "& {"+script+"}", exe, installer)
+	cmd := exec.CommandContext(ctx, ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	// Without PSModulePath, so that Windows PowerShell finds its own
+	// modules and not those of a newer PowerShell that started the agent.
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(kv), "PSMODULEPATH=") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	cmd.Env = append(cmd.Env, "BB_UPDATE_SELF="+exe, "BB_UPDATE_NEW="+installer)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
+	if err != nil {
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
 	return checkAuthenticode(string(out), err)
 }

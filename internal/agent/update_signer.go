@@ -12,7 +12,14 @@ func checkAuthenticode(out string, err error) error {
 	if err != nil || len(lines) != 2 {
 		// Without PowerShell there is no telling whether this program is
 		// signed. Do not install blind if it might be.
-		return errors.New("could not read the signatures of this agent and the installer, so the installer was not installed")
+		why := strings.TrimSpace(out)
+		if err != nil {
+			why = err.Error()
+		}
+		if len(why) > 300 {
+			why = why[:300]
+		}
+		return errors.New("could not read the signatures of this agent and the installer, so the installer was not installed: " + why)
 	}
 	selfStatus, selfSigner, _ := strings.Cut(lines[0], "|")
 	newStatus, newSigner, _ := strings.Cut(lines[1], "|")
