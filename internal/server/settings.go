@@ -56,6 +56,7 @@ func (s *Server) serverSettings() api.ServerSettings {
 		out.TLSNames = []string{}
 	}
 	out.Hostname, _ = os.Hostname()
+	out.Port, out.Container = listenPort(s.Addr()), inContainer()
 	if abs, err := filepath.Abs(out.DataDir); err == nil {
 		out.DataDir = abs
 	}

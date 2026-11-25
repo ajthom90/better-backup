@@ -118,7 +118,10 @@ func partitionDevice(disk string, number int) string {
 }
 
 // mountedDevices maps devices to where they are mounted.
-func mountedDevices() map[string]string {
+func mountedDevices() map[string]string { return MountedDevices() }
+
+// MountedDevices maps devices to where they are mounted.
+func MountedDevices() map[string]string {
 	out := map[string]string{}
 	f, err := os.Open("/proc/self/mounts")
 	if err != nil {
@@ -144,7 +147,10 @@ func mountedDevices() map[string]string {
 
 // systemDisks finds the disks that hold the root and boot file systems,
 // looking through LVM, RAID and encryption layers to the disks beneath.
-func systemDisks() ([]string, error) {
+func systemDisks() ([]string, error) { return SystemDisks() }
+
+// SystemDisks finds the disks this machine starts from.
+func SystemDisks() ([]string, error) {
 	f, err := os.Open("/proc/self/mountinfo")
 	if err != nil {
 		return nil, err

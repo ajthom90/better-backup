@@ -174,10 +174,12 @@ async function refresh() {
     stat(offsiteSummary(off), "offsite copy"), stat(health.disk.known ? size(health.disk.free) : "unknown", "free on the repository's disk"));
   table("agents", ["Name", "Host", "System", "Version", "State", "Last seen", ""],
     agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, a.version, pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen),
-      a.revoked || !can("operator") ? "" : confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); })]),
+      a.revoked || !can("operator") ? "" : el("div", { className: "acts" },
+        can("admin") ? button("Log", async () => { const r = await call("POST", "/api/v1/agents/" + a.id + "/browse", { kind: "log" }); if (r.error) throw new Error(r.error); logDialog("Log of the agent on " + a.name, a.name + "-agent.log", r.text); }) : "",
+        confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); }))]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
-  table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
-    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : [], p.bare_metal ? ["whole machine"] : [], p.m365 ? [m365Summary(p.m365)] : []).join(", "),
+  table("policies", ["Name", "Machines", "Paths", "Schedule", "Keeps", ""],
+    policies.map(p => [p.name, (p.agent_ids && p.agent_ids.length ? p.agent_ids : [p.agent_id]).map(id => agentNames[id] || id).join(", "), (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : [], p.bare_metal ? ["whole machine"] : [], p.m365 ? [m365Summary(p.m365)] : []).join(", "),
       (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
       keeps(p.retention),
       el("div", { className: "acts need-operator" },
@@ -238,6 +240,47 @@ function keeps(r) {
   return parts.length ? parts.join(", ") : "everything";
 }
 const lines = v => v.split("\n").map(x => x.trim()).filter(Boolean);
+
+// picker makes a button that asks the chosen machine what it has (its folders, volumes, disks or virtual machines)
+// and a list to tick from, which fills the field. Typing in the field still works: the list is a help, not the only way.
+function picker(id, label, agent, field, kind, extra) {
+  const box = el("div", { id: id + "Pick", className: "picklist", hidden: true });
+  const many = field.tagName === "TEXTAREA";
+  const get = () => (many ? field.value.split("\n") : field.value.split(",")).map(x => x.trim()).filter(Boolean);
+  const put = (value, on) => { const cur = get().filter(x => x !== value); if (on) cur.push(value); field.value = cur.join(many ? "\n" : ", "); };
+  const say = text => el("div", { className: "hint", textContent: text });
+  const show = async path => {
+    box.hidden = false;
+    box.replaceChildren(say("Asking " + (agent.selectedOptions[0] ? agent.selectedOptions[0].textContent : "the machine") + "…"));
+    try {
+      const res = await call("POST", "/api/v1/agents/" + agent.value + "/browse", Object.assign({ kind, path: path || "" }, extra ? extra() : {}));
+      if (res.error) throw new Error(res.error);
+      const rows = [];
+      const tick = (value, text, open) => {
+        const t = el("input", { type: "checkbox", checked: get().includes(value) });
+        t.onchange = () => put(value, t.checked);
+        return el("label", { className: "check" }, t, open ? el("button", { className: "link", type: "button", textContent: text, title: "Open this folder", onclick: ev => { ev.preventDefault(); show(value); } }) : text);
+      };
+      if (kind === "folders") {
+        const head = el("div", { className: "crumbs" });
+        if (res.up != null) head.append(el("button", { type: "button", textContent: "↑ Up", onclick: () => show(res.up) }));
+        head.append(el("strong", { textContent: res.path || "This machine" }));
+        rows.push(head);
+        if (res.path) rows.push(tick(res.path, "All of this folder"));
+      }
+      if (kind === "vms") rows.push(tick("*", "Every machine on the host, including ones added later"));
+      for (const e of res.entries) rows.push(tick(e.value, e.name + (kind === "folders" && e.dir ? "" : (e.size ? " · " + size(e.size) : "")) + (e.detail ? " · " + e.detail : ""), kind === "folders" && e.dir));
+      if (!res.entries.length) rows.push(say(kind === "folders" ? "This folder is empty." : "Nothing was found."));
+      if (res.truncated) rows.push(say("There is more here than can be shown. Type the path of what is missing."));
+      if (kind === "folders") rows.push(say("Tick what to back up. Click a folder's name to look inside it."));
+      box.replaceChildren(...rows);
+    } catch (e) { const m = e.message.charAt(0).toUpperCase() + e.message.slice(1).replace(/\.$/, ""); box.replaceChildren(say(m + "." + (/type the/i.test(m) ? "" : " You can still type it in the box above."))); }
+  };
+  const open = el("button", { id: id + "Browse", type: "button", textContent: label, style: "margin-top:8px" });
+  open.onclick = () => { if (box.hidden) show(""); else box.hidden = true; };
+  agent.addEventListener("change", () => { box.hidden = true; });
+  return el("div", null, open, box);
+}
 // m365Summary says in a few words what a policy takes from Microsoft 365.
 function m365Summary(m) {
   const t = m365List.find(x => x.id === m.tenant);
@@ -247,11 +290,26 @@ function m365Summary(m) {
 
 // policyDialog creates a policy, or edits p when one is given.
 function policyDialog(p) {
-  const active = agentList.filter(a => !a.revoked || (p && a.id === p.agent_id));
-  if (!active.length) { notice("Add an agent first", "A policy backs up one machine, so enroll an agent before creating a policy."); return; }
+  const mine = p ? (p.agent_ids && p.agent_ids.length ? p.agent_ids : [p.agent_id]) : [];
+  const active = agentList.filter(a => !a.revoked || mine.includes(a.id));
+  if (!active.length) { notice("Add an agent first", "A policy says which machines to back up, so enroll an agent before creating a policy."); return; }
   const name = el("input", { value: p ? p.name : "", placeholder: "For example: File server documents" });
   const agent = el("select", null, ...active.map(a => el("option", { value: a.id, textContent: a.name + " (" + a.os + ")" })));
   if (p) agent.value = p.agent_id;
+  // A policy can back up several machines, each on its own. The list of ticks says which; the select above then only
+  // says which of them the Browse buttons look at.
+  const ticks = active.map(a => el("input", { type: "checkbox", value: a.id, checked: p ? mine.includes(a.id) : active.length === 1 }));
+  const machines = el("div", { id: "machines", className: "picklist" }, ...active.map((a, i) => el("label", { className: "check" }, ticks[i], a.name + " (" + a.os + ")" + (a.revoked ? ", revoked" : a.online ? "" : ", offline"))));
+  const chosen = () => ticks.filter(t => t.checked).map(t => t.value);
+  const browseOn = el("div", { id: "browseOn", hidden: true }, el("label", { textContent: "The Browse buttons below look at" }), agent);
+  const syncMachines = () => {
+    const ids = chosen();
+    for (const o of agent.options) o.hidden = o.disabled = !ids.includes(o.value);
+    if (!ids.includes(agent.value) && ids.length) { agent.value = ids[0]; agent.dispatchEvent(new Event("change")); }
+    browseOn.hidden = ids.length < 2;
+  };
+  ticks.forEach(t => { t.onchange = syncMachines; });
+  syncMachines();
   const paths = el("textarea", { rows: 3, value: p ? (p.paths || []).join("\n") : "", placeholder: "One folder or file per line, for example D:\\Shares or /home" });
   const excludes = el("textarea", { rows: 2, value: p && p.excludes ? p.excludes.join("\n") : "", placeholder: "One pattern per line, for example *.tmp or node_modules" });
   const volumes = el("textarea", { rows: 2, value: p && p.volumes ? p.volumes.join("\n") : "", placeholder: "One per line, for example C: on Windows, /dev/vg0/data on Linux or /dev/zvol/tank/vm-disk on TrueNAS" });
@@ -325,6 +383,7 @@ function policyDialog(p) {
     m365Load, m365Pick);
   const showM365 = () => { m365Box.hidden = !m365Tenant.value; };
   m365Tenant.onchange = showM365;
+  const vmScratch = el("input", { id: "vmScratch", value: (p && p.vm_scratch_dir) || "", placeholder: "Leave empty for the host's usual place", spellcheck: false });
   const trackingBox = el("div");
   const showHyper = () => { const v = hypervisor.value === "vmware"; vmwareBox.hidden = !v; trackingBox.hidden = v; };
   hypervisor.onchange = showHyper;
@@ -333,7 +392,7 @@ function policyDialog(p) {
   save.onclick = async () => {
     const retention = {};
     for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
-    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "", vm_tracking: hypervisor.value === "vmware" ? "" : vmTracking.value, system_state: sysState.checked, truenas_config: trueNAS.checked,
+    const body = { name: name.value.trim(), agent_ids: chosen(), agent_id: chosen()[0] || "", paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "", vm_tracking: hypervisor.value === "vmware" ? "" : vmTracking.value, vm_scratch_dir: hypervisor.value === "vmware" || hypervisor.value === "hyperv" ? "" : vmScratch.value.trim(), system_state: sysState.checked, truenas_config: trueNAS.checked,
       bare_metal: bareMetal.checked, machine_disks: machineDisks.value.split(",").map(x => x.trim()).filter(Boolean),
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
@@ -356,24 +415,31 @@ function policyDialog(p) {
   buttons.append(el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), save);
   $("dlgBody").replaceChildren(el("h3", { textContent: p ? "Edit policy" : "New backup policy" }),
     el("label", { textContent: "Name" }), name,
-    el("label", { textContent: "Machine to back up" }), agent,
+    el("label", { textContent: "Machines to back up" }), machines,
+    el("div", { className: "hint", textContent: "Tick every machine this policy is for. Each is backed up on its own, with the same folders, schedule and rules, and keeps its own snapshots: “keep 14 daily” means 14 for each machine. A folder that a machine does not have is skipped there with a warning." }),
+    browseOn,
     el("label", { textContent: "Folders and files to back up" }), paths,
+    picker("paths", "Browse the machine…", agent, paths, "folders"),
     el("div", { className: "hint", textContent: "Files are read from a snapshot where there is one, so files in use are backed up as they were at one instant: VSS on Windows, and ZFS on TrueNAS and other systems with ZFS, where every dataset under these folders is included." }),
     el("label", { textContent: "Leave out (optional)" }), excludes,
     el("label", { className: "check" }, bareMetal, "Back up the whole machine, for bare-metal recovery"),
     el("div", { className: "hint", textContent: "Windows and Linux. Saves the layout of the disk the system starts from and an image of every partition on it, including the hidden boot and recovery partitions. With it the machine can be rebuilt on blank hardware from the recovery disc, or brought up as a virtual machine. See “Bare-metal recovery” at the top of the page." }),
     el("label", { textContent: "Disks to include in the whole-machine backup (optional)" }), machineDisks,
+    picker("disks", "Choose from the machine's disks…", agent, machineDisks, "disks"),
     el("div", { className: "hint", textContent: "Only needed for more than the system disk. Disk numbers on Windows, such as 0, 1. Devices on Linux, such as /dev/sda, /dev/sdb." }),
     el("label", { textContent: "Whole volumes to back up as images (optional)" }), volumes,
+    picker("volumes", "Choose from the machine's volumes…", agent, volumes, "volumes"),
     el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS. A ZFS volume (zvol) is read from a snapshot taken together with the folders above." }),
     el("label", { textContent: "Virtual machines (optional)" }), vms,
     el("div", { className: "hint", textContent: "Choose the agent on the virtual machine host: Hyper-V, Proxmox VE, or KVM with libvirt. For VMware choose it below, and any agent that reaches the VMware server. On Proxmox a machine can also be named by its id. Each machine is backed up while it runs, from a checkpoint or a backup job of the hypervisor." }),
-    el("label", { textContent: "Hypervisor" }), hypervisor, vmwareBox, trackingBox,
+    el("label", { textContent: "Hypervisor" }), hypervisor, vmwareBox,
+    picker("vms", "Choose from the host's virtual machines…", agent, vms, "vms", () => ({ hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "" })),
+    trackingBox,
     el("label", { textContent: "Microsoft 365 (optional)" }), m365Tenant,
     el("div", { className: "hint", textContent: m365List.length ? "Mailboxes and OneDrive are read from Microsoft over the internet, so the machine chosen above only has to reach the internet; nothing of it needs to be on that machine. The first backup downloads everything, later ones only what is new or changed. A policy can hold nothing else." : "Add your tenant first: close this and choose “Microsoft 365” at the top." }),
     m365Box,
     el("label", { className: "check" }, sysState, "Windows: back up the system state"),
-    el("div", { className: "hint", textContent: "The registry, boot and system files, and on a domain controller the Active Directory database and SYSVOL. It can be restored to a folder; restoring it over a running system is not built yet." }),
+    el("div", { className: "hint", textContent: "The registry, boot and system files, and on a domain controller the Active Directory database and SYSVOL. It can be restored to a folder, or put back over the machine it came from." }),
     el("label", { className: "check" }, trueNAS, "TrueNAS: back up the system configuration"),
     el("div", { className: "hint", textContent: "Every setting of the TrueNAS system (pools, shares, users, apps, network) and the secret seed that unlocks the passwords saved in it. It is restored to a folder as truenas-config.tar, which TrueNAS takes back under System, General Settings, Manage Configuration, Upload File." }),
     el("label", { textContent: "Schedule" }), el("div", { className: "two" }, kind, el("div", null, at, every)),
@@ -385,6 +451,11 @@ function policyDialog(p) {
     err, buttons);
   trackingBox.append(el("label", { textContent: "How virtual machine disks are read" }), vmTracking,
     el("div", { className: "hint", textContent: "Reading only what changed is much faster and relies on the hypervisor's change tracking. Run a few backups with the checking option first: it reads everything and warns if the tracking missed a change." }));
+  const scratchBox = el("div", { id: "vmScratchBox" }, el("label", { textContent: "Scratch folder on a KVM or Proxmox host (optional)" }), vmScratch,
+    el("div", { className: "hint", textContent: "While a running machine is backed up, what it overwrites is kept in this folder until the backup ends. Empty uses /var/lib/libvirt/images on KVM and /var/tmp on Proxmox. Name a folder on a disk with room when a busy machine fills that." }));
+  trackingBox.append(scratchBox);
+  const showScratch = () => { scratchBox.hidden = hypervisor.value === "hyperv"; };
+  hypervisor.addEventListener("change", showScratch); showScratch();
   showHyper(); showM365();
   $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
 }
@@ -936,7 +1007,14 @@ function restoreDialog(s, path) {
     el("div", { className: "warn", textContent: "This replaces Windows system files, and by default the whole registry, on " + s.hostname + " with their state at the time of this backup. Programs and drivers installed since will stop working. It is finished by a restart and cannot be undone." }),
     el("label", { className: "check" }, sysReg, "Restore the registry too"),
     el("label", { className: "check" }, sysRestart, "Restart Windows when the restore is done"),
-    el("div", { className: "hint", textContent: "On a domain controller, start Windows in Directory Services Restore Mode first: Active Directory cannot be replaced while it runs. The agent keeps running there." }),
+    el("div", { className: "hint", textContent: "On a domain controller, start Windows in Directory Services Restore Mode first: Active Directory cannot be replaced while it runs. The agent keeps running there. The buttons below restart the machine into that mode and, if you change your mind, back out of it; a restore with “Restart Windows” ticked leaves the mode by itself." }),
+    el("div", { className: "acts", style: "margin-top:8px" },
+      ...[[false, "dsrmEnter", "Restart " + s.hostname + " into Directory Services Restore Mode…", "The domain controller restarts in one minute and comes back with Active Directory stopped. Until it is restarted out of that mode it serves no sign-ins. Wait for its agent to show as online again, then start the restore."],
+          [true, "dsrmLeave", "Restart it back to normal…", "The domain controller restarts in one minute and comes back with Active Directory running."]].map(([leave, id, label, why]) =>
+        el("button", { id, type: "button", textContent: label, onclick: () => withPassword(label.replace("…", ""), why, "Restart the machine", async password => {
+          const r = await call("POST", "/api/v1/agents/" + s.agent_id + "/dsrm", { leave, password });
+          notice("The machine is restarting", s.hostname + " is " + r.text + ".");
+        }, async () => restoreDialog(s, path)) }))),
     el("label", { className: "check" }, sysAuthVol, "Domain controller: make this SYSVOL the authoritative copy"),
     el("div", { className: "hint", textContent: "Leave this off unless every domain controller lost SYSVOL. Off, the restored SYSVOL is brought up to date from the other domain controllers." }),
     el("label", { textContent: "Domain controller: restore these parts of Active Directory authoritatively (optional)" }), sysAuthDN,
@@ -1177,7 +1255,9 @@ async function addAgentDialog() {
     const first = files[0] ? files[0].name : os === "windows" ? "better-backup-agent.msi" : "the agent package";
     const how = os === "windows"
       ? ["Run the installer on the machine and paste the code when it asks for it.", "Or install without any dialogs, from a script or Group Policy:", "msiexec /i " + first + " /qn ENROLL_CODE=" + c]
-      : ["Install the agent on the machine, then open “better-backup agent” there and paste the code.", "Or register it from a terminal:", "sudo bb-agent enroll " + c];
+      : os === "darwin"
+      ? ["Open the installer on the Mac. If macOS will not open it because it is not signed yet, open System Settings, Privacy & Security, and choose “Open Anyway”. The Better Backup app opens when the installer is done: paste the code there and press Connect. The app then shows how to give the agent Full Disk Access.", "Or register it from Terminal:", "sudo bb-agent enroll " + c]
+      : ["Install the package on the machine, then register it from a terminal:", "The command, with the code in it:", "sudo bb-agent enroll " + c];
     silent.set(how[2]);
     steps.replaceChildren(el("label", { textContent: "1. Download the agent installer" }), ...links, el("div", { className: "hint", textContent: which[system.value] }),
       el("label", { textContent: "2. Give the agent this enrollment code" }), code.box, el("div", { className: "hint", textContent: how[0] + " The code works " + (t.uses > 1 ? "for " + t.uses + " machines" : "once") + ", until " + when(t.expires) + "." }),
@@ -1417,6 +1497,14 @@ function withPassword(title, why, action, fn, back) {
     el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => back ? back().catch(() => $("dlg").close()) : $("dlg").close() }), go));
   pass.focus();
 }
+// logDialog shows log lines with a way to save them, for whoever is asked "what does the log say?".
+function logDialog(title, file, text, back) {
+  const pre = el("pre", { id: "logText", textContent: text || "Nothing has been logged since the program started.", style: "max-height:60vh;overflow:auto;white-space:pre-wrap;font-size:12px" });
+  openDialog(true, el("h3", { textContent: title }),
+    el("div", { className: "hint", textContent: "The newest lines, since the program last started. The newest are at the bottom." }), pre,
+    el("div", { className: "row" }, el("button", { textContent: "Download", onclick: () => download(file, text) }), el("button", { textContent: "Close", onclick: () => back ? back().catch(() => $("dlg").close()) : $("dlg").close() })));
+  pre.scrollTop = pre.scrollHeight;
+}
 function downloadKey(back) {
   withPassword("Download the repository key", "The key opens every backup on this server and in the offsite copy. Keep the file somewhere other than this server, such as a password manager or a printout in a safe.", "Download the key", async password => {
     const r = await call("POST", "/api/v1/settings/repo-key", { password });
@@ -1476,6 +1564,21 @@ async function settingsDialog() {
       el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => settingsDialog().catch(() => $("dlg").close()) })));
   }, settingsDialog);
   const key = el("button", { id: "downloadKey", textContent: "Download the repository key…", onclick: () => downloadKey(settingsDialog) });
+  const repoDir = el("input", { id: "repoDir", value: st.repo_dir, spellcheck: false });
+  const port = el("input", { id: "port", type: "number", min: 1, max: 65535, value: st.port || "" });
+  const savePlace = el("button", { id: "savePlace", textContent: "Change the folder or the port…" });
+  savePlace.onclick = () => {
+    const want = { repo_dir: repoDir.value.trim(), port: parseInt(port.value, 10) || 0 };
+    if (want.repo_dir === st.repo_dir && want.port === st.port) { say("Nothing was changed."); return; }
+    withPassword("Change the folder or the port", "The server stops for a moment and starts again with the backups in " + want.repo_dir + ", on port " + want.port + ". Running jobs must be done first.", "Change and start again", async password => {
+      const r = await call("PUT", "/api/v1/settings/place", Object.assign({ password }, want));
+      if (!r.restarting) { await settingsDialog(); return; }
+      const url = location.protocol + "//" + location.hostname + ":" + r.port + "/";
+      openDialog(false, el("h3", { textContent: "The server is starting again" }),
+        el("p", { id: "placeDone" }, "In a few seconds it is back at ", el("a", { href: url, textContent: url }), want.port !== st.port ? ". Your browser may ask about the certificate again, because the address is new." : "."),
+        el("div", { className: "row" }, el("button", { className: "primary", textContent: "Open it", onclick: () => { location.href = url; } })));
+    }, settingsDialog);
+  };
   openDialog(true, el("h3", { textContent: "Settings" }),
     el("h4", { textContent: "Repository key" }),
     el("div", { className: "hint", textContent: (st.key_source === "environment" ? "The key comes from BB_REPO_PASSPHRASE. " : "The key is in repo.key in the data folder. ") + "Last downloaded: " + when(st.key_saved || "") + "." }),
@@ -1493,11 +1596,23 @@ async function settingsDialog() {
     ixSay, el("div", { style: "margin-top:8px" }, rebuild),
     el("h4", { textContent: "Command line access" }),
     el("div", { style: "margin-top:8px" }, newToken),
+    el("h4", { textContent: "Where the backups are kept, and the port" }),
+    ...(st.container
+      ? [el("dl", null, el("dt", { textContent: "Folder for the backups" }), el("dd", { textContent: st.repo_dir }), el("dt", { textContent: "Port" }), el("dd", { textContent: String(st.port || st.listen) })),
+         el("div", { className: "hint", id: "placeHint", textContent: "This server runs in a container (Docker or a TrueNAS app), so these two belong to the container: the backups are whatever disk or dataset is mounted at " + st.repo_dir + ", and the port is the one the container publishes. Change them where the container is set up." })]
+      : [el("label", { textContent: "Folder for the backups" }), repoDir,
+         el("div", { className: "hint", textContent: "A new server can be pointed at an empty folder, such as one on a bigger disk. Once there are backups, copy the folder to the new place yourself while no backup runs, then give the new folder here: the server checks the copy is complete before it switches." }),
+         el("label", { textContent: "Port" }), port,
+         el("div", { className: "hint", textContent: "Agents and browsers reach the server on this port. Agents that are already registered keep the old port, so change it before adding agents, or register them again afterwards. On Windows the server opens the new port in Windows Firewall." }),
+         el("div", { style: "margin-top:8px" }, savePlace)]),
+    el("h4", { textContent: "Server log" }),
+    el("div", { style: "margin-top:8px" }, el("button", { id: "showLog", textContent: "Show the server's log", onclick: async () => { try { const r = await call("POST", "/api/v1/settings/log"); logDialog("Server log", "better-backup-server.log", r.text, settingsDialog); } catch (e) { say(e.message); } } })),
+    el("div", { className: "hint", textContent: "Each agent's log is under “Log” in the list of agents." }),
     el("h4", { textContent: "Where things are" }),
-    el("dl", null, el("dt", { textContent: "Data folder" }), el("dd", { textContent: st.data_dir }), el("dt", { textContent: "Repository" }), el("dd", { textContent: st.repo_dir }),
-      el("dt", { textContent: "Listens on" }), el("dd", { textContent: st.listen }), el("dt", { textContent: "Certificate fingerprint" }), el("dd", { textContent: st.fingerprint }),
+    el("dl", null, el("dt", { textContent: "Data folder" }), el("dd", { textContent: st.data_dir }),
+      el("dt", { textContent: "Certificate fingerprint" }), el("dd", { textContent: st.fingerprint }),
       el("dt", { textContent: "Own configuration saved" }), el("dd", { textContent: when(st.state_saved || "") })),
-    el("div", { className: "hint", textContent: "The folders and the port are chosen when the server is installed. The server saves its own configuration (users, agents, policies, settings) into the repository every day and before each offsite copy, so a recovered server gets it back." }),
+    el("div", { className: "hint", textContent: "The server saves its own configuration (users, agents, policies, settings) into the repository every day and before each offsite copy, so a recovered server gets it back." }),
     msg, el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
 }
 $("settings").onclick = () => settingsDialog().catch(e => notice("Something went wrong", e.message));

@@ -178,9 +178,26 @@ func (s *Server) policies(where string, args ...any) ([]*api.Policy, error) {
 		if err := json.Unmarshal([]byte(spec), p); err != nil {
 			return nil, err
 		}
+		p.AgentIDs = p.Machines()
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// policiesOf returns the policies that back up an agent's machine, oldest
+// first.
+func (s *Server) policiesOf(agentID string) ([]*api.Policy, error) {
+	ps, err := s.policies(`ORDER BY created`)
+	if err != nil {
+		return nil, err
+	}
+	out := ps[:0]
+	for _, p := range ps {
+		if p.Covers(agentID) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
 func (s *Server) policy(id string) (*api.Policy, error) {

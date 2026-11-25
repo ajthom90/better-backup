@@ -31,9 +31,11 @@ import (
 	"github.com/ajthom90/better-backup/internal/agentctl"
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/backup"
+	"github.com/ajthom90/better-backup/internal/browse"
 	"github.com/ajthom90/better-backup/internal/hypervisor"
 	_ "github.com/ajthom90/better-backup/internal/hypervisor/all"
 	"github.com/ajthom90/better-backup/internal/keys"
+	"github.com/ajthom90/better-backup/internal/logring"
 	"github.com/ajthom90/better-backup/internal/m365"
 	"github.com/ajthom90/better-backup/internal/restore"
 	"github.com/ajthom90/better-backup/internal/tree"
@@ -297,6 +299,8 @@ func (a *Agent) setState(f func(*state)) {
 
 // New loads the agent identity saved in dir.
 func New(dir string, log *slog.Logger) (*Agent, error) {
+	// Keep the newest log lines, for the server's web UI to show.
+	log = logring.Logger(log)
 	cfg, err := loadConfig(dir)
 	if err != nil {
 		return nil, err
@@ -317,6 +321,7 @@ func New(dir string, log *slog.Logger) (*Agent, error) {
 // Run polls for jobs until ctx is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
 	a.log.Info("better-backup agent started", "server", a.cfg.Server, "agent", a.cfg.AgentID, "version", Version)
+	go a.answerQueries(ctx)
 	backoff := time.Second
 	// Until the server has answered once, ask without waiting for work:
 	// whoever is watching wants to know now whether the server is there.
@@ -357,6 +362,64 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.runJob(ctx, &j)
 	}
 	return nil
+}
+
+// answerQueries waits for the server's questions about this machine
+// (what folders, disks and virtual machines it has, for someone writing
+// a policy) and answers them. It has a connection of its own, so that
+// questions are answered while a backup runs.
+func (a *Agent) answerQueries(ctx context.Context) {
+	pause := func(d time.Duration) {
+		select {
+		case <-ctx.Done():
+		case <-time.After(d):
+		}
+	}
+	backoff := 5 * time.Second
+	for ctx.Err() == nil {
+		data, code, err := a.c.pollOnce(ctx, "/agent/v1/queries/next?wait=25")
+		if err != nil {
+			if code == http.StatusNotFound {
+				// An older server, which has no questions.
+				pause(10 * time.Minute)
+				continue
+			}
+			pause(backoff)
+			backoff = min(backoff*2, time.Minute)
+			continue
+		}
+		backoff = 5 * time.Second
+		if code == http.StatusNoContent {
+			continue
+		}
+		var q api.AgentQuery
+		if err := json.Unmarshal(data, &q); err != nil || q.ID == "" {
+			continue
+		}
+		go func() {
+			// Shorter than the server waits (browseWait there), so a slow
+			// list is answered with its reason and not with silence.
+			qctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+			defer cancel()
+			res := &api.BrowseResult{Entries: []api.BrowseEntry{}, Error: "this agent version cannot answer that; update the agent"}
+			switch {
+			case q.Browse != nil:
+				res = browse.Run(qctx, q.Browse)
+			case q.Action == api.ActionEnterDSRM || q.Action == api.ActionLeaveDSRM:
+				text, err := restore.RestartDSRM(q.Action == api.ActionEnterDSRM)
+				res = &api.BrowseResult{Entries: []api.BrowseEntry{}, Text: text}
+				if err != nil {
+					res.Error = err.Error()
+				}
+				a.log.Info("asked to restart for Directory Services Restore Mode", "action", q.Action, "result", text, "err", err)
+			}
+			actx, acancel := context.WithTimeout(ctx, 15*time.Second)
+			defer acancel()
+			if err := a.c.json(actx, "POST", "/agent/v1/queries/"+q.ID, res, nil); err != nil {
+				a.log.Warn("could not answer the server's question", "err", err)
+			}
+		}()
+	}
 }
 
 func newRequest(ctx context.Context, method, url string) (*http.Request, error) {
@@ -627,7 +690,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		}
 		for _, name := range vms {
 			opts.VMs = append(opts.VMs, backup.VMSource{Name: name, Open: func(vm *backup.VMSource, prev []byte) error {
-				fz, err := drv.Freeze(jctx, vm.Name, hypervisor.Options{Tracking: j.Backup.VMTracking != "", Previous: prev,
+				fz, err := drv.Freeze(jctx, vm.Name, hypervisor.Options{Tracking: j.Backup.VMTracking != "", Previous: prev, ScratchDir: j.Backup.VMScratchDir,
 					Tag: j.ID, Scope: j.PolicyID, StateDir: a.dir, Connection: j.Backup.Connection})
 				if err != nil {
 					return err

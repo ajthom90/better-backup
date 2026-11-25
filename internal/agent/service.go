@@ -16,6 +16,7 @@ import (
 
 	"github.com/ajthom90/better-backup/internal/agentctl"
 	"github.com/ajthom90/better-backup/internal/api"
+	"github.com/ajthom90/better-backup/internal/logring"
 )
 
 // Service is the agent as it is installed: a program that always runs.
@@ -45,9 +46,7 @@ type Service struct {
 
 // NewService returns the service for the agent state in dir.
 func NewService(dir string, log *slog.Logger) *Service {
-	if log == nil {
-		log = slog.Default()
-	}
+	log = logring.Logger(log)
 	return &Service{dir: dir, socket: agentctl.SocketPath(dir), log: log, changed: make(chan struct{}, 1)}
 }
 

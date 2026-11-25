@@ -92,9 +92,11 @@ func (s *Server) schedule(now time.Time) {
 		if !due(p, fromMS(last), now) {
 			continue
 		}
-		if j, err := s.enqueueBackup(p); err != nil {
+		js, err := s.enqueuePolicy(p)
+		if err != nil {
 			s.log.Error("scheduling backup", "policy", p.Name, "err", err)
-		} else if j != nil {
+		}
+		for _, j := range js {
 			s.log.Info("scheduled backup", "policy", p.Name, "job", j.ID)
 		}
 	}

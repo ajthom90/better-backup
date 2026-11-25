@@ -148,9 +148,14 @@ type Retention struct {
 }
 
 type Policy struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	AgentID  string   `json:"agent_id"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	AgentID string `json:"agent_id"`
+	// AgentIDs are all the machines the policy backs up, each on its
+	// own: one job, and one line of snapshots with its own retention,
+	// per machine. AgentID is the first of them; a policy saved with
+	// only AgentID has that one machine.
+	AgentIDs []string `json:"agent_ids,omitempty"`
 	Paths    []string `json:"paths"`
 	Excludes []string `json:"excludes,omitempty"`
 	// Volumes are backed up as block-level images: drive letters such as
@@ -171,6 +176,10 @@ type Policy struct {
 	// backup, and "check" reads them in full and warns where the
 	// tracking was wrong.
 	VMTracking string `json:"vm_tracking,omitempty"`
+	// VMScratchDir is a folder on a KVM or Proxmox host where the old
+	// contents of what a machine overwrites during its backup are kept
+	// until the backup ends. Empty: the host's usual place.
+	VMScratchDir string `json:"vm_scratch_dir,omitempty"`
 	// SystemState backs up what Windows needs to bring a machine's
 	// identity back: the registry, boot and system files, and on a domain
 	// controller the Active Directory database and SYSVOL.
@@ -207,6 +216,7 @@ type BackupSpec struct {
 	VMs           []string `json:"vms,omitempty"`
 	Hypervisor    string   `json:"hypervisor,omitempty"`
 	VMTracking    string   `json:"vm_tracking,omitempty"`
+	VMScratchDir  string   `json:"vm_scratch_dir,omitempty"`
 	SystemState   bool     `json:"system_state,omitempty"`
 	TrueNASConfig bool     `json:"truenas_config,omitempty"`
 	// BareMetal and MachineDisks are as in Policy.
@@ -836,6 +846,20 @@ type ServerSettings struct {
 	// StateSaved is when the server's own configuration was last saved
 	// into the repository.
 	StateSaved *time.Time `json:"state_saved,omitempty"`
+	// Port is the port of Listen.
+	Port int `json:"port,omitempty"`
+	// Container: the server runs in a container, where the folder and
+	// the port belong to the container's definition and cannot be
+	// changed from inside.
+	Container bool `json:"container,omitempty"`
+}
+
+// PlaceRequest changes where the repository is kept and the port the
+// server listens on. The server starts again to apply it.
+type PlaceRequest struct {
+	RepoDir  string `json:"repo_dir"`
+	Port     int    `json:"port"`
+	Password string `json:"password,omitempty"`
 }
 
 // ProtectionSettings is how the server guards its backups against
@@ -914,4 +938,89 @@ type Suspicion struct {
 	// ReviewedBy and Reviewed are set once someone said it is fine.
 	ReviewedBy string     `json:"reviewed_by,omitempty"`
 	Reviewed   *time.Time `json:"reviewed,omitempty"`
+}
+
+// Kinds of things an agent can list on its machine for the web UI.
+const (
+	BrowseFolders = "folders" // the folders and files under Path
+	BrowseVolumes = "volumes" // volumes and block devices that can be imaged
+	BrowseDisks   = "disks"   // whole disks, for a whole-machine backup
+	BrowseVMs     = "vms"     // virtual machines of a hypervisor
+	BrowseLog     = "log"     // not a list: the agent's newest log lines, in Text
+)
+
+// BrowseRequest asks an agent what is on its machine, so that someone
+// writing a policy can pick instead of type.
+type BrowseRequest struct {
+	Kind string `json:"kind"`
+	// Path is the folder to list; empty asks for where to start (the
+	// drives on Windows, / elsewhere).
+	Path string `json:"path,omitempty"`
+	// Hypervisor and VMwareServer are as in a policy, for BrowseVMs.
+	Hypervisor   string `json:"hypervisor,omitempty"`
+	VMwareServer string `json:"vmware_server,omitempty"`
+	// Connection is filled in by the server for the agent.
+	Connection *hypervisor.Connection `json:"connection,omitempty"`
+}
+
+// BrowseEntry is one thing found. Value is what goes into the policy.
+type BrowseEntry struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Dir    bool   `json:"dir,omitempty"`
+	Size   int64  `json:"size,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// BrowseResult is an agent's answer.
+type BrowseResult struct {
+	// Path is the folder that was listed, as the machine spells it.
+	Path string `json:"path,omitempty"`
+	// Up is the folder above it; nil at the top.
+	Up        *string       `json:"up,omitempty"`
+	Entries   []BrowseEntry `json:"entries"`
+	Truncated bool          `json:"truncated,omitempty"`
+	Error     string        `json:"error,omitempty"`
+	// Text is the answer to BrowseLog.
+	Text string `json:"text,omitempty"`
+}
+
+// AgentQuery is a question the server asks an agent outside its jobs;
+// the agent answers at once, also while a job runs.
+type AgentQuery struct {
+	ID     string         `json:"id"`
+	Browse *BrowseRequest `json:"browse,omitempty"`
+	// Action is something to do at once instead; the answer's Text says
+	// what was done.
+	Action string `json:"action,omitempty"`
+}
+
+// Actions an agent can be asked for outside a job.
+const (
+	// ActionEnterDSRM restarts a domain controller into Directory
+	// Services Restore Mode, where Active Directory can be restored.
+	ActionEnterDSRM = "dsrm-enter"
+	// ActionLeaveDSRM restarts it back into normal operation.
+	ActionLeaveDSRM = "dsrm-leave"
+)
+
+// Machines returns the agents a policy backs up.
+func (p *Policy) Machines() []string {
+	if len(p.AgentIDs) > 0 {
+		return p.AgentIDs
+	}
+	if p.AgentID != "" {
+		return []string{p.AgentID}
+	}
+	return nil
+}
+
+// Covers says whether the policy backs up this agent's machine.
+func (p *Policy) Covers(agentID string) bool {
+	for _, id := range p.Machines() {
+		if id == agentID {
+			return true
+		}
+	}
+	return false
 }
