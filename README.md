@@ -128,9 +128,11 @@ docker run -d --name better-backup -p 8443:8443 \
   ghcr.io/ajthom90/better-backup:latest
 ```
 
-Images are published to GitHub's registry: `:latest` and `:vX.Y.Z` for releases,
-and `:edge` for the newest commit on `main`. Until the first release exists, use
-`:edge`. The agent image is `ghcr.io/ajthom90/better-backup-agent`.
+Images are published to GitHub's registry. `:latest` is the newest release,
+`:1.4.2` one release exactly and `:1.4` that line with its fixes; `:edge` is
+the newest commit on `main`. Until the first release exists, use `:edge`. The
+agent image is `ghcr.io/ajthom90/better-backup-agent`. See
+[Versions and updates](#versions-and-updates).
 
 On Windows, run the server installer: see [Windows installers](#windows-installers).
 
@@ -194,6 +196,54 @@ finds the page first.)
 > **Download the repository key now.** The page reminds you until you have:
 > "Download the key" saves `repo.key`. Backups are encrypted with it. If the
 > key is lost, the backups cannot be read by anyone.
+
+### Versions and updates
+
+Versions follow [Semantic Versioning](https://semver.org). A release is three
+numbers, such as `1.4.2`: the last grows with fixes, the middle one with new
+features, the first when something you rely on changes in a way that needs
+your attention. A build from the `main` branch between releases is numbered
+like `1.4.3-edge.12`, the twelfth change after 1.4.2. The server, the agents,
+the installers and the images of one build all carry the same number.
+
+There are two channels:
+
+| Channel | What | Container tag |
+|---|---|---|
+| **stable** | Releases. Tested, with release notes. | `:latest`, or `:1.4` to stay on a line, or `:1.4.2` to stay put |
+| **edge** | Every change to `main`, minutes after it lands. May break; for test servers. | `:edge` |
+
+**The server tells you when a newer version is out.** Click the version at
+the top of the web UI to open **Updates**: it shows the newer version, what is
+new in it (the release notes of every version between yours and the newest),
+how to update this server, and the installer to download. A banner on the
+front page says so too, and an alert goes out once per version, wherever your
+other alerts go. Under Updates you choose the channel, and can turn off the
+alert or the check itself.
+
+To check, the server reads the public list of releases on github.com twice a
+day. The request carries nothing about your server: no identifier, no
+version, no counts; the comparison happens on your server. Nothing is
+downloaded or installed by itself. A server without a way to the internet
+simply shows that the check failed; turn it off under Updates, or point
+`BB_UPDATE_URL` at a copy of the list inside your network.
+
+Updating the server:
+
+- **Docker**: `docker compose pull && docker compose up -d` (or `docker pull`
+  and start the container again). On TrueNAS, open Apps and update the app.
+- **Windows, macOS**: download the server installer of the new version and
+  run it. It installs over the old one.
+- **Linux packages**: install the new `.deb` or `.rpm` over the old one.
+
+Settings, agents and backups stay as they are. Agents that
+[update by themselves](#2-enroll-a-machine) then follow the server. The
+Windows installers refuse to go back to an older version.
+
+What changed in each release is in [CHANGELOG.md](CHANGELOG.md), and on the
+[releases page](https://github.com/ajthom90/better-backup/releases).
+[docs/versioning.md](docs/versioning.md) has the rules in full, and how a
+release is made.
 
 ### Users, roles and the activity log
 
@@ -480,7 +530,7 @@ and SYSTEM. The services log to `server.log` and `agent.log` in those folders.
 
 A server in Docker carries the agent installers for every system: the
 Windows `.msi`, the Linux `.deb` and `.rpm` (each for x64 and ARM64) and the
-macOS `.pkg`. The `:edge` image carries the newest build, version `0.0.N`.
+macOS `.pkg`, all of the server's own version.
 "Add an agent" offers them, and a machine without a browser can fetch one
 from `https://THE-SERVER:8443/installers/NAME` (with `curl -k`, because of the
 server's private certificate; the enrollment code is what proves the server

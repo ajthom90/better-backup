@@ -103,12 +103,18 @@ nfpms:
       preremove: packaging/scripts/preremove-agent.sh
 
 # Builds that are not a release (CI, and the Docker workflow's "edge"
-# packages) are numbered by BB_SNAPSHOT_VERSION when it is set.
+# packages) are numbered by BB_SNAPSHOT_VERSION when it is set: the
+# workflows pass what "go run ./internal/tools/release version" prints, such as
+# 0.1.1-edge.12. In a .deb or .rpm that is version 0.1.1~edge.12, which
+# the package managers sort before 0.1.1.
 snapshot:
   version_template: '{{ envOrDefault "BB_SNAPSHOT_VERSION" (print .Version "-SNAPSHOT-" .ShortCommit) }}'
 
 checksum:
   name_template: checksums.txt
 
+# The release notes come from CHANGELOG.md and changelog.d, and the
+# release workflow publishes the release itself, with the installers
+# built on other machines: see .github/workflows/release.yml.
 changelog:
-  use: github
+  disable: true

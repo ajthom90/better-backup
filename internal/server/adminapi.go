@@ -29,6 +29,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	out.Snapshots, out.RunningJobs = len(s.snaps), len(s.running)
 	s.mu.Unlock()
 	out.KeySaved = s.setting("key_saved") != ""
+	out.UpdateAvailable = s.serverUpdate().Latest
 	reply(w, http.StatusOK, out)
 }
 

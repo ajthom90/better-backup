@@ -19,7 +19,10 @@
   <Package Name="better-backup server" Manufacturer="better-backup" Version="$(Version)"
            UpgradeCode="5C0B8C4E-5E0B-4F0B-9E57-0C1F4E1B7B01" Scope="perMachine" InstallerVersion="500" Compressed="yes">
     <SummaryInformation Description="better-backup server: stores backups and coordinates agents." />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of the better-backup server is already installed." />
+    <!-- A build with the same three numbers replaces the one installed: builds
+         between releases differ in the fourth number only, which Windows
+         Installer does not compare. Lower numbers are refused. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of the better-backup server is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- An upgrade finds the earlier answers here; they win over the command line. -->

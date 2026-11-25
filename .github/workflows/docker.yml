@@ -1,15 +1,22 @@
 name: Docker
 
-# Publishes the images from every commit on main to ghcr.io, tagged
-# "edge" and with the commit id. Releases (version tags) are published by
-# release.yml as the version and "latest".
+# The "edge" channel: every commit on main is built, numbered (such as
+# 0.1.1-edge.12: the twelfth commit after release 0.1.0) and published
+#   - as images on ghcr.io, tagged "edge", with that version and with the
+#     commit id, and
+#   - as the GitHub pre-release "edge", which holds the installers and
+#     what changed since the last release. It is replaced by each build.
+#     Servers that follow the edge channel read it to learn of a newer
+#     build.
+# Releases are published by release.yml. docs/versioning.md has the
+# whole policy.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # replace the "edge" pre-release
   packages: write # push images to ghcr.io
 
 concurrency:
@@ -17,12 +24,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  version:
+    # One version for everything this run builds.
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the version is counted from the last release
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - id: v
+        run: |
+          version="$(go run ./internal/tools/release version)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version $version" >> "$GITHUB_STEP_SUMMARY"
+
   msi:
-    # The Windows agent installers, for x64 and ARM64. The server image
-    # carries these and the Linux and macOS ones below, so that its web
-    # UI can hand them out before there is a release. Between releases it is version
-    # 0.0.RUN, so that a newer one upgrades an older one.
+    # The Windows installers, for x64 and ARM64. The server image
+    # carries the agent's, and the Linux and macOS ones below, so that
+    # its web UI can hand them out and agents can update from it.
     name: Windows installers
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +57,7 @@ jobs:
           go-version-file: go.mod
       - name: Build
         shell: pwsh
-        run: ./packaging/windows/build.ps1 -Version 0.0.${{ github.run_number }} -Arch amd64,arm64
+        run: ./packaging/windows/build.ps1 -Version ${{ needs.version.outputs.version }} -Arch amd64,arm64
       - uses: actions/upload-artifact@v4
         with:
           name: better-backup-windows-installers
@@ -39,9 +65,10 @@ jobs:
           retention-days: 30
 
   packages:
-    # The Linux agent packages (.deb and .rpm, x64 and ARM64), numbered
-    # like the Windows installers.
+    # The Linux packages (.deb and .rpm, x64 and ARM64), numbered like
+    # the Windows installers.
     name: Linux packages
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,21 +82,23 @@ jobs:
           version: "~> v2"
           args: release --snapshot --clean --skip=publish
         env:
-          BB_SNAPSHOT_VERSION: 0.0.${{ github.run_number }}
+          BB_SNAPSHOT_VERSION: ${{ needs.version.outputs.version }}
       - uses: actions/upload-artifact@v4
         with:
           name: better-backup-linux-agent-packages
           path: |
-            dist/better-backup-agent_*.deb
-            dist/better-backup-agent_*.rpm
+            dist/better-backup-*.deb
+            dist/better-backup-*.rpm
           if-no-files-found: error
           retention-days: 30
 
   pkg:
-    # The macOS agent installer, one for Intel and Apple silicon. It is
+    # The macOS installers of the agent and the server, each one for
+    # Intel and Apple silicon. They are
     # signed, notarized and stapled when the repository has the secrets
     # that packaging/macos/ci-signing.sh lists, and unsigned otherwise.
-    name: macOS installer
+    name: macOS installers
+    needs: version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,7 +116,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: packaging/macos/ci-signing.sh
       - name: Build
-        run: packaging/macos/build.sh 0.0.${{ github.run_number }} dist
+        run: |
+          packaging/macos/build.sh "${{ needs.version.outputs.version }}" dist
+          packaging/macos/build-server.sh "${{ needs.version.outputs.version }}" dist "$(ls dist/better-backup-agent_*.pkg)"
       - uses: actions/upload-artifact@v4
         with:
           name: better-backup-macos-agent-installer
@@ -100,10 +131,15 @@ jobs:
     # after the installers, which is how to try them (and their signing)
     # before a merge.
     if: github.ref == 'refs/heads/main'
-    needs: [msi, packages, pkg]
+    needs: [version, msi, packages, pkg]
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: Fetch the Windows installers
         uses: actions/download-artifact@v4
         with:
@@ -133,6 +169,16 @@ jobs:
       - name: Version
         id: v
         run: echo "sha=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+      - name: What changed since the last release
+        run: |
+          {
+            echo "A build from the main branch, version **$VERSION** (commit ${GITHUB_SHA::12}). It is replaced by every change to main and may break: use it on a test server. The container images are tagged \`edge\`."
+            echo
+            echo "## What changed since the last release"
+            echo
+            go run ./internal/tools/release notes
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
       - name: Server image
         uses: docker/build-push-action@v6
         with:
@@ -140,11 +186,12 @@ jobs:
           target: server
           platforms: linux/amd64,linux/arm64
           push: true
-          build-args: VERSION=edge-${{ steps.v.outputs.sha }}
+          build-args: VERSION=${{ env.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
             ghcr.io/${{ github.repository }}:edge
+            ghcr.io/${{ github.repository }}:${{ env.VERSION }}
             ghcr.io/${{ github.repository }}:sha-${{ steps.v.outputs.sha }}
       - name: Agent image
         uses: docker/build-push-action@v6
@@ -153,8 +200,23 @@ jobs:
           target: agent
           platforms: linux/amd64,linux/arm64
           push: true
-          build-args: VERSION=edge-${{ steps.v.outputs.sha }}
+          build-args: VERSION=${{ env.VERSION }}
           cache-from: type=gha
           tags: |
             ghcr.io/${{ github.repository }}-agent:edge
+            ghcr.io/${{ github.repository }}-agent:${{ env.VERSION }}
             ghcr.io/${{ github.repository }}-agent:sha-${{ steps.v.outputs.sha }}
+      - name: Replace the "edge" pre-release
+        # After the images, so that a server told of this build finds its
+        # image. The release is named after the version: that is how a
+        # server reads which build it is. It is never marked "latest".
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd dist
+          sha256sum better-backup-* > SHA256SUMS
+          gh release delete edge --yes --cleanup-tag || true
+          # The tag takes a moment to go.
+          sleep 5
+          gh release create edge --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" better-backup-* SHA256SUMS

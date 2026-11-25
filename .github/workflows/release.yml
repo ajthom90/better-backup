@@ -1,21 +1,58 @@
 name: Release
 
-# Runs when a version tag such as v0.1.0 is pushed: builds archives and
-# .deb/.rpm packages for every platform, attaches them to a GitHub
-# release, and publishes the Docker images to ghcr.io. Two more jobs
-# build the macOS installer on a Mac and the Windows installers on
-# Windows, and add them to the release.
+# Publishes a release: a version such as 1.4.0, with its notes, the
+# installers and packages for every system, the recovery discs and the
+# container images.
+#
+# Start it from the Actions page ("Run workflow") on the main branch and
+# say which version: "patch" (fixes: 1.4.0 becomes 1.4.1), "minor" (new
+# features: 1.5.0), "major" (2.0.0), or a version written out, such as
+# 1.5.0-rc.1 for a release candidate. The workflow then
+#   1. moves the entries of changelog.d into CHANGELOG.md, commits that
+#      to main and tags the commit vVERSION,
+#   2. builds and tests everything from that tag,
+#   3. pushes the images, and last of all publishes the GitHub release,
+#      so that a release never shows without its files.
+# "Dry run" does 1 and 2 without pushing or publishing anything.
+#
+# Pushing a tag such as v1.4.0 by hand runs 2 and 3 for that tag.
+# docs/versioning.md has the whole policy.
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "patch, minor, major, or a version such as 1.5.0-rc.1"
+        required: true
+        default: patch
+      dry_run:
+        description: "Dry run: build everything, publish nothing"
+        type: boolean
+        default: false
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]*"]
 
 permissions:
-  contents: write # create the release
+  contents: write # commit the changelog, tag, create the release
   packages: write # push images to ghcr.io
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  release:
+  plan:
+    # Decides the version and, when started by hand, writes the
+    # changelog and tags the release.
+    name: Version and notes
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+      newest: ${{ steps.plan.outputs.newest }}
+      tags: ${{ steps.plan.outputs.tags }}
+      publish: ${{ steps.plan.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,65 +60,80 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Test
-        run: go test -count=1 ./...
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          version: "~> v2"
-          args: release --clean
+      - name: Plan
+        id: plan
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signs and notarizes the Mac programs in the archives, when
-          # these are set: see "notarize" in .goreleaser.yaml.
-          MACOS_APP_CERT_P12: ${{ secrets.MACOS_APP_CERT_P12 }}
-          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-      - name: Recovery disc
+          ASKED: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xorriso mtools grub-pc-bin grub-common \
-            grub-efi-amd64-signed shim-signed kmod zstd busybox-static cpio file
-          out="$RUNNER_TEMP/recovery"
-          flags="-s -w -X github.com/ajthom90/better-backup/internal/server.Version=$GITHUB_REF_NAME -X github.com/ajthom90/better-backup/internal/agent.Version=$GITHUB_REF_NAME"
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$flags" -o "$out/bb-agent" ./cmd/bb-agent
-          python3 packaging/recovery/build.py --agent "$out/bb-agent" --out "$out/better-backup-recovery.iso" --firmware --version "$GITHUB_REF_NAME"
-          # And the disc for ARM64 machines.
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$flags" -o "$out/arm64/bb-agent" ./cmd/bb-agent
-          python3 packaging/recovery/build.py --arch arm64 --agent "$out/arm64/bb-agent" --out "$out/better-backup-recovery-arm64.iso" --firmware --version "$GITHUB_REF_NAME"
-          gh release upload "$GITHUB_REF_NAME" "$out/better-backup-recovery.iso" "$out/better-backup-recovery-arm64.iso" --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+          set -euo pipefail
+          tool() { go run ./internal/tools/release "$@"; }
+          publish=true
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            [ "$DRY_RUN" = true ] && publish=false
+            if [ "$publish" = true ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+              echo "::error::Releases are made from the main branch. Run this on main, or tick Dry run to try it on a branch."
+              exit 1
+            fi
+            case "$ASKED" in
+              patch|minor|major) version="$(tool next "$ASKED")" ;;
+              *) version="${ASKED#v}" ;;
+            esac
+            # Writes CHANGELOG.md and removes the entries it took; refuses
+            # a version that is not one, or that was released before.
+            version="$(tool prepare "$version")"
+            newest_before="$(git tag --list 'v[0-9]*' | sed 's/^v//' | grep -v -- - | sort -V | tail -1)"
+            if [ -n "$newest_before" ] && [ "$(printf '%s\n%s\n' "$newest_before" "${version%%-*}" | sort -V | tail -1)" != "${version%%-*}" ]; then
+              echo "::error::Version $version would be older than $newest_before, which is released. Fixes for an older line are tagged by hand on a branch; see docs/versioning.md."
+              exit 1
+            fi
+            tag="v$version"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A CHANGELOG.md changelog.d
+            # A release candidate leaves the changelog as it is.
+            git diff --cached --quiet || git commit -m "Release $version"
+            git tag -a "$tag" -m "better-backup $version"
+            if [ "$publish" = true ]; then
+              git push --atomic origin HEAD:main "$tag"
+              ref="$tag"
+            else
+              # Nothing is pushed: the other jobs build the commit this
+              # started from, numbered as the release would be.
+              ref="$GITHUB_SHA"
+            fi
+          else
+            tag="$GITHUB_REF_NAME"
+            version="$(tool version)"
+            if [ "v$version" != "$tag" ]; then
+              echo "::error::The tag $tag is not a version such as v1.4.0 or v1.5.0-rc.1."
+              exit 1
+            fi
+            ref="$tag"
+          fi
+          tool notes "$version" > notes.md
+          tags="$(tool tags "$version" | paste -sd, -)"
+          # Released from the head of main, a release is also the newest
+          # "edge": nothing on main is newer.
+          case ",$tags," in *,latest,*) newest=true ;; *) newest=false ;; esac
+          if [ "$newest" = true ] && [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then tags="$tags,edge"; fi
+          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          {
+            echo "version=$version"; echo "tag=$tag"; echo "ref=$ref"; echo "tags=$tags"
+            echo "newest=$newest"; echo "prerelease=$prerelease"; echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## better-backup $version"
+            [ "$publish" = true ] || echo "**Dry run: nothing is published.**"
+            echo "Image tags: $tags"
+            echo
+            cat notes.md
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Server image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: server
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: VERSION=${{ github.ref_name }}
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
-      - name: Agent image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: agent
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: VERSION=${{ github.ref_name }}
-          tags: |
-            ghcr.io/${{ github.repository }}-agent:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}-agent:latest
+          name: release-notes
+          path: notes.md
+          retention-days: 7
 
   macos:
     # The macOS installers: the agent's (bb-agent, its launchd daemon and
@@ -90,11 +142,13 @@ jobs:
     # They are signed, notarized and stapled when the repository has the
     # secrets that packaging/macos/ci-signing.sh lists, and otherwise
     # built unsigned (they install, but macOS warns).
-    name: macOS installer
-    needs: release
+    name: macOS installers
+    needs: plan
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -108,26 +162,28 @@ jobs:
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: packaging/macos/ci-signing.sh
-      - name: Build the installer
+      - name: Build the installers
         run: |
-          packaging/macos/build.sh "${{ github.ref_name }}" dist
-          packaging/macos/build-server.sh "${{ github.ref_name }}" dist "$(ls dist/better-backup-agent_*.pkg)"
-          cd dist
-          for f in *.pkg; do shasum -a 256 "$f" > "$f.sha256"; done
-      - name: Add it to the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" dist/*.pkg dist/*.pkg.sha256 --clobber
+          packaging/macos/build.sh "${{ needs.plan.outputs.version }}" dist
+          packaging/macos/build-server.sh "${{ needs.plan.outputs.version }}" dist "$(ls dist/better-backup-agent_*.pkg)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: dist/*.pkg
+          if-no-files-found: error
+          retention-days: 7
 
   msi:
-    # Windows installers, added to the release made above. They are
-    # signed when the repository has the secrets SIGN_PFX_BASE64 (a code
-    # signing certificate as a base64 PFX) and SIGN_PFX_PASSWORD.
+    # Windows installers. They are signed when the repository has the
+    # secrets SIGN_PFX_BASE64 (a code signing certificate as a base64
+    # PFX) and SIGN_PFX_PASSWORD.
     name: Windows installers
-    needs: release
+    needs: plan
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -136,10 +192,152 @@ jobs:
         env:
           SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
           SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
+        run: ./packaging/windows/build.ps1 -Version ${{ needs.plan.outputs.version }} -Arch amd64,arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/*.msi
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    # Archives and .deb/.rpm packages for every platform, the recovery
+    # discs and the images, which carry the agent installers of this
+    # version. Then the GitHub release, with everything attached.
+    name: Build and publish
+    needs: [plan, macos, msi]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      PUBLISH: ${{ needs.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test -count=1 ./...
+      - name: Build the archives and packages
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          # The release itself is published below, when everything is
+          # there. A dry run has no tag to build from, so it builds a
+          # snapshot numbered as the release would be.
+          args: release --clean --skip=publish ${{ needs.plan.outputs.publish != 'true' && '--snapshot' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BB_SNAPSHOT_VERSION: ${{ needs.plan.outputs.version }}
+          # Signs and notarizes the Mac programs in the archives, when
+          # these are set: see "notarize" in .goreleaser.yaml.
+          MACOS_APP_CERT_P12: ${{ secrets.MACOS_APP_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+      - name: Recovery discs
         run: |
-          ./packaging/windows/build.ps1 -Version ${{ github.ref_name }} -Arch amd64,arm64
-      - name: Attach to the release
-        shell: pwsh
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xorriso mtools grub-pc-bin grub-common \
+            grub-efi-amd64-signed shim-signed kmod zstd busybox-static cpio file
+          out="$RUNNER_TEMP/recovery"
+          flags="-s -w -X github.com/ajthom90/better-backup/internal/server.Version=$VERSION -X github.com/ajthom90/better-backup/internal/agent.Version=$VERSION"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$flags" -o "$out/bb-agent" ./cmd/bb-agent
+          python3 packaging/recovery/build.py --agent "$out/bb-agent" --out "$out/better-backup-recovery.iso" --firmware --version "$VERSION"
+          # And the disc for ARM64 machines.
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$flags" -o "$out/arm64/bb-agent" ./cmd/bb-agent
+          python3 packaging/recovery/build.py --arch arm64 --agent "$out/arm64/bb-agent" --out "$out/better-backup-recovery-arm64.iso" --firmware --version "$VERSION"
+      - name: Fetch the installers and the notes
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: installers
+      - name: Gather the files of the release
+        run: |
+          mkdir files
+          cp dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm installers/*.msi installers/*.pkg \
+            "$RUNNER_TEMP/recovery/better-backup-recovery.iso" "$RUNNER_TEMP/recovery/better-backup-recovery-arm64.iso" files/
+          (cd files && sha256sum -- * > SHA256SUMS)
+          ls -l files
+          # Every file says the version, and every system has its
+          # installers: a release with a hole in it is not published.
+          for f in server_${VERSION}_windows_amd64.msi server_${VERSION}_windows_arm64.msi agent_${VERSION}_windows_amd64.msi agent_${VERSION}_windows_arm64.msi \
+                   server_${VERSION}_darwin_universal.pkg agent_${VERSION}_darwin_universal.pkg \
+                   server_${VERSION}_linux_amd64.deb server_${VERSION}_linux_arm64.deb agent_${VERSION}_linux_amd64.deb agent_${VERSION}_linux_arm64.deb \
+                   server_${VERSION}_linux_amd64.rpm server_${VERSION}_linux_arm64.rpm agent_${VERSION}_linux_amd64.rpm agent_${VERSION}_linux_arm64.rpm \
+                   server_${VERSION}_linux_amd64.tar.gz agent_${VERSION}_darwin_arm64.tar.gz agent_${VERSION}_windows_amd64.zip; do
+            test -f "files/better-backup-$f" || { echo "::error::better-backup-$f is missing"; exit 1; }
+          done
+          server="$(find dist -type f -name bb-server -path '*linux_amd64*' | head -1)"
+          "$server" version
+          test "$("$server" version | cut -d' ' -f2)" = "$VERSION"
+          # The agent installers go into the server image, for its web
+          # UI to hand out and for agents to update from.
+          cp files/better-backup-agent_*.msi files/better-backup-agent_*.pkg files/better-backup-agent_*.deb files/better-backup-agent_*.rpm packaging/installers/
+      - name: Image tags
+        id: tags
+        run: |
+          {
+            echo "server<<EOF"
+            echo "${{ needs.plan.outputs.tags }}" | tr , '\n' | sed "s#^#ghcr.io/${GITHUB_REPOSITORY}:#"
+            echo "EOF"
+            echo "agent<<EOF"
+            echo "${{ needs.plan.outputs.tags }}" | tr , '\n' | sed "s#^#ghcr.io/${GITHUB_REPOSITORY}-agent:#"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: server
+          platforms: linux/amd64,linux/arm64
+          push: ${{ needs.plan.outputs.publish == 'true' }}
+          build-args: VERSION=${{ needs.plan.outputs.version }}
+          tags: ${{ steps.tags.outputs.server }}
+      - name: Agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: agent
+          platforms: linux/amd64,linux/arm64
+          push: ${{ needs.plan.outputs.publish == 'true' }}
+          build-args: VERSION=${{ needs.plan.outputs.version }}
+          tags: ${{ steps.tags.outputs.agent }}
+      - name: Keep the files of a dry run
+        if: needs.plan.outputs.publish != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-files-dry-run
+          path: files
+          retention-days: 3
+      - name: Publish the release
+        # Last, and in one step: servers that check for a newer version
+        # see the release only when its files and images are there.
+        if: needs.plan.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.ref_name }} (Get-ChildItem dist/*.msi).FullName --clobber
+        run: |
+          flags=(--title "better-backup $VERSION" --notes-file installers/notes.md --verify-tag)
+          [ "${{ needs.plan.outputs.prerelease }}" = true ] && flags+=(--prerelease)
+          # "Latest" on GitHub is the newest release, not a fix for an
+          # older line or a release candidate.
+          flags+=(--latest=${{ needs.plan.outputs.newest }})
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # Run again for a tag that has a release: bring it up to date.
+            gh release upload "$TAG" files/* --clobber
+            gh release edit "$TAG" --title "better-backup $VERSION" --notes-file installers/notes.md
+          else
+            gh release create "$TAG" "${flags[@]}" files/*
+          fi

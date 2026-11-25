@@ -16,7 +16,10 @@
   <Package Name="better-backup agent" Manufacturer="better-backup" Version="$(Version)"
            UpgradeCode="5C0B8C4E-5E0B-4F0B-9E57-0C1F4E1B7A01" Scope="perMachine" InstallerVersion="500" Compressed="yes">
     <SummaryInformation Description="better-backup agent: backs up and restores this machine." />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of the better-backup agent is already installed." />
+    <!-- A build with the same three numbers replaces the one installed: builds
+         between releases differ in the fourth number only, which Windows
+         Installer does not compare. Lower numbers are refused. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of the better-backup agent is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Secure: typed on a page as the user, used by the elevated install. Hidden: kept out of logs. -->

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ajthom90/better-backup/internal/api"
+	"github.com/ajthom90/better-backup/internal/version"
 )
 
 // releases is where published installers are downloaded from when the
@@ -18,8 +19,6 @@ const releases = "https://github.com/ajthom90/better-backup/releases"
 // installerName matches agent installers as the release names them, for
 // example better-backup-agent_1.2.0_windows_amd64.msi.
 var installerName = regexp.MustCompile(`^better-backup-agent_([0-9A-Za-z.+~-]+)_(windows|darwin|linux)_([a-z0-9]+)\.(msi|pkg|deb|rpm)$`)
-
-var releaseVersion = regexp.MustCompile(`^v?(\d+\.\d+\.\d+)$`)
 
 // installerDirs are searched for agent installers to hand out: a folder
 // in the data directory, for the administrator to fill, and one beside
@@ -59,7 +58,10 @@ func (s *Server) handleInstallers(w http.ResponseWriter, r *http.Request) {
 		out.Files = append(out.Files, in)
 	}
 	// A released server can point at the installers published with it.
-	if m := releaseVersion.FindStringSubmatch(Version); m != nil {
+	// (Builds from main are not: their files are replaced by the next
+	// build.)
+	if v, ok := version.Parse(Version); ok && !v.Edge() && v.Build == "" {
+		m := []string{"", v.String()}
 		have := map[string]bool{}
 		for _, f := range out.Files {
 			have[f.OS+"/"+f.Arch+"/"+f.Format] = true

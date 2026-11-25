@@ -87,6 +87,12 @@ header h1 { min-width:140px; }
 .banner { border:1px solid #d97706; border-left-width:4px; border-radius:8px; background:var(--card); padding:10px 14px; margin-bottom:18px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
 .banner span { flex:1; min-width:240px; }
 .banner.alarm { border-color:var(--bad); }
+.banner.info { border-color:var(--accent); }
+#version { color:var(--muted); } #version.new { color:var(--accent); font-weight:600; }
+.notes { border:1px solid var(--line); border-radius:8px; padding:4px 14px 10px; margin-top:10px; max-height:46vh; overflow:auto; overflow-wrap:anywhere; }
+.notes h4 { margin:14px 0 4px; font-size:14px; } .notes h5 { margin:12px 0 2px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+.notes ul { margin:4px 0; padding-left:20px; } .notes li { margin:3px 0; } .notes p { margin:6px 0; } .notes code { font:12px ui-monospace,Consolas,monospace; background:var(--bg); padding:1px 4px; border-radius:4px; }
+.newver { border:1px solid var(--accent); border-left-width:4px; border-radius:8px; padding:10px 14px; margin-top:12px; } .newver b { font-size:15px; } .newver .acts { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; align-items:center; }
 .suspicious { color:var(--bad); } .locked { color:var(--muted); }
 table.loose td { white-space:normal; overflow-wrap:anywhere; vertical-align:top; padding:8px 10px; } table.loose th { padding:8px 10px; } table.loose td:last-child { white-space:nowrap; overflow-wrap:normal; }
 table.loose .sub { word-break:normal; } td.reasons { min-width:240px; } td.reasons ul { margin:0; padding-left:18px; } td.holds { min-width:150px; }
@@ -100,9 +106,10 @@ h4 { margin:18px 0 4px; }
 <body>
 <div id="front" class="front" hidden></div>
 <div id="app" hidden>
-<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="recovery" class="need-operator">Bare-metal recovery</button><button id="vmware" class="need-admin">VMware servers</button><button id="m365" class="need-admin">Microsoft 365</button><button id="protect">Ransomware protection</button><button id="offsite" class="need-operator">Offsite copy</button><button id="alerts" class="need-admin">Alerts and reports</button><button id="users" class="need-admin">Users</button><button id="activity" class="need-admin">Activity log</button><button id="settings" class="need-admin">Settings</button><span id="whoami"></span><button id="account">My password</button><button id="logout">Sign out</button></header>
+<header><h1>better-backup</h1><button id="version" class="link" title="Updates and release notes"></button><button id="recovery" class="need-operator">Bare-metal recovery</button><button id="vmware" class="need-admin">VMware servers</button><button id="m365" class="need-admin">Microsoft 365</button><button id="protect">Ransomware protection</button><button id="offsite" class="need-operator">Offsite copy</button><button id="alerts" class="need-admin">Alerts and reports</button><button id="users" class="need-admin">Users</button><button id="activity" class="need-admin">Activity log</button><button id="settings" class="need-admin">Settings</button><span id="whoami"></span><button id="account">My password</button><button id="logout">Sign out</button></header>
 <main>
   <div class="banner need-admin" id="keyBanner" hidden><span><b>Keep a copy of the repository key.</b> Without it, neither the backups on this server nor the offsite copy can be read. Download it and keep it somewhere other than this server.</span><button class="primary" id="keyBannerBtn">Download the key</button></div>
+  <div class="banner info need-admin" id="updBanner" hidden><span id="updText"></span><button class="primary" id="updBtn">See what is new</button><button id="updLater">Not now</button></div>
   <div class="banner alarm" id="susBanner" hidden><span id="susText"></span><button class="primary" id="susBtn">Look at it</button></div>
   <section><h2><span>Health</span><span id="healthState" style="flex:none;white-space:nowrap"></span></h2><ul class="issues" id="issues" hidden></ul><div class="scroll" id="health"></div></section>
   <section><h2><span>Repository</span><button id="runVerify" class="need-operator">Verify all data</button><button id="runGC" class="need-operator">Reclaim space</button></h2><div class="stats" id="stats"></div><div class="usage" id="usage" hidden></div></section>
@@ -124,6 +131,7 @@ let vmwareList = [];
 let m365List = [];
 let jobLimit = 15;
 let me = null; // the signed-in user
+let serverVersion = "";
 
 async function call(method, path, body, headers) {
   const r = await fetch(path, { method, headers: Object.assign({ Authorization: "Bearer " + token, "Content-Type": "application/json" }, headers || {}), body: body ? JSON.stringify(body) : undefined });
@@ -220,7 +228,13 @@ async function refresh() {
   $("protect").textContent = "Ransomware protection" + (prot.deleted ? " (" + prot.deleted + " deleted)" : "");
   showHealth(health);
   vmwareList = vmw;
-  $("version").textContent = "version " + st.version;
+  serverVersion = st.version;
+  $("version").textContent = "version " + st.version + (st.update_available ? " · " + st.update_available + " is out" : "");
+  $("version").className = "link" + (st.update_available ? " new" : "");
+  let later = ""; try { later = localStorage.getItem("bb-update-later") || ""; } catch (e) {}
+  $("updBanner").hidden = !st.update_available || later === st.update_available;
+  $("updBanner").dataset.version = st.update_available || "";
+  if (st.update_available) $("updText").replaceChildren(el("b", { textContent: "Version " + st.update_available + " of better-backup is out. " }), "This server runs version " + st.version + ".");
   $("keyBanner").hidden = st.key_saved;
   agentNames = Object.fromEntries(allAgents.map(a => [a.id, a.name]));
   const agents = allAgents.filter(a => !a.recovery); // machines at the recovery disc are not machines to back up
@@ -1287,7 +1301,7 @@ async function addAgentDialog() {
   const which = { "windows/amd64": "Most Windows PCs and servers are x64. To check, open Settings, System, About and read “System type”.", "windows/arm64": "For Windows on ARM, such as PCs with a Snapdragon processor. To check, open Settings, System, About and read “System type”.", "darwin/universal": "One installer works on every Mac, Intel or Apple silicon.", "linux/amd64": "Most Linux PCs and servers are x64. To check, run uname -m: it prints x86_64.", "linux/arm64": "For ARM machines such as a Raspberry Pi 4 or 5 with a 64-bit system, or an ARM server. To check, run uname -m: it prints aarch64." };
   const folder = el("input", { id: "nasFolder", value: "/mnt/tank/better-backup-agent" });
   const yaml = copyBox("");
-  const tag = /^v?\d+\.\d+\.\d+$/.test($("version").textContent.replace("version ", "")) ? "latest" : "edge";
+  const tag = /^v?\d+\.\d+\.\d+$/.test(serverVersion) ? "latest" : "edge";
   const uses = el("input", { id: "addUses", type: "number", min: 1, max: 1000, value: 1 });
   const code = copyBox(""), silent = copyBox("");
   const steps = el("div", { id: "addSteps" });
@@ -1344,6 +1358,84 @@ async function addAgentDialog() {
   }, 3000);
   $("dlg").addEventListener("close", () => clearInterval(poll), { once: true });
 }
+// inline turns the inline marks of release notes (`code`, **bold**, [links](https://…) and bare links) into nodes. Like el, it never parses text as HTML.
+function inline(text) {
+  const out = [], re = /`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>)]+[^\s<>).,;:!?])/g;
+  let at = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > at) out.push(text.slice(at, m.index));
+    if (m[1] != null) out.push(el("code", { textContent: m[1] }));
+    else if (m[2] != null) out.push(el("b", { textContent: m[2] }));
+    else out.push(el("a", { href: m[4] || m[5], target: "_blank", rel: "noopener noreferrer", textContent: m[3] || m[5] }));
+    at = re.lastIndex;
+  }
+  if (at < text.length) out.push(text.slice(at));
+  return out;
+}
+// markdown draws release notes: headings, lists and paragraphs.
+function markdown(text) {
+  const box = el("div", { className: "md" });
+  let list = null, last = null;
+  for (const raw of String(text || "").split("\n")) {
+    const line = raw.trim();
+    let m;
+    if (!line) { last = null; continue; }
+    if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) { list = last = null; box.append(el(m[1].length <= 2 ? "h4" : "h5", null, ...inline(m[2]))); }
+    else if ((m = /^[-*]\s+(.*)$/.exec(line))) { if (!list) box.append(list = el("ul")); list.append(last = el("li", null, ...inline(m[1]))); }
+    else if (last) last.append(" ", ...inline(line));
+    else { list = null; box.append(last = el("p", null, ...inline(line))); }
+  }
+  return box;
+}
+// serverUpdateDialog: whether a newer server is out, what is new in it, how to update, and the settings of that check.
+async function serverUpdateDialog(u) {
+  u = u || await call("GET", "/api/v1/update");
+  const msg = el("div", { className: "msg", id: "suMsg" });
+  const admin = can("admin");
+  const channel = el("select", { id: "suChannel", disabled: !admin },
+    el("option", { value: "stable", textContent: "Releases (stable)" }), el("option", { value: "edge", textContent: "Every build from the main branch (edge)" }));
+  channel.value = u.channel;
+  const check = el("input", { type: "checkbox", id: "suCheck", checked: u.check, disabled: !admin });
+  const alert = el("input", { type: "checkbox", id: "suAlert", checked: u.alert, disabled: !admin || !u.check });
+  const save = async () => { msg.textContent = ""; try { await serverUpdateDialog(await call("PUT", "/api/v1/update", { channel: channel.value, check: check.checked, alert: alert.checked })); refresh().catch(() => {}); } catch (e) { msg.textContent = e.message; } };
+  channel.onchange = check.onchange = alert.onchange = save;
+  const checkNow = el("button", { id: "suCheckNow", textContent: "Check now", hidden: !u.check || !u.can_check || !can("operator") });
+  checkNow.onclick = async () => { msg.textContent = ""; checkNow.disabled = true; checkNow.textContent = "Checking…"; try { await serverUpdateDialog(await call("POST", "/api/v1/update/check")); refresh().catch(() => {}); } catch (e) { msg.textContent = e.message; checkNow.disabled = false; checkNow.textContent = "Check now"; } };
+
+  const kind = !u.numbered ? "a build from source" : u.current_stable ? "a release" : /edge/.test(u.current) ? "a build from the main branch" : "a release candidate";
+  const parts = [el("h3", { textContent: "Updates" }), el("div", { id: "suCurrent" }, "This server runs version ", el("b", { textContent: u.current }), ", " + kind + ".")];
+  if (u.latest) {
+    const r = u.releases[0];
+    const acts = el("div", { className: "acts" });
+    for (const d of r.downloads || []) acts.append(el("a", { href: d.url, target: "_blank", rel: "noopener noreferrer", textContent: "Download " + d.name + " (" + size(d.size) + ")" }));
+    if (r.url) acts.append(el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer", textContent: "Open the release page" }));
+    parts.push(el("div", { className: "newver", id: "suNew" }, el("b", { textContent: "Version " + r.version + " is out" }),
+      el("span", { className: "hint", textContent: (r.published && !r.published.startsWith("0001") ? "  Published " + when(r.published) + "." : "") + (r.prerelease ? "  Not a release: it comes before one." : "") }),
+      el("div", { style: "margin-top:8px", textContent: u.how }), acts));
+    const notes = el("div", { className: "notes", id: "suNotes" });
+    for (const x of u.releases) notes.append(el("h4", { textContent: "What is new in " + x.version }), x.notes ? markdown(x.notes) : el("p", { className: "hint", textContent: "This version came without notes." }));
+    parts.push(notes);
+  } else {
+    let state = "It is up to date.";
+    if (!u.can_check) state = "It was started without a place to ask for newer versions, so it does not know of any.";
+    else if (!u.check) state = "It does not check for newer versions.";
+    else if (!u.numbered) state = "A build from source has no version to compare, so it is never told to update.";
+    else if (!u.checked) state = "It has not asked for newer versions yet. It does so within a minute of starting.";
+    parts.push(el("div", { id: "suState", textContent: state }));
+  }
+  if (u.check && u.checked) parts.push(el("div", { className: "hint", id: "suChecked", textContent: "Last checked " + when(u.checked) + ". The server checks twice a day." }));
+  if (u.check && u.error) parts.push(el("div", { className: "warn", id: "suError", textContent: "The last check failed: " + u.error }));
+  parts.push(el("label", { htmlFor: "suChannel", textContent: "Tell me about" }), channel,
+    el("div", { className: "hint", textContent: "Releases are tested and numbered, like 1.4.0. Builds from the main branch come after every change and may break; follow them on a test server." + (u.container ? " A container follows the image tag it was set up with (“latest” for releases, “edge” for builds from main): change the tag too when you change this." : "") }),
+    el("label", { className: "check" }, check, " Check for newer versions"),
+    el("label", { className: "check" }, alert, " Send an alert when one is out"),
+    el("div", { className: "hint", textContent: "To check, the server reads the public list of releases on github.com twice a day. It sends nothing about this server or its backups: no identifier, no version, no counts. Nothing is downloaded or installed by itself. The alert goes where the other alerts go, set under Alerts and reports." }));
+  if (u.current_notes) parts.push(el("details", { id: "suRunning" }, el("summary", { textContent: u.current_stable ? "What was new in the version that runs (" + u.current + ")" : "What changed since the last release, in the version that runs" }), el("div", { className: "notes" }, markdown(u.current_notes))));
+  parts.push(msg, el("div", { className: "row" }, checkNow, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
+  openDialog(true, ...parts);
+}
+$("version").onclick = $("updBtn").onclick = () => serverUpdateDialog().catch(e => notice("Something went wrong", e.message));
+$("updLater").onclick = () => { try { localStorage.setItem("bb-update-later", $("updBanner").dataset.version); } catch (e) {} $("updBanner").hidden = true; };
 $("agentUpdates").onclick = () => updatesDialog().catch(e => notice("Something went wrong", e.message));
 $("newToken").onclick = () => addAgentDialog().catch(e => notice("Could not create a token", e.message));
 const ranks = { viewer: 1, operator: 2, admin: 3 };

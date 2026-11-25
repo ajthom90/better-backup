@@ -515,6 +515,63 @@ type Status struct {
 	RunningJobs int    `json:"running_jobs"`
 	// KeySaved is false until someone has downloaded the repository key.
 	KeySaved bool `json:"key_saved"`
+	// UpdateAvailable is the newest version of the server that is out
+	// and newer than this one, when the server knows of one.
+	UpdateAvailable string `json:"update_available,omitempty"`
+}
+
+// The channels a server can follow for news of newer versions.
+const (
+	ChannelStable = "stable" // releases
+	ChannelEdge   = "edge"   // every build from the main branch
+)
+
+// ServerUpdate is whether a newer server is out, and the settings of
+// that check. Saving reads Channel, Check and Alert.
+type ServerUpdate struct {
+	// Current is the running version; Numbered that it is a version
+	// number and not a build from source, CurrentStable that it is a
+	// release.
+	Current       string `json:"current"`
+	Numbered      bool   `json:"numbered"`
+	CurrentStable bool   `json:"current_stable"`
+	// CurrentNotes is what is new in the running version, as Markdown.
+	CurrentNotes string `json:"current_notes"`
+	Channel      string `json:"channel"`
+	// Check: the server asks GitHub for newer versions. Alert: it sends
+	// an alert when it finds one.
+	Check bool `json:"check"`
+	Alert bool `json:"alert"`
+	// CanCheck is false when the server was started without a place to
+	// ask.
+	CanCheck bool       `json:"can_check"`
+	Checked  *time.Time `json:"checked,omitempty"`
+	// Error is why the last check failed.
+	Error string `json:"error,omitempty"`
+	// Latest is the newest version that is newer than Current, and
+	// Releases every such version, newest first.
+	Latest   string          `json:"latest,omitempty"`
+	Releases []ServerRelease `json:"releases"`
+	// How says how this server is updated.
+	How       string `json:"how"`
+	Container bool   `json:"container"`
+}
+
+// ServerRelease is a published version of the server.
+type ServerRelease struct {
+	Version    string    `json:"version"`
+	Notes      string    `json:"notes"` // Markdown
+	URL        string    `json:"url,omitempty"`
+	Published  time.Time `json:"published"`
+	Prerelease bool      `json:"prerelease,omitempty"`
+	// Downloads are the installers for the system this server runs on.
+	Downloads []ServerDownload `json:"downloads,omitempty"`
+}
+
+type ServerDownload struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+	Size int64  `json:"size"`
 }
 
 type Error struct {

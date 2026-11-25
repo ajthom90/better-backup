@@ -125,7 +125,7 @@ func main() {
 	case "serve":
 		err = svc.Run(o.spec(), func(ctx context.Context) error {
 			return server.Run(ctx, server.Config{DataDir: o.data, RepoDir: o.repo, Listen: o.listen, TLSNames: o.names,
-				Passphrase: os.Getenv("BB_REPO_PASSPHRASE"), Log: slog.Default()})
+				Passphrase: os.Getenv("BB_REPO_PASSPHRASE"), Log: slog.Default(), UpdateURL: updateURL()})
 		})
 	case "service":
 		if len(pos) < 2 {
@@ -251,4 +251,14 @@ func fetch(o *options) error {
 	}
 	fmt.Printf("done. List what it holds with: bb-server snapshots --repo %s --data FOLDER-WITH-repo.key\n", o.repo)
 	return nil
+}
+
+// updateURL is where the server asks which versions are out. The web UI
+// turns the check on and off; BB_UPDATE_URL points it somewhere else,
+// such as a mirror inside a closed network.
+func updateURL() string {
+	if u := os.Getenv("BB_UPDATE_URL"); u != "" {
+		return u
+	}
+	return server.DefaultUpdateURL
 }

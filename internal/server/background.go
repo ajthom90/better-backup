@@ -29,6 +29,7 @@ func (s *Server) background(ctx context.Context) {
 		s.sendSummary(time.Now())
 		s.applyPendingProtection(time.Now())
 		s.purgeTrash(time.Now())
+		s.scheduleUpdateCheck(time.Now())
 		s.maintain()
 		s.maybeSaveState()
 		s.runOffsite(ctx)

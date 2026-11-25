@@ -1,0 +1,4 @@
+- The server tells you when a newer version is out. "Updates" in the web UI (click the version at the top) shows what is new, how to update this server and the installer to download, and an alert goes out once per version. Follow releases or every build from the main branch, or turn the check off. The server only reads the public list of releases on github.com; it sends nothing about itself.
+- Versions are numbered the same everywhere, by Semantic Versioning: the server, the agents, the installers and the container images of one build all say the same number, and builds between releases are numbered like `0.1.1-edge.12`.
+- Container images of a release are tagged with the version, with its first two numbers (such as `0.4`, which follows fixes) and `latest`; builds from the main branch stay on `edge`.
+- Every release comes with notes, kept in CHANGELOG.md and shown in the web UI.
