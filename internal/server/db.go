@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS suspicions (
 	snapshot_id TEXT PRIMARY KEY, policy_id TEXT NOT NULL, agent_id TEXT NOT NULL, time INTEGER NOT NULL,
 	reasons TEXT NOT NULL, last_good TEXT NOT NULL DEFAULT '', reviewed_by TEXT NOT NULL DEFAULT '',
 	reviewed INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS agent_updates (
+	agent_id TEXT PRIMARY KEY, install TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL DEFAULT '', target TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
+	at INTEGER NOT NULL DEFAULT 0, asked INTEGER NOT NULL DEFAULT 0,
+	failed TEXT NOT NULL DEFAULT '', failed_at INTEGER NOT NULL DEFAULT 0);
 `
 
 func openDB(dir string) (*sql.DB, error) {

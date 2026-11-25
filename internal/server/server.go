@@ -97,7 +97,10 @@ type Server struct {
 	// jobData is what was measured of the chunks each running job sent.
 	jobData map[string]*jobData
 	running map[string]string // agent id -> its running job
-	maint   bool              // GC or verify in progress: no agent jobs start
+	// updating are the agents installing a newer version of themselves;
+	// their jobs wait. See agentupdate.go.
+	updating map[string]updateHold
+	maint    bool // GC or verify in progress: no agent jobs start
 	// offsiteBusy is set while the offsite copy is being updated;
 	// garbage collection waits for it.
 	offsiteBusy bool
@@ -177,7 +180,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Tick == 0 {
 		cfg.Tick = 20 * time.Second
 	}
-	s := &Server{cfg: cfg, log: cfg.Log, snaps: map[string]*tree.Snapshot{}, trashed: map[string]*tree.Snapshot{}, jobData: map[string]*jobData{}, running: map[string]string{},
+	s := &Server{cfg: cfg, log: cfg.Log, snaps: map[string]*tree.Snapshot{}, trashed: map[string]*tree.Snapshot{}, jobData: map[string]*jobData{}, running: map[string]string{}, updating: map[string]updateHold{},
 		wake: map[string]chan struct{}{}, kick: make(chan struct{}, 1), stop: make(chan struct{}), mail: make(chan mailMsg, 64),
 		recovery: map[string]*recoverySession{}, isoLinks: map[string]isoLink{}, indexKick: make(chan struct{}, 1)}
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
@@ -430,6 +433,8 @@ func (s *Server) routes() http.Handler {
 	ag("POST /agent/v1/backup", s.handleAgentBackup)
 	ag("GET /agent/v1/queries/next", s.handleNextQuery)
 	ag("POST /agent/v1/queries/{id}", s.handleQueryAnswer)
+	ag("GET /agent/v1/update", s.handleUpdateCheck)
+	ag("POST /agent/v1/update", s.handleUpdateReport)
 
 	// route registers an admin API call. role is the least role that
 	// may make it. action, when set, is what the activity log says after
@@ -487,6 +492,10 @@ func (s *Server) routes() http.Handler {
 	route("GET /api/v1/agents", viewer, "", s.handleAgents)
 	route("POST /api/v1/agents/{id}/browse", operator, "", s.handleBrowse)
 	route("POST /api/v1/agents/{id}/dsrm", admin, "Restarted a domain controller into or out of Directory Services Restore Mode", s.handleDSRM)
+	route("GET /api/v1/agent-updates", viewer, "", s.handleAgentUpdateSettings)
+	route("PUT /api/v1/agent-updates", admin, "Changed whether agents update by themselves", s.handleSaveAgentUpdateSettings)
+	route("PUT /api/v1/agents/{id}/update-mode", admin, "Changed whether an agent updates by itself", s.handleAgentUpdateMode)
+	route("POST /api/v1/agents/{id}/update", operator, "Told an agent to update now", s.handleAgentUpdateNow)
 	route("DELETE /api/v1/agents/{id}", operator, "Revoked an agent", s.handleRevokeAgent)
 	route("GET /api/v1/policies", viewer, "", s.handlePolicies)
 	route("POST /api/v1/policies", operator, "Created a policy", s.handleSavePolicy)

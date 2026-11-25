@@ -113,8 +113,20 @@ Msi @('/i', "`"$Dir\better-backup-server_${New}_windows_$Arch.msi`"") 'upgrade t
 Wait { (Api '/api/v1/status').version -eq $New } "the upgraded server kept port $Port and is version $New"
 Check (Test-Path "$repo\config.json") 'the upgraded server kept its repository folder'
 Check ((Get-ItemProperty 'HKLM:\SOFTWARE\better-backup\Server').Repo -eq $repo) 'the repository setting survived the upgrade'
-Msi @('/i', "`"$Dir\better-backup-agent_${New}_windows_$Arch.msi`"") 'upgrade the agent'
-Wait { (Api '/api/v1/agents' | Where-Object { $_.id -eq $agentId -and $_.online -and $_.version -eq $New }) } 'the upgraded agent is the same agent, online'
+# The upgraded server holds the newer agent installer, and the agent
+# installs it by itself.
+try {
+  Wait { (Api '/api/v1/agents' | Where-Object { $_.id -eq $agentId -and $_.online -and $_.version -eq $New -and $_.update.state -eq 'updated' }) } 'the agent updated itself from the upgraded server: the same agent, online' 420
+} catch {
+  foreach ($f in "$state\update\update.log", "$state\update\update.json") { if (Test-Path $f) { Write-Host "--- $f"; Get-Content $f -Tail 60 | Write-Host } }
+  if (Test-Path "$state\update\msi.log") { Copy-Item "$state\update\msi.log" "$Dir\msi-self-update.log"; Get-Content "$state\update\msi.log" -Tail 60 | Write-Host }
+  throw
+}
+Check ((& "$env:ProgramFiles\better-backup\Agent\bb-agent.exe" version | Out-String) -match [regex]::Escape("bb-agent $New ")) 'the installed agent program is the new version'
+Check (Running 'better-backup-agent') 'the agent service is running after its update'
+# And the installer by hand, over an agent that is already that version.
+Msi @('/i', "`"$Dir\better-backup-agent_${New}_windows_$Arch.msi`"") 'install the same agent version again by hand'
+Wait { (Api '/api/v1/agents' | Where-Object { $_.id -eq $agentId -and $_.online -and $_.version -eq $New }) } 'the agent is still the same agent, online'
 Check (@(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object { $_.DisplayName -like 'better-backup*' }).Count -eq 2) 'one server and one agent are installed after the upgrade'
 
 # --- removal --------------------------------------------------------------

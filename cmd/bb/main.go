@@ -33,6 +33,8 @@ Usage:
             [--for URL]                  the address agents reach this server by
   bb agents                              list agents
   bb agent revoke AGENT                  block an agent
+  bb agent update AGENT                  have an agent install the newest version now
+  bb agent auto-update on|off            whether agents install newer versions by themselves
   bb policies                            list backup policies
   bb policy add --name NAME --agent AGENT[,AGENT...] [--path PATH ...]
         [--volume VOLUME ...]  (block-level image: C: or /dev/vg0/data)
@@ -444,7 +446,7 @@ func main() {
 	case "agents":
 		var as []api.Agent
 		do("GET", "/api/v1/agents", nil, &as)
-		fmt.Fprintln(tabs, "ID\tNAME\tHOST\tOS\tVERSION\tSTATE\tLAST SEEN")
+		fmt.Fprintln(tabs, "ID\tNAME\tHOST\tOS\tVERSION\tSTATE\tLAST SEEN\tUPDATE")
 		for _, a := range as {
 			state := "offline"
 			if a.Revoked {
@@ -452,12 +454,27 @@ func main() {
 			} else if a.Online {
 				state = "online"
 			}
-			fmt.Fprintf(tabs, "%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\n", a.ID, a.Name, a.Hostname, a.OS, a.Arch, a.Version, state, age(a.LastSeen))
+			fmt.Fprintf(tabs, "%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\t%s\n", a.ID, a.Name, a.Hostname, a.OS, a.Arch, a.Version, state, age(a.LastSeen), updateWord(a.Update))
 		}
 	case "agent":
-		need(pos, 3, "bb agent revoke AGENT")
-		do("DELETE", "/api/v1/agents/"+agentID(pos[2]), nil, nil)
-		fmt.Println("agent revoked")
+		need(pos, 3, "bb agent revoke AGENT, bb agent update AGENT, or bb agent auto-update on|off")
+		switch pos[1] {
+		case "update":
+			var st api.AgentUpdateState
+			do("POST", "/api/v1/agents/"+agentID(pos[2])+"/update", nil, &st)
+			fmt.Println("the agent installs version " + st.Available + " as soon as it is connected and no job runs; see: bb agents")
+		case "auto-update":
+			if pos[2] != "on" && pos[2] != "off" {
+				cli.Fatal(errors.New("usage: bb agent auto-update on|off"))
+			}
+			do("PUT", "/api/v1/agent-updates", api.AgentUpdateSettings{Auto: pos[2] == "on"}, nil)
+			fmt.Println("agents update by themselves: " + pos[2])
+		case "revoke":
+			do("DELETE", "/api/v1/agents/"+agentID(pos[2]), nil, nil)
+			fmt.Println("agent revoked")
+		default:
+			cli.Fatal(errors.New("usage: bb agent revoke AGENT, bb agent update AGENT, or bb agent auto-update on|off"))
+		}
 	case "policies":
 		var ps []api.Policy
 		do("GET", "/api/v1/policies", nil, &ps)
@@ -852,4 +869,27 @@ func sub2(pos []string) string {
 		return pos[2]
 	}
 	return ""
+}
+
+// updateWord says in a few words where an agent's own updating stands.
+func updateWord(u *api.AgentUpdateState) string {
+	switch {
+	case u == nil:
+		return ""
+	case u.State == api.UpdateInstalling:
+		return "installing " + u.Target
+	case u.Asked:
+		return "will install " + u.Available
+	case u.State == api.UpdateFailed && u.Available == u.Target:
+		return "update to " + u.Target + " failed: " + u.Error
+	case u.Available != "" && u.Auto:
+		return u.Available + " available, updates by itself"
+	case u.Available != "":
+		return u.Available + " available"
+	case !u.Can && u.Why != "":
+		return "does not update by itself"
+	case u.State == api.UpdateDone:
+		return "updated itself to " + u.Target
+	}
+	return "up to date"
 }
