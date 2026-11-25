@@ -18,10 +18,21 @@
 #   MACOS_SIGN_APP   a "Developer ID Application: ..." identity in the
 #                    keychain; signs the programs with the hardened runtime
 #   MACOS_SIGN_PKG   a "Developer ID Installer: ..." identity; signs the package
-#   MACOS_NOTARY_PROFILE   a notarytool keychain profile; has Apple notarize
-#                    the signed package, and staples the ticket to it.
-#                    Or MACOS_NOTARY_APPLE_ID, MACOS_NOTARY_TEAM_ID and
-#                    MACOS_NOTARY_PASSWORD (an app-specific password).
+#   MACOS_SIGN_KEYCHAIN   the keychain file that holds them, if it is not
+#                    one that is searched anyway
+#
+# With both, one of these has Apple notarize the signed package, and
+# staples the ticket to it so that it opens without a warning offline too:
+#
+#   MACOS_NOTARY_KEY, MACOS_NOTARY_KEY_ID, MACOS_NOTARY_ISSUER
+#                    an App Store Connect API key (the .p8 file), its ID
+#                    and its issuer ID
+#   MACOS_NOTARY_PROFILE   a notarytool keychain profile
+#   MACOS_NOTARY_APPLE_ID, MACOS_NOTARY_TEAM_ID, MACOS_NOTARY_PASSWORD
+#                    an Apple ID, its team and an app-specific password
+#
+# The workflows set these from the repository's secrets with
+# packaging/macos/ci-signing.sh.
 #
 # Without them the programs get an ad-hoc signature. Such a package
 # installs and works, but macOS warns when it is opened by double-click
@@ -93,14 +104,27 @@ plutil -lint "$app/Contents/Info.plist" "$root/Library/LaunchDaemons/better-back
 
 echo "== signing"
 if [ -n "${MACOS_SIGN_APP:-}" ]; then
-    codesign --force --timestamp --options runtime --sign "$MACOS_SIGN_APP" \
-        --identifier com.github.ajthom90.better-backup.agent "$root/usr/local/bin/bb-agent"
-    codesign --force --timestamp --options runtime --sign "$MACOS_SIGN_APP" "$app"
+    # The hardened runtime and a timestamp from Apple: notarization
+    # wants both. Neither program needs an entitlement.
+    set -- --force --timestamp --options runtime --sign "$MACOS_SIGN_APP"
+    if [ -n "${MACOS_SIGN_KEYCHAIN:-}" ]; then
+        set -- "$@" --keychain "$MACOS_SIGN_KEYCHAIN"
+    fi
+    codesign "$@" --identifier com.github.ajthom90.better-backup.agent "$root/usr/local/bin/bb-agent"
+    codesign "$@" "$app"
+    codesign --verify --strict --verbose=2 "$app" "$root/usr/local/bin/bb-agent"
+    for f in "$app" "$root/usr/local/bin/bb-agent"; do
+        codesign --display --verbose=2 "$f" 2>&1 | grep -E "^(Authority|TeamIdentifier|Timestamp|CodeDirectory)" || true
+        codesign --display --verbose=2 "$f" 2>&1 | grep -q "flags=.*runtime" || {
+            echo "$f is not signed with the hardened runtime" >&2
+            exit 1
+        }
+    done
 else
     codesign --force --sign - --identifier com.github.ajthom90.better-backup.agent "$root/usr/local/bin/bb-agent"
     codesign --force --sign - "$app"
+    codesign --verify --strict "$app" "$root/usr/local/bin/bb-agent"
 fi
-codesign --verify --strict "$app" "$root/usr/local/bin/bb-agent"
 
 echo "== building the package"
 # Install the app where the package says, even if a copy of it was moved
@@ -117,22 +141,51 @@ cp "$repo/LICENSE" "$work/resources/LICENSE.txt"
 sed "s/@SHORT_VERSION@/$short/g" "$here/distribution.xml" >"$work/distribution.xml"
 pkg="$out/better-backup-agent_${version}_darwin_universal.pkg"
 if [ -n "${MACOS_SIGN_PKG:-}" ]; then
+    set -- --sign "$MACOS_SIGN_PKG" --timestamp
+    if [ -n "${MACOS_SIGN_KEYCHAIN:-}" ]; then
+        set -- "$@" --keychain "$MACOS_SIGN_KEYCHAIN"
+    fi
     productbuild --distribution "$work/distribution.xml" --resources "$work/resources" \
-        --package-path "$work" --sign "$MACOS_SIGN_PKG" --timestamp "$pkg"
+        --package-path "$work" "$@" "$pkg"
+    pkgutil --check-signature "$pkg"
 else
     productbuild --distribution "$work/distribution.xml" --resources "$work/resources" \
         --package-path "$work" "$pkg"
 fi
 
-if [ -n "${MACOS_SIGN_PKG:-}" ] && [ -n "${MACOS_NOTARY_PROFILE:-}" ]; then
-    echo "== notarizing"
-    xcrun notarytool submit "$pkg" --keychain-profile "$MACOS_NOTARY_PROFILE" --wait
+# Notarization: Apple scans the signed package and records that it did.
+# Which sign-in notarytool uses, as its arguments.
+set --
+if [ -n "${MACOS_NOTARY_KEY:-}" ]; then
+    set -- --key "$MACOS_NOTARY_KEY" --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER"
+elif [ -n "${MACOS_NOTARY_PROFILE:-}" ]; then
+    set -- --keychain-profile "$MACOS_NOTARY_PROFILE"
+elif [ -n "${MACOS_NOTARY_APPLE_ID:-}" ]; then
+    set -- --apple-id "$MACOS_NOTARY_APPLE_ID" --team-id "$MACOS_NOTARY_TEAM_ID" --password "$MACOS_NOTARY_PASSWORD"
+fi
+if [ $# -gt 0 ] && { [ -z "${MACOS_SIGN_APP:-}" ] || [ -z "${MACOS_SIGN_PKG:-}" ]; }; then
+    echo "not notarizing: that needs both MACOS_SIGN_APP and MACOS_SIGN_PKG" >&2
+    set --
+fi
+if [ $# -gt 0 ]; then
+    echo "== notarizing (Apple usually answers within a few minutes)"
+    # notarytool can end well although Apple said no, so read the answer.
+    xcrun notarytool submit "$pkg" "$@" --wait --timeout 45m --output-format json >"$work/notary.json" || true
+    cat "$work/notary.json"
+    echo
+    id="$(plutil -extract id raw -o - "$work/notary.json" 2>/dev/null || true)"
+    status="$(plutil -extract status raw -o - "$work/notary.json" 2>/dev/null || true)"
+    if [ "$status" != Accepted ]; then
+        echo "Apple did not notarize the package (status: ${status:-none})." >&2
+        if [ -n "$id" ]; then
+            xcrun notarytool log "$id" "$@" >&2 || true
+        fi
+        exit 1
+    fi
     xcrun stapler staple "$pkg"
-elif [ -n "${MACOS_SIGN_PKG:-}" ] && [ -n "${MACOS_NOTARY_APPLE_ID:-}" ]; then
-    echo "== notarizing"
-    xcrun notarytool submit "$pkg" --apple-id "$MACOS_NOTARY_APPLE_ID" --team-id "$MACOS_NOTARY_TEAM_ID" \
-        --password "$MACOS_NOTARY_PASSWORD" --wait
-    xcrun stapler staple "$pkg"
+    xcrun stapler validate "$pkg"
+    # What Gatekeeper will say on the Mac that opens it.
+    spctl --assess --type install --verbose=2 "$pkg"
 fi
 
 echo "== done: $pkg"

@@ -34,6 +34,26 @@ builds:
     flags: [-trimpath]
     ldflags: *ldflags
 
+# The Mac programs in the archives are signed with the Developer ID
+# Application certificate (hardened runtime) and notarized by Apple, when
+# the release workflow has the secrets for it (see
+# packaging/macos/ci-signing.sh for the list); otherwise they stay
+# unsigned. This works on Linux. A bare program cannot carry a stapled
+# ticket: a Mac asks Apple about it the first time it runs.
+notarize:
+  macos:
+    - enabled: '{{ and (isEnvSet "MACOS_APP_CERT_P12") (isEnvSet "APPLE_API_KEY_P8") }}'
+      ids: [bb-server, bb, bb-agent]
+      sign:
+        certificate: "{{ .Env.MACOS_APP_CERT_P12 }}"
+        password: "{{ .Env.MACOS_CERT_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.APPLE_API_ISSUER_ID }}"
+        key_id: "{{ .Env.APPLE_API_KEY_ID }}"
+        key: "{{ .Env.APPLE_API_KEY_P8 }}"
+        wait: true
+        timeout: 20m
+
 archives:
   - id: server
     ids: [bb-server, bb]
