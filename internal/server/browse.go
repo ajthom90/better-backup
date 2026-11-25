@@ -49,8 +49,9 @@ func (h *queryHub) channel(agent string) chan struct{} {
 }
 
 // ask queues a question for an agent.
-func (h *queryHub) ask(agent string, req *api.BrowseRequest) *agentQuery {
-	q := &agentQuery{q: api.AgentQuery{ID: keys.RandomHex(12), Browse: req}, agent: agent, answer: make(chan *api.BrowseResult, 1)}
+func (h *queryHub) ask(agent string, query api.AgentQuery) *agentQuery {
+	query.ID = keys.RandomHex(12)
+	q := &agentQuery{q: query, agent: agent, answer: make(chan *api.BrowseResult, 1)}
 	h.mu.Lock()
 	ch := h.channel(agent)
 	h.waiting[agent] = append(h.waiting[agent], q)
@@ -180,9 +181,17 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "unknown kind of list")
 		return
 	}
+	if res := s.askAgent(w, r, a, api.AgentQuery{Browse: &req}); res != nil {
+		reply(w, http.StatusOK, res)
+	}
+}
+
+// askAgent puts a question to an agent and waits for the answer. When
+// there is none it has answered the request itself, and returns nil.
+func (s *Server) askAgent(w http.ResponseWriter, r *http.Request, a *api.Agent, query api.AgentQuery) *api.BrowseResult {
 	if !a.Online {
-		fail(w, http.StatusConflict, a.Name+" is not connected right now, so it cannot be looked at. Type the name instead, or try again when it is back.")
-		return
+		fail(w, http.StatusConflict, a.Name+" is not connected right now, so it cannot be asked. Try again when it is back.")
+		return nil
 	}
 	h := &s.queries
 	h.mu.Lock()
@@ -193,7 +202,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	if !asked {
 		wait = browseWaitUnseen
 	}
-	q := h.ask(a.ID, &req)
+	q := h.ask(a.ID, query)
 	defer h.drop(q)
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
@@ -202,15 +211,52 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		if res.Entries == nil {
 			res.Entries = []api.BrowseEntry{}
 		}
-		reply(w, http.StatusOK, res)
+		return res
 	case <-timer.C:
 		if !asked {
 			fail(w, http.StatusConflict, a.Name+" has not answered. It may be switched off, or its agent may be older than this server: install the newest agent on it, or type the name instead.")
-			return
+			return nil
 		}
 		fail(w, http.StatusGatewayTimeout, a.Name+" did not answer in time. Try again, or type the name instead.")
 	case <-s.stop:
 		fail(w, http.StatusServiceUnavailable, "the server is stopping")
 	case <-r.Context().Done():
 	}
+	return nil
+}
+
+// handleDSRM restarts a domain controller into Directory Services
+// Restore Mode, or back out of it, so that nobody has to type bcdedit
+// on the machine before Active Directory is restored.
+func (s *Server) handleDSRM(w http.ResponseWriter, r *http.Request) {
+	a, err := s.agent(r.PathValue("id"))
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
+	if a == nil || a.Revoked {
+		fail(w, http.StatusNotFound, "no such agent")
+		return
+	}
+	var req struct {
+		Leave    bool   `json:"leave"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &req) || !s.confirmPassword(w, r, req.Password) {
+		return
+	}
+	action := api.ActionEnterDSRM
+	if req.Leave {
+		action = api.ActionLeaveDSRM
+	}
+	res := s.askAgent(w, r, a, api.AgentQuery{Action: action})
+	if res == nil {
+		return
+	}
+	if res.Error != "" {
+		fail(w, http.StatusConflict, res.Error)
+		return
+	}
+	note(r, "%s: %s", a.Name, res.Text)
+	reply(w, http.StatusOK, res)
 }

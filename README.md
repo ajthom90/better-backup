@@ -272,10 +272,15 @@ you create one (`sudo groupadd better-backup`, then restart the agent). On
 macOS, administrators need no `sudo`. The desktop app also builds for Linux
 (`make app`), but is not packaged there yet.
 
-On Windows, run `bb-agent enroll CODE` from an elevated prompt, then
-`bb-agent service install` and `bb-agent service start`.
+On Windows the installer does all of this, and "better-backup agent" in the
+Start menu is the same app: see [Windows installers](#windows-installers).
 
 ### 3. Create a policy and back up
+
+In the web UI choose **New policy**: name it, pick the machine, press
+"Browse the machine…" and tick the folders, set a time and how many
+snapshots to keep, and save. **Back up now** on the policy starts the first
+backup. The same from a command line, for scripts:
 
 ```sh
 bb agents
@@ -287,6 +292,10 @@ bb policy run documents --wait
 
 ### 4. Restore
 
+In the web UI, **Browse** on a snapshot walks its folders, and **Restore**
+puts a file, a folder or all of it back, in place or somewhere else. The
+same from a command line:
+
 ```sh
 bb snapshots
 bb ls SNAPSHOT /home/alice
@@ -296,7 +305,8 @@ bb restore SNAPSHOT --target /tmp/restored --wait # to another folder
 bb restore SNAPSHOT --agent other-machine --target /srv/restore --wait
 ```
 
-Everything can be done in the web UI at `https://your-server:8443/`: add and
+Once the server is installed, everything is done in the web UI at
+`https://your-server:8443/` and nothing needs a command line: add and
 revoke agents, create and edit policies, start backups, browse a snapshot and
 restore a file, a folder, a disk or all of it, rebuild a whole machine from
 the recovery disc, follow jobs and read their
@@ -585,7 +595,7 @@ change: full, tracked and switched-off backups of a machine with qcow2 and
 raw disks and UEFI firmware, and restores that are compared with the
 originals. Not covered by them, and so untested: guests with the guest agent,
 disks on block devices (LVM, for which the scratch file goes to
-`/var/lib/libvirt/images` or `BB_SCRATCH_DIR`), hosts with SELinux, and
+`/var/lib/libvirt/images` or the policy's scratch folder), hosts with SELinux, and
 real workloads writing during a backup.
 
 Known gaps: network disks (Ceph RBD, iSCSI), pass-through and shared disks
@@ -617,7 +627,7 @@ backup does it but with standard QEMU commands: a backup job keeps the old
 contents of whatever the machine overwrites, so every disk is read as it was
 at one instant, on any kind of storage. What the machine overwrites during
 the backup is kept in `/var/tmp` until the backup ends (set
-`BB_SCRATCH_DIR` in the agent's environment to use another folder); a busy
+"Scratch folder" in the policy to use another folder); a busy
 machine needs room there. If the guest agent is enabled for the machine, its
 file systems are flushed and frozen for that instant. A machine that is
 switched off is read from its volumes. Disks marked "no backup" in Proxmox
@@ -804,15 +814,19 @@ Active Directory cannot be replaced while it runs, so the domain controller
 must be in Directory Services Restore Mode (DSRM). The agent, installed as a
 service, starts there too.
 
-1. On the domain controller, as an administrator: `bcdedit /set safeboot dsrepair`,
-   then restart. Sign in as `.\Administrator` with the DSRM password. In DSRM
+1. In the web UI, open Restore on the snapshot, tick "Put the Windows system
+   state back over this machine" and press "Restart NAME into Directory
+   Services Restore Mode…". The agent restarts the machine there within a
+   minute; nobody has to sign in on it. (By hand, as an administrator:
+   `bcdedit /set safeboot dsrepair`, then restart.) In DSRM
    the machine may not be able to look up names, so if the agent reaches the
    server by name, make sure that name still resolves (a hosts file entry
    works).
 2. Start the restore from the web UI or with
    `bb restore SNAPSHOT --system-state-in-place --restart --wait`.
 3. The restart leaves DSRM (the restore runs `bcdedit /deletevalue safeboot`
-   when it restarts the machine; do that yourself if you restart by hand).
+   when it restarts the machine). To leave it without restoring, press
+   "Restart it back to normal…" in the same dialog.
 
 That is a **non-authoritative** restore: the database is put back, Active
 Directory is told it came from a backup, and after the restart the domain
@@ -1108,7 +1122,6 @@ bb-server fetch --repo /mnt/new-disk/repo \
   restored as its own file). Windows keeps most system files as hard links
   into its component store, so a system state restored in place uses more
   disk space than before.
-- No MSI installer yet; `service install` does the same job on Windows.
 - The macOS installer is not signed or notarized until the release workflow is
   given an Apple Developer ID (see `.github/workflows/release.yml`).
 - Microsoft 365 backup has only met a stand-in for Microsoft Graph, and

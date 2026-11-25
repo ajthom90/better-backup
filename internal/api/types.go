@@ -171,6 +171,10 @@ type Policy struct {
 	// backup, and "check" reads them in full and warns where the
 	// tracking was wrong.
 	VMTracking string `json:"vm_tracking,omitempty"`
+	// VMScratchDir is a folder on a KVM or Proxmox host where the old
+	// contents of what a machine overwrites during its backup are kept
+	// until the backup ends. Empty: the host's usual place.
+	VMScratchDir string `json:"vm_scratch_dir,omitempty"`
 	// SystemState backs up what Windows needs to bring a machine's
 	// identity back: the registry, boot and system files, and on a domain
 	// controller the Active Directory database and SYSVOL.
@@ -207,6 +211,7 @@ type BackupSpec struct {
 	VMs           []string `json:"vms,omitempty"`
 	Hypervisor    string   `json:"hypervisor,omitempty"`
 	VMTracking    string   `json:"vm_tracking,omitempty"`
+	VMScratchDir  string   `json:"vm_scratch_dir,omitempty"`
 	SystemState   bool     `json:"system_state,omitempty"`
 	TrueNASConfig bool     `json:"truenas_config,omitempty"`
 	// BareMetal and MachineDisks are as in Policy.
@@ -980,4 +985,16 @@ type BrowseResult struct {
 type AgentQuery struct {
 	ID     string         `json:"id"`
 	Browse *BrowseRequest `json:"browse,omitempty"`
+	// Action is something to do at once instead; the answer's Text says
+	// what was done.
+	Action string `json:"action,omitempty"`
 }
+
+// Actions an agent can be asked for outside a job.
+const (
+	// ActionEnterDSRM restarts a domain controller into Directory
+	// Services Restore Mode, where Active Directory can be restored.
+	ActionEnterDSRM = "dsrm-enter"
+	// ActionLeaveDSRM restarts it back into normal operation.
+	ActionLeaveDSRM = "dsrm-leave"
+)

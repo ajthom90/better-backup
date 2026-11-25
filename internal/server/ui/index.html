@@ -368,6 +368,7 @@ function policyDialog(p) {
     m365Load, m365Pick);
   const showM365 = () => { m365Box.hidden = !m365Tenant.value; };
   m365Tenant.onchange = showM365;
+  const vmScratch = el("input", { id: "vmScratch", value: (p && p.vm_scratch_dir) || "", placeholder: "Leave empty for the host's usual place", spellcheck: false });
   const trackingBox = el("div");
   const showHyper = () => { const v = hypervisor.value === "vmware"; vmwareBox.hidden = !v; trackingBox.hidden = v; };
   hypervisor.onchange = showHyper;
@@ -376,7 +377,7 @@ function policyDialog(p) {
   save.onclick = async () => {
     const retention = {};
     for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
-    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "", vm_tracking: hypervisor.value === "vmware" ? "" : vmTracking.value, system_state: sysState.checked, truenas_config: trueNAS.checked,
+    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "", vm_tracking: hypervisor.value === "vmware" ? "" : vmTracking.value, vm_scratch_dir: hypervisor.value === "vmware" || hypervisor.value === "hyperv" ? "" : vmScratch.value.trim(), system_state: sysState.checked, truenas_config: trueNAS.checked,
       bare_metal: bareMetal.checked, machine_disks: machineDisks.value.split(",").map(x => x.trim()).filter(Boolean),
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
@@ -433,6 +434,11 @@ function policyDialog(p) {
     err, buttons);
   trackingBox.append(el("label", { textContent: "How virtual machine disks are read" }), vmTracking,
     el("div", { className: "hint", textContent: "Reading only what changed is much faster and relies on the hypervisor's change tracking. Run a few backups with the checking option first: it reads everything and warns if the tracking missed a change." }));
+  const scratchBox = el("div", { id: "vmScratchBox" }, el("label", { textContent: "Scratch folder on a KVM or Proxmox host (optional)" }), vmScratch,
+    el("div", { className: "hint", textContent: "While a running machine is backed up, what it overwrites is kept in this folder until the backup ends. Empty uses /var/lib/libvirt/images on KVM and /var/tmp on Proxmox. Name a folder on a disk with room when a busy machine fills that." }));
+  trackingBox.append(scratchBox);
+  const showScratch = () => { scratchBox.hidden = hypervisor.value === "hyperv"; };
+  hypervisor.addEventListener("change", showScratch); showScratch();
   showHyper(); showM365();
   $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
 }
@@ -984,7 +990,14 @@ function restoreDialog(s, path) {
     el("div", { className: "warn", textContent: "This replaces Windows system files, and by default the whole registry, on " + s.hostname + " with their state at the time of this backup. Programs and drivers installed since will stop working. It is finished by a restart and cannot be undone." }),
     el("label", { className: "check" }, sysReg, "Restore the registry too"),
     el("label", { className: "check" }, sysRestart, "Restart Windows when the restore is done"),
-    el("div", { className: "hint", textContent: "On a domain controller, start Windows in Directory Services Restore Mode first: Active Directory cannot be replaced while it runs. The agent keeps running there." }),
+    el("div", { className: "hint", textContent: "On a domain controller, start Windows in Directory Services Restore Mode first: Active Directory cannot be replaced while it runs. The agent keeps running there. The buttons below restart the machine into that mode and, if you change your mind, back out of it; a restore with “Restart Windows” ticked leaves the mode by itself." }),
+    el("div", { className: "acts", style: "margin-top:8px" },
+      ...[[false, "dsrmEnter", "Restart " + s.hostname + " into Directory Services Restore Mode…", "The domain controller restarts in one minute and comes back with Active Directory stopped. Until it is restarted out of that mode it serves no sign-ins. Wait for its agent to show as online again, then start the restore."],
+          [true, "dsrmLeave", "Restart it back to normal…", "The domain controller restarts in one minute and comes back with Active Directory running."]].map(([leave, id, label, why]) =>
+        el("button", { id, type: "button", textContent: label, onclick: () => withPassword(label.replace("…", ""), why, "Restart the machine", async password => {
+          const r = await call("POST", "/api/v1/agents/" + s.agent_id + "/dsrm", { leave, password });
+          notice("The machine is restarting", s.hostname + " is " + r.text + ".");
+        }, async () => restoreDialog(s, path)) }))),
     el("label", { className: "check" }, sysAuthVol, "Domain controller: make this SYSVOL the authoritative copy"),
     el("div", { className: "hint", textContent: "Leave this off unless every domain controller lost SYSVOL. Off, the restored SYSVOL is brought up to date from the other domain controllers." }),
     el("label", { textContent: "Domain controller: restore these parts of Active Directory authoritatively (optional)" }), sysAuthDN,

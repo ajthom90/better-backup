@@ -208,7 +208,10 @@ func clean(s string) string {
 
 // scratchDir is where the old contents of what a machine overwrites
 // during its backup are kept until the backup ends.
-func scratchDir() string {
+func scratchDir(chosen string) string {
+	if chosen != "" {
+		return chosen
+	}
 	if d := os.Getenv("BB_SCRATCH_DIR"); d != "" {
 		return d
 	}
@@ -332,7 +335,7 @@ func (driver) freezeLive(ctx context.Context, id, qmpSocket string, settings []s
 		frozen = err == nil
 		stop()
 	}
-	l, err := startLive(ctx, qmpSocket, keysWanted, scratchDir(), prefix, cfg.Bitmap, base)
+	l, err := startLive(ctx, qmpSocket, keysWanted, scratchDir(o.ScratchDir), prefix, cfg.Bitmap, base)
 	if frozen {
 		if _, terr := run(context.WithoutCancel(ctx), "qm", "guest", "cmd", id, "fsfreeze-thaw"); terr != nil {
 			warn("the guest's file systems were frozen for the backup and could not be released; run 'qm guest cmd %s fsfreeze-thaw' on the node: %v", id, terr)

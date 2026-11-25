@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -122,6 +123,14 @@ func TestBrowse(t *testing.T) {
 	}
 	if err := admin.Do("POST", "/api/v1/agents/"+ids["here"]+"/browse", api.BrowseRequest{Kind: "secrets"}, &res); err == nil {
 		t.Fatal("an unknown kind of list was accepted")
+	}
+	// Only a Windows domain controller can be restarted into its restore
+	// mode; any other machine says so and is left alone.
+	if runtime.GOOS != "windows" {
+		err = admin.Do("POST", "/api/v1/agents/"+ids["here"]+"/dsrm", map[string]bool{"leave": false}, nil)
+		if err == nil || !strings.Contains(err.Error(), "domain controller") {
+			t.Fatalf("restore mode on a machine that has none: %v", err)
+		}
 	}
 	if err := admin.Do("POST", "/api/v1/agents/nobody/browse", api.BrowseRequest{Kind: api.BrowseFolders}, &res); err == nil {
 		t.Fatal("an unknown agent was browsed")

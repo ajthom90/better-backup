@@ -400,8 +400,16 @@ func (a *Agent) answerQueries(ctx context.Context) {
 			qctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			res := &api.BrowseResult{Entries: []api.BrowseEntry{}, Error: "this agent version cannot answer that; update the agent"}
-			if q.Browse != nil {
+			switch {
+			case q.Browse != nil:
 				res = browse.Run(qctx, q.Browse)
+			case q.Action == api.ActionEnterDSRM || q.Action == api.ActionLeaveDSRM:
+				text, err := restore.RestartDSRM(q.Action == api.ActionEnterDSRM)
+				res = &api.BrowseResult{Entries: []api.BrowseEntry{}, Text: text}
+				if err != nil {
+					res.Error = err.Error()
+				}
+				a.log.Info("asked to restart for Directory Services Restore Mode", "action", q.Action, "result", text, "err", err)
 			}
 			if err := a.c.json(qctx, "POST", "/agent/v1/queries/"+q.ID, res, nil); err != nil {
 				a.log.Warn("could not answer the server's question", "err", err)
@@ -678,7 +686,7 @@ func (a *Agent) runJob(ctx context.Context, j *api.Job) {
 		}
 		for _, name := range vms {
 			opts.VMs = append(opts.VMs, backup.VMSource{Name: name, Open: func(vm *backup.VMSource, prev []byte) error {
-				fz, err := drv.Freeze(jctx, vm.Name, hypervisor.Options{Tracking: j.Backup.VMTracking != "", Previous: prev,
+				fz, err := drv.Freeze(jctx, vm.Name, hypervisor.Options{Tracking: j.Backup.VMTracking != "", Previous: prev, ScratchDir: j.Backup.VMScratchDir,
 					Tag: j.ID, Scope: j.PolicyID, StateDir: a.dir, Connection: j.Backup.Connection})
 				if err != nil {
 					return err

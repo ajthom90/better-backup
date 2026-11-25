@@ -153,6 +153,11 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad(`vm_tracking must be empty, "on" or "check"`)
 		return
 	}
+	p.VMScratchDir = strings.TrimSpace(p.VMScratchDir)
+	if p.VMScratchDir != "" && !strings.HasPrefix(p.VMScratchDir, "/") {
+		bad("the scratch folder for virtual machine backups is a full path on the host, such as /mnt/fast/scratch")
+		return
+	}
 	if p.Hypervisor != "" && !slices.Contains(api.Hypervisors, p.Hypervisor) {
 		bad("hypervisor must be empty or one of: " + strings.Join(api.Hypervisors, ", "))
 		return
@@ -236,7 +241,7 @@ func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, SystemState: p.SystemState, TrueNASConfig: p.TrueNASConfig, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot, M365: p.M365}}
+	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, VMScratchDir: p.VMScratchDir, SystemState: p.SystemState, TrueNASConfig: p.TrueNASConfig, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot, M365: p.M365}}
 	return j, s.enqueue(j)
 }
 

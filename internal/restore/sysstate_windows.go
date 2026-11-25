@@ -434,6 +434,36 @@ func (r *restorer) sysFinish() error {
 	return nil
 }
 
+// RestartDSRM restarts this domain controller into Directory Services
+// Restore Mode, where Active Directory is stopped and can be restored,
+// or back into normal operation. It says what it did.
+func RestartDSRM(enter bool) (string, error) {
+	dc, running := adRunning()
+	if !dc {
+		return "", errors.New("this machine is not a domain controller, so it has no Directory Services Restore Mode")
+	}
+	if enter && !running {
+		return "", errors.New("Active Directory is not running: the machine is already in Directory Services Restore Mode")
+	}
+	if !enter && running {
+		return "", errors.New("Active Directory is running: the machine is not in Directory Services Restore Mode")
+	}
+	args, why, did := []string{"/set", "safeboot", "dsrepair"}, "better-backup is restarting Windows in Directory Services Restore Mode", "restarting in one minute into Directory Services Restore Mode"
+	if !enter {
+		args, why, did = []string{"/deletevalue", "safeboot"}, "better-backup is restarting Windows out of Directory Services Restore Mode", "restarting in one minute into normal operation"
+	}
+	if out, err := exec.Command("bcdedit.exe", args...).CombinedOutput(); err != nil && enter {
+		return "", fmt.Errorf("bcdedit could not set the restore mode: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("shutdown.exe", "/r", "/t", "60", "/c", why).CombinedOutput(); err != nil {
+		if enter {
+			exec.Command("bcdedit.exe", "/deletevalue", "safeboot").Run()
+		}
+		return "", fmt.Errorf("Windows could not be restarted: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return did, nil
+}
+
 func (s *sysRun) dsrmHint() string {
 	if !s.dc {
 		return ""

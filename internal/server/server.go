@@ -486,6 +486,7 @@ func (s *Server) routes() http.Handler {
 	route("GET /api/v1/installers", operator, "", s.handleInstallers)
 	route("GET /api/v1/agents", viewer, "", s.handleAgents)
 	route("POST /api/v1/agents/{id}/browse", operator, "", s.handleBrowse)
+	route("POST /api/v1/agents/{id}/dsrm", admin, "Restarted a domain controller into or out of Directory Services Restore Mode", s.handleDSRM)
 	route("DELETE /api/v1/agents/{id}", operator, "Revoked an agent", s.handleRevokeAgent)
 	route("GET /api/v1/policies", viewer, "", s.handlePolicies)
 	route("POST /api/v1/policies", operator, "Created a policy", s.handleSavePolicy)
