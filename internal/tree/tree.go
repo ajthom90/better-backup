@@ -111,10 +111,17 @@ type Stream struct {
 
 // Stats summarizes a backup.
 type Stats struct {
-	Files         int64 `json:"files"`
-	Dirs          int64 `json:"dirs"`
-	Bytes         int64 `json:"bytes"`
-	FilesChanged  int64 `json:"files_changed"`
+	Files        int64 `json:"files"`
+	Dirs         int64 `json:"dirs"`
+	Bytes        int64 `json:"bytes"`
+	FilesChanged int64 `json:"files_changed"`
+	// FilesNew are the changed files that the backup before did not
+	// have, FilesRemoved the files and folders it had that are gone,
+	// and BytesChanged the size of the new and changed files. The
+	// first backup of a folder counts everything as new.
+	FilesNew      int64 `json:"files_new,omitempty"`
+	FilesRemoved  int64 `json:"files_removed,omitempty"`
+	BytesChanged  int64 `json:"bytes_changed,omitempty"`
 	BytesRead     int64 `json:"bytes_read"`
 	BytesUploaded int64 `json:"bytes_uploaded"`
 	ChunksNew     int64 `json:"chunks_new"`

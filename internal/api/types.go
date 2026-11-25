@@ -217,6 +217,30 @@ type M365User struct {
 type Schedule struct {
 	Interval string `json:"interval,omitempty"` // Go duration, e.g. "24h"
 	DailyAt  string `json:"daily_at,omitempty"` // "HH:MM" in server local time
+	// Days are the days of the week DailyAt applies to: 0 for Sunday to
+	// 6 for Saturday. Empty: every day.
+	Days []int `json:"days,omitempty"`
+	// Every and Until repeat the backup through the day: from DailyAt,
+	// again every Every (a Go duration such as "3h") until Until
+	// ("HH:MM", the last time a backup may start).
+	Every string `json:"every,omitempty"`
+	Until string `json:"until,omitempty"`
+}
+
+// Sources say what to back up on a machine.
+type Sources struct {
+	Paths         []string `json:"paths,omitempty"`
+	Volumes       []string `json:"volumes,omitempty"`
+	VMs           []string `json:"vms,omitempty"`
+	SystemState   bool     `json:"system_state,omitempty"`
+	BareMetal     bool     `json:"bare_metal,omitempty"`
+	MachineDisks  []string `json:"machine_disks,omitempty"`
+	TrueNASConfig bool     `json:"truenas_config,omitempty"`
+}
+
+// Empty says there is nothing to back up.
+func (s *Sources) Empty() bool {
+	return len(s.Paths) == 0 && len(s.Volumes) == 0 && len(s.VMs) == 0 && !s.SystemState && !s.BareMetal && !s.TrueNASConfig
 }
 
 type Retention struct {
@@ -236,8 +260,19 @@ type Policy struct {
 	// per machine. AgentID is the first of them; a policy saved with
 	// only AgentID has that one machine.
 	AgentIDs []string `json:"agent_ids,omitempty"`
-	Paths    []string `json:"paths"`
-	Excludes []string `json:"excludes,omitempty"`
+	// PerMachine says what to back up on a machine that differs from
+	// the rest: for an agent named here, its Sources replace Paths,
+	// Volumes, VMs, SystemState, BareMetal, MachineDisks and
+	// TrueNASConfig below. Excludes and everything else apply to all.
+	PerMachine map[string]*Sources `json:"per_machine,omitempty"`
+	// Off are the machines of the policy whose backups are switched
+	// off: they stay in the policy and keep their snapshots.
+	Off []string `json:"off,omitempty"`
+	// NextRun is when the schedule next starts a backup. The server
+	// fills it in when policies are read; it is not stored.
+	NextRun  *time.Time `json:"next_run,omitempty"`
+	Paths    []string   `json:"paths"`
+	Excludes []string   `json:"excludes,omitempty"`
 	// Volumes are backed up as block-level images: drive letters such as
 	// "C:" on Windows, or block devices such as /dev/vg0/data elsewhere.
 	Volumes []string `json:"volumes,omitempty"`
@@ -623,6 +658,10 @@ type UsagePoint struct {
 	Day    string `json:"day"` // 2006-01-02
 	Stored int64  `json:"stored"`
 	Free   int64  `json:"free"`
+	// Raw is the unique data before compression, and Total the size of
+	// the disk; the graphs use them.
+	Raw   int64 `json:"raw,omitempty"`
+	Total int64 `json:"total,omitempty"`
 }
 
 // OffsiteSettings configures the second copy of the repository: a folder
@@ -670,6 +709,22 @@ type OffsiteStatus struct {
 	// LockedUntil is the date everything in the copy was locked to by
 	// the last run that locked.
 	LockedUntil *time.Time `json:"locked_until,omitempty"`
+	// Queue is what waits to be copied; nil when the copy is not set up.
+	Queue *OffsiteQueue `json:"queue,omitempty"`
+	// StoredObjects and StoredBytes are what the copy held after its
+	// last run, and Rate the speed of that run in bytes a second.
+	StoredObjects int     `json:"stored_objects,omitempty"`
+	StoredBytes   int64   `json:"stored_bytes,omitempty"`
+	Rate          float64 `json:"rate,omitempty"`
+}
+
+// OffsiteQueue is what the repository holds that the offsite copy does
+// not have yet.
+type OffsiteQueue struct {
+	Files int   `json:"files"`
+	Bytes int64 `json:"bytes"`
+	// Oldest is when the oldest file that waits was written.
+	Oldest *time.Time `json:"oldest,omitempty"`
 }
 
 // OffsiteTest is the answer to a connection test.
@@ -1098,6 +1153,24 @@ func (p *Policy) Machines() []string {
 	return nil
 }
 
+// SourcesFor says what the policy backs up on one machine.
+func (p *Policy) SourcesFor(agentID string) Sources {
+	if s := p.PerMachine[agentID]; s != nil {
+		return *s
+	}
+	return Sources{Paths: p.Paths, Volumes: p.Volumes, VMs: p.VMs, SystemState: p.SystemState, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, TrueNASConfig: p.TrueNASConfig}
+}
+
+// IsOff says whether the backups of one machine are switched off.
+func (p *Policy) IsOff(agentID string) bool {
+	for _, id := range p.Off {
+		if id == agentID {
+			return true
+		}
+	}
+	return false
+}
+
 // Covers says whether the policy backs up this agent's machine.
 func (p *Policy) Covers(agentID string) bool {
 	for _, id := range p.Machines() {
@@ -1106,4 +1179,132 @@ func (p *Policy) Covers(agentID string) bool {
 		}
 	}
 	return false
+}
+
+// Report is one backup or restore as the reports show it.
+type Report struct {
+	ID         string     `json:"id"`
+	Type       string     `json:"type"`
+	Status     string     `json:"status"`
+	PolicyID   string     `json:"policy_id,omitempty"`
+	Policy     string     `json:"policy,omitempty"`
+	AgentID    string     `json:"agent_id,omitempty"`
+	Agent      string     `json:"agent,omitempty"`
+	SnapshotID string     `json:"snapshot_id,omitempty"`
+	Created    time.Time  `json:"created"`
+	Started    *time.Time `json:"started,omitempty"`
+	Finished   *time.Time `json:"finished,omitempty"`
+	Seconds    float64    `json:"seconds"`
+	// Files and Folders are everything the run covered; FilesNew,
+	// FilesModified and FilesRemoved what changed since the run before.
+	Files         int64 `json:"files"`
+	Folders       int64 `json:"folders"`
+	FilesNew      int64 `json:"files_new"`
+	FilesModified int64 `json:"files_modified"`
+	FilesRemoved  int64 `json:"files_removed"`
+	Skipped       int64 `json:"skipped,omitempty"`
+	// Bytes is the size of everything covered, BytesChanged of the new
+	// and changed files, BytesRead what was read from the machine and
+	// BytesStored the new data that was stored after deduplication.
+	Bytes        int64 `json:"bytes"`
+	BytesChanged int64 `json:"bytes_changed"`
+	BytesRead    int64 `json:"bytes_read"`
+	BytesStored  int64 `json:"bytes_stored"`
+	// ReadRate and StoreRate are bytes a second over the whole run, and
+	// ScanRate files and folders a second.
+	ReadRate  float64 `json:"read_rate"`
+	StoreRate float64 `json:"store_rate"`
+	ScanRate  float64 `json:"scan_rate"`
+	Errors    int     `json:"errors"`
+	Warnings  int     `json:"warnings"`
+	Error     string  `json:"error,omitempty"`
+	// Target is where a restore wrote to; empty for the original place.
+	Target string `json:"target,omitempty"`
+}
+
+// DayPoint is what the backups and the offsite copy did on one day.
+type DayPoint struct {
+	Day            string  `json:"day"`
+	Backups        int     `json:"backups"`
+	Failed         int     `json:"failed"`
+	Warned         int     `json:"warned"`
+	BytesRead      int64   `json:"bytes_read"`
+	BytesStored    int64   `json:"bytes_stored"`
+	BytesChanged   int64   `json:"bytes_changed"`
+	Seconds        float64 `json:"seconds"`
+	OffsiteBytes   int64   `json:"offsite_bytes"`
+	OffsiteSeconds float64 `json:"offsite_seconds"`
+}
+
+// RunPoint is one good backup, for the graph of speed.
+type RunPoint struct {
+	ID          string    `json:"id"`
+	Time        time.Time `json:"time"`
+	Policy      string    `json:"policy"`
+	Agent       string    `json:"agent"`
+	Seconds     float64   `json:"seconds"`
+	BytesRead   int64     `json:"bytes_read"`
+	BytesStored int64     `json:"bytes_stored"`
+	ReadRate    float64   `json:"read_rate"`
+	ScanRate    float64   `json:"scan_rate"`
+}
+
+// Graphs are the numbers the graphs are drawn from.
+type Graphs struct {
+	Days  int          `json:"days"`
+	Usage []UsagePoint `json:"usage"`
+	Daily []DayPoint   `json:"daily"`
+	Runs  []RunPoint   `json:"runs"`
+	// Sources is the size of the newest backup of everything, Protected
+	// the size of every snapshot added up, Raw the unique data before
+	// compression and Stored what is on disk.
+	Sources   int64 `json:"sources"`
+	Protected int64 `json:"protected"`
+	Raw       int64 `json:"raw"`
+	Stored    int64 `json:"stored"`
+}
+
+// RestoreEntry is a file or folder of a machine as its backups had it at
+// a point in time.
+type RestoreEntry struct {
+	Name    string    `json:"name"`
+	Type    string    `json:"type"`
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"mtime"`
+	// SnapshotID is the newest snapshot that holds it, and Snapshots
+	// how many of the snapshots that were read do.
+	SnapshotID   string    `json:"snapshot_id"`
+	SnapshotTime time.Time `json:"snapshot_time"`
+	Snapshots    int       `json:"snapshots"`
+	// Removed: the newest backup no longer has it.
+	Removed bool `json:"removed,omitempty"`
+}
+
+// RestoreListing is a folder in the restore browser.
+type RestoreListing struct {
+	Path    string        `json:"path"`
+	At      time.Time     `json:"at"`
+	OS      string        `json:"os"`
+	Entries []RestoreEntry `json:"entries"`
+	// More: there are older snapshots that were not read for removed items.
+	More bool `json:"more,omitempty"`
+}
+
+// FileVersion is one version of a path in the backups of a machine.
+type FileVersion struct {
+	SnapshotID   string    `json:"snapshot_id"`
+	SnapshotTime time.Time `json:"snapshot_time"`
+	// Oldest is the time of the oldest snapshot with this same version.
+	Oldest    time.Time `json:"oldest"`
+	Snapshots int       `json:"snapshots"`
+	Type      string    `json:"type"`
+	Size      int64     `json:"size"`
+	ModTime   time.Time `json:"mtime"`
+}
+
+// LargeFiles are the largest files in the newest backups.
+type LargeFiles struct {
+	Files []SearchHit `json:"files"`
+	// Building: the index of file names is not built yet.
+	Building bool `json:"building,omitempty"`
 }

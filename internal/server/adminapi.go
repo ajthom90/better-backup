@@ -105,6 +105,12 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, err)
 		return
 	}
+	now := time.Now()
+	for _, p := range ps {
+		var last int64
+		s.db.QueryRow(`SELECT COALESCE(MAX(created), 0) FROM jobs WHERE policy_id = ? AND type = ?`, p.ID, api.JobBackup).Scan(&last)
+		p.NextRun = nextRun(p, fromMS(last), now)
+	}
 	reply(w, http.StatusOK, ps)
 }
 
@@ -144,13 +150,10 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad(msg)
 		return
 	}
-	if len(p.Paths) == 0 && len(p.Volumes) == 0 && len(p.VMs) == 0 && !p.SystemState && !p.BareMetal && !p.TrueNASConfig && p.M365 == nil {
-		bad("a policy needs at least one path, volume or virtual machine, the system state, the whole machine, the TrueNAS configuration or Microsoft 365")
-		return
-	}
 	if !p.BareMetal {
 		p.MachineDisks = nil
 	}
+	p.NextRun = nil
 	// The machines: agent_ids, or the single agent_id of older clients.
 	var machines []string
 	for _, id := range p.Machines() {
@@ -176,9 +179,45 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 		bad("Microsoft 365 and VMware are read over the network, by one machine: choose a single machine for this policy")
 		return
 	}
+	// What to back up, machine by machine: a machine named in
+	// per_machine has its own list, the others share the policy's.
+	for id, src := range p.PerMachine {
+		if !slices.Contains(machines, id) || src == nil {
+			delete(p.PerMachine, id)
+			continue
+		}
+		if !src.BareMetal {
+			src.MachineDisks = nil
+		}
+	}
+	if len(p.PerMachine) == 0 {
+		p.PerMachine = nil
+	}
+	p.Off = slices.DeleteFunc(p.Off, func(id string) bool { return !slices.Contains(machines, id) })
+	if len(p.PerMachine) > 0 && (p.M365 != nil || p.Hypervisor == "vmware") {
+		bad("Microsoft 365 and VMware policies have one machine and one list of what to back up")
+		return
+	}
 	for _, a := range agents {
-		if p.BareMetal && a.OS != "windows" && a.OS != "linux" {
+		src := p.SourcesFor(a.ID)
+		if src.Empty() && p.M365 == nil {
+			if len(agents) == 1 {
+				bad("a policy needs at least one path, volume or virtual machine, the system state, the whole machine, the TrueNAS configuration or Microsoft 365")
+			} else {
+				bad("nothing is chosen to back up on " + a.Name + ": choose something, or take the machine out of the policy")
+			}
+			return
+		}
+		if src.BareMetal && a.OS != "windows" && a.OS != "linux" {
 			bad("a whole machine can be backed up for bare-metal recovery on Windows and Linux only; " + a.Name + " runs " + a.OS)
+			return
+		}
+		if src.SystemState && a.OS != "windows" {
+			bad("the system state can only be backed up on a Windows machine; " + a.Name + " runs " + a.OS)
+			return
+		}
+		if src.TrueNASConfig && a.OS != "linux" {
+			bad("the TrueNAS configuration can only be backed up by an agent running on TrueNAS SCALE")
 			return
 		}
 	}
@@ -207,31 +246,9 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	for _, a := range agents {
-		if p.SystemState && a.OS != "windows" {
-			bad("the system state can only be backed up on a Windows machine; " + a.Name + " runs " + a.OS)
-			return
-		}
-		if p.TrueNASConfig && a.OS != "linux" {
-			bad("the TrueNAS configuration can only be backed up by an agent running on TrueNAS SCALE")
-			return
-		}
-	}
-	if p.Schedule.Interval != "" && p.Schedule.DailyAt != "" {
-		bad("set either interval or daily_at, not both")
+	if err := checkSchedule(&p.Schedule); err != nil {
+		bad(err.Error())
 		return
-	}
-	if p.Schedule.Interval != "" {
-		if d, err := time.ParseDuration(p.Schedule.Interval); err != nil || d < time.Minute {
-			bad("interval must be a duration of at least 1m, such as 24h")
-			return
-		}
-	}
-	if p.Schedule.DailyAt != "" {
-		if _, _, err := parseDailyAt(p.Schedule.DailyAt); err != nil {
-			bad(err.Error())
-			return
-		}
 	}
 	rt := p.Retention
 	if rt.KeepLast < 0 || rt.KeepDaily < 0 || rt.KeepWeekly < 0 || rt.KeepMonthly < 0 || rt.KeepYearly < 0 {
@@ -272,16 +289,21 @@ func (s *Server) enqueueBackup(p *api.Policy, agentID string) (*api.Job, error) 
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: agentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, VMScratchDir: p.VMScratchDir, SystemState: p.SystemState, TrueNASConfig: p.TrueNASConfig, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot, M365: p.M365}}
+	src := p.SourcesFor(agentID)
+	j := &api.Job{Type: api.JobBackup, AgentID: agentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: src.Paths, Excludes: p.Excludes, Volumes: src.Volumes, VMs: src.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, VMScratchDir: p.VMScratchDir, SystemState: src.SystemState, TrueNASConfig: src.TrueNASConfig, BareMetal: src.BareMetal, MachineDisks: src.MachineDisks, NoSnapshot: p.NoSnapshot, M365: p.M365}}
 	return j, s.enqueue(j)
 }
 
 // enqueuePolicy queues a backup of every machine of a policy that has
 // none waiting, and returns the new jobs. Machines whose agent was
-// revoked are left out.
-func (s *Server) enqueuePolicy(p *api.Policy) ([]*api.Job, error) {
+// revoked, or whose backups are switched off, are left out. only, if
+// set, is the one machine to back up, switched off or not.
+func (s *Server) enqueuePolicy(p *api.Policy, only string) ([]*api.Job, error) {
 	var out []*api.Job
 	for _, id := range p.Machines() {
+		if only != "" && id != only || only == "" && p.IsOff(id) {
+			continue
+		}
 		if a, err := s.agent(id); err != nil || a == nil || a.Revoked {
 			if len(p.Machines()) > 1 {
 				continue
@@ -308,7 +330,7 @@ func (s *Server) handleRunPolicy(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "no such policy")
 		return
 	}
-	js, err := s.enqueuePolicy(p)
+	js, err := s.enqueuePolicy(p, r.URL.Query().Get("agent_id"))
 	if err != nil {
 		s.internal(w, err)
 		return

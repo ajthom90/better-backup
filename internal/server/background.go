@@ -63,13 +63,9 @@ func due(p *api.Policy, last, now time.Time) bool {
 		d, err := time.ParseDuration(p.Schedule.Interval)
 		return err == nil && (last.IsZero() || now.Sub(last) >= d)
 	case p.Schedule.DailyAt != "":
-		h, m, err := parseDailyAt(p.Schedule.DailyAt)
-		if err != nil {
+		slot := prevSlot(&p.Schedule, now)
+		if slot.IsZero() {
 			return false
-		}
-		slot := time.Date(now.Year(), now.Month(), now.Day(), h, m, 0, 0, now.Location())
-		if now.Before(slot) {
-			slot = slot.AddDate(0, 0, -1)
 		}
 		// A new policy waits for its first slot instead of running at once.
 		if last.IsZero() {
@@ -92,7 +88,7 @@ func (s *Server) schedule(now time.Time) {
 		if !due(p, fromMS(last), now) {
 			continue
 		}
-		js, err := s.enqueuePolicy(p)
+		js, err := s.enqueuePolicy(p, "")
 		if err != nil {
 			s.log.Error("scheduling backup", "policy", p.Name, "err", err)
 		}

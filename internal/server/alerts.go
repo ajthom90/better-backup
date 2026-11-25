@@ -251,23 +251,30 @@ func overdue(p *api.Policy, lastGood, now time.Time) bool {
 	if !p.Enabled {
 		return false
 	}
-	var period time.Duration
-	switch {
-	case p.Schedule.Interval != "":
-		d, err := time.ParseDuration(p.Schedule.Interval)
-		if err != nil {
-			return false
-		}
-		period = d
-	case p.Schedule.DailyAt != "":
-		period = 24 * time.Hour
-	default:
-		return false
-	}
 	if lastGood.IsZero() {
 		lastGood = p.Created
 	}
-	return now.Sub(lastGood) > period+max(period/2, time.Hour)
+	switch {
+	case p.Schedule.Interval != "":
+		period, err := time.ParseDuration(p.Schedule.Interval)
+		if err != nil {
+			return false
+		}
+		return now.Sub(lastGood) > period+max(period/2, time.Hour)
+	case p.Schedule.DailyAt != "":
+		// The first backup that should have started since the last good
+		// one, and half the time to the one after it.
+		first := nextSlot(&p.Schedule, lastGood)
+		if first.IsZero() {
+			return false
+		}
+		grace := time.Hour
+		if second := nextSlot(&p.Schedule, first); !second.IsZero() {
+			grace = max(second.Sub(first)/2, time.Hour)
+		}
+		return now.After(first.Add(grace))
+	}
+	return false
 }
 
 // checkMissed sends one alert when a policy becomes overdue, and forgets
@@ -287,7 +294,9 @@ func (s *Server) checkMissed(now time.Time) {
 	var pairs []pair
 	for _, p := range ps {
 		for _, id := range p.Machines() {
-			pairs = append(pairs, pair{p, id})
+			if !p.IsOff(id) {
+				pairs = append(pairs, pair{p, id})
+			}
 		}
 	}
 	for _, pr := range pairs {

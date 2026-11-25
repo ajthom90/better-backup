@@ -1114,3 +1114,83 @@ func (ix *Index) Search(ctx context.Context, q Query) (*Result, error) {
 	}
 	return out, nil
 }
+
+// Largest returns the largest files that the newest snapshot of their
+// series still holds, largest first. agent, if set, keeps it to one
+// agent, and part to names that contain it.
+func (ix *Index) Largest(ctx context.Context, agent, part string, limit int) ([]Hit, error) {
+	live, err := ix.lines()
+	if err != nil {
+		return nil, err
+	}
+	var series []any
+	for id, l := range live {
+		if len(l.seqs) > 0 && (agent == "" || l.agent == agent) {
+			series = append(series, id)
+		}
+	}
+	if len(series) == 0 {
+		return nil, nil
+	}
+	q := `SELECT id, parent, name, series, size, mtime, first FROM nodes WHERE kind = 0 AND last IS NULL AND series IN (?` + strings.Repeat(",?", len(series)-1) + `)`
+	args := series
+	if part != "" {
+		q += ` AND instr(lower(name), lower(?)) > 0`
+		args = append(args, part)
+	}
+	rows, err := ix.r.QueryContext(ctx, q+` ORDER BY size DESC LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	type cand struct {
+		parent, series, first int64
+		hit                   Hit
+		name                  string
+	}
+	var cands []cand
+	for rows.Next() {
+		var c cand
+		var id, mtime int64
+		if err := rows.Scan(&id, &c.parent, &c.name, &c.series, &c.hit.Size, &mtime, &c.first); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		c.hit.Type, c.hit.ModTime = tree.TypeFile, time.Unix(mtime, 0)
+		cands = append(cands, c)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	type up struct {
+		parent int64
+		name   string
+	}
+	ups := map[int64]up{}
+	var out []Hit
+	for _, c := range cands {
+		l := live[c.series]
+		lo, hi := l.within(c.first, sql.NullInt64{})
+		if hi == lo {
+			continue
+		}
+		c.hit.Snapshots, c.hit.Oldest, c.hit.Newest = hi-lo, l.ids[lo], l.ids[hi-1]
+		path := []string{c.name}
+		for at := c.parent; at > 0; {
+			u, ok := ups[at]
+			if !ok {
+				if err := ix.r.QueryRowContext(ctx, `SELECT parent, name FROM nodes WHERE id = ?`, at).Scan(&u.parent, &u.name); err != nil {
+					return nil, err
+				}
+				ups[at] = u
+			}
+			path = append(path, u.name)
+			at = u.parent
+		}
+		for a, b := 0, len(path)-1; a < b; a, b = a+1, b-1 {
+			path[a], path[b] = path[b], path[a]
+		}
+		c.hit.Path = path
+		out = append(out, c.hit)
+	}
+	return out, nil
+}
