@@ -131,6 +131,31 @@ and `:edge` for the newest commit on `main`. Until the first release exists, use
 
 On Windows, run the server installer: see [Windows installers](#windows-installers).
 
+**On TrueNAS SCALE** (24.10 or newer) the server runs as a custom app. Make
+two datasets, one for the server's own files and one for the backups, then
+open Apps, Discover Apps, the menu at the top right, "Install via YAML", name
+the app `better-backup` and paste this with your pool's name and the NAS's
+address:
+
+```yaml
+services:
+  better-backup:
+    image: ghcr.io/ajthom90/better-backup:edge
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      # The names and addresses browsers and agents use for the NAS.
+      BB_TLS_NAMES: "truenas.local,192.168.1.10"
+    volumes:
+      - /mnt/tank/better-backup/data:/data
+      - /mnt/tank/better-backup/repo:/data/repo
+```
+
+The server runs as root inside the app, so the datasets need no special
+permissions. To back up the NAS's own shares as well, add the agent app from
+"Add an agent"; see [TrueNAS SCALE](#truenas-scale-and-other-zfs-systems).
+
 Or natively (Linux, macOS, Windows), from a release archive:
 
 ```sh
@@ -373,10 +398,14 @@ backups, `repo.key` and the server's database, and the agent's identity in
 agent. The installers close both data folders to everyone but administrators
 and SYSTEM. The services log to `server.log` and `agent.log` in those folders.
 
-A server in Docker carries the Windows agent installers too, for x64 and
-ARM64 (the `:edge` image carries the newest build, version `0.0.N`). To offer another installer
-from any server, put it in the folder `installers` in the server's data
-directory.
+A server in Docker carries the agent installers for every system: the
+Windows `.msi`, the Linux `.deb` and `.rpm` (each for x64 and ARM64) and the
+macOS `.pkg`. The `:edge` image carries the newest build, version `0.0.N`.
+"Add an agent" offers them, and a machine without a browser can fetch one
+from `https://THE-SERVER:8443/installers/NAME` (with `curl -k`, because of the
+server's private certificate; the enrollment code is what proves the server
+to the agent). To offer another installer from any server, put it in the
+folder `installers` in the server's data directory.
 
 #### Unsigned installers and antivirus
 
