@@ -82,6 +82,11 @@ nfpms:
       postinstall: packaging/scripts/postinstall-agent.sh
       preremove: packaging/scripts/preremove-agent.sh
 
+# Builds that are not a release (CI, and the Docker workflow's "edge"
+# packages) are numbered by BB_SNAPSHOT_VERSION when it is set.
+snapshot:
+  version_template: '{{ envOrDefault "BB_SNAPSHOT_VERSION" (print .Version "-SNAPSHOT-" .ShortCommit) }}'
+
 checksum:
   name_template: checksums.txt
 
