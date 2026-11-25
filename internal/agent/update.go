@@ -55,6 +55,7 @@ var (
 var (
 	installKindOf = installKind
 	startUpdater  = launchUpdater
+	checkSigner   = verifySigner
 )
 
 const (
@@ -247,7 +248,7 @@ func (a *Agent) installUpdate(ctx context.Context, kind string, offer *api.Agent
 	if err := a.fetchInstaller(ctx, offer, installer); err != nil {
 		return err
 	}
-	if err := verifySigner(ctx, exe, installer); err != nil {
+	if err := checkSigner(ctx, exe, installer); err != nil {
 		return err
 	}
 	// The updater is this program, kept aside: it must outlive the

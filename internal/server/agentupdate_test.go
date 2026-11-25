@@ -183,7 +183,11 @@ func TestAgentUpdate(t *testing.T) {
 	}
 	mu.Unlock()
 	e.do("PUT", "/api/v1/agent-updates", api.AgentUpdateSettings{Auto: true}, &set)
-	<-installing
+	select {
+	case <-installing:
+	case <-time.After(60 * time.Second):
+		t.Fatalf("the agent did not start installing: %+v", state().Update)
+	}
 	a = until("the server to hear of the install", func(a *api.Agent) bool { return a.Update.State == api.UpdateInstalling })
 	if a.Update.Target != "2.0.0" || !a.Update.Auto {
 		t.Fatalf("installing: %+v", a.Update)
@@ -227,7 +231,11 @@ func TestAgentUpdate(t *testing.T) {
 	if !st.Asked {
 		t.Fatalf("after update now: %+v", st)
 	}
-	<-installed
+	select {
+	case <-installed:
+	case <-time.After(60 * time.Second):
+		t.Fatalf("the agent did not start installing after update now: %+v", state().Update)
+	}
 	haltAgent()
 	time.Sleep(200 * time.Millisecond)
 	agent.Version = "2.0.0"
