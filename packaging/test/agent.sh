@@ -183,6 +183,9 @@ update_fail() {
     fail "$@"
 }
 next="${BB_NEXT_PACKAGE:-}"
+# The steps below say when: an agent that updates by itself would do
+# it whenever it next asks.
+"$tools/bb" agent auto-update off || fail "could not turn automatic updates off"
 if [ "$os" = Linux ] && [ -x "$tools/bb-agent-next" ]; then
     # repack VERSION PROGRAM [POSTINST-LINE]: this package, as VERSION, with PROGRAM as the agent.
     repack() {
