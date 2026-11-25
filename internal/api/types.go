@@ -915,3 +915,52 @@ type Suspicion struct {
 	ReviewedBy string     `json:"reviewed_by,omitempty"`
 	Reviewed   *time.Time `json:"reviewed,omitempty"`
 }
+
+// Kinds of things an agent can list on its machine for the web UI.
+const (
+	BrowseFolders = "folders" // the folders and files under Path
+	BrowseVolumes = "volumes" // volumes and block devices that can be imaged
+	BrowseDisks   = "disks"   // whole disks, for a whole-machine backup
+	BrowseVMs     = "vms"     // virtual machines of a hypervisor
+)
+
+// BrowseRequest asks an agent what is on its machine, so that someone
+// writing a policy can pick instead of type.
+type BrowseRequest struct {
+	Kind string `json:"kind"`
+	// Path is the folder to list; empty asks for where to start (the
+	// drives on Windows, / elsewhere).
+	Path string `json:"path,omitempty"`
+	// Hypervisor and VMwareServer are as in a policy, for BrowseVMs.
+	Hypervisor   string `json:"hypervisor,omitempty"`
+	VMwareServer string `json:"vmware_server,omitempty"`
+	// Connection is filled in by the server for the agent.
+	Connection *hypervisor.Connection `json:"connection,omitempty"`
+}
+
+// BrowseEntry is one thing found. Value is what goes into the policy.
+type BrowseEntry struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Dir    bool   `json:"dir,omitempty"`
+	Size   int64  `json:"size,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// BrowseResult is an agent's answer.
+type BrowseResult struct {
+	// Path is the folder that was listed, as the machine spells it.
+	Path string `json:"path,omitempty"`
+	// Up is the folder above it; nil at the top.
+	Up        *string       `json:"up,omitempty"`
+	Entries   []BrowseEntry `json:"entries"`
+	Truncated bool          `json:"truncated,omitempty"`
+	Error     string        `json:"error,omitempty"`
+}
+
+// AgentQuery is a question the server asks an agent outside its jobs;
+// the agent answers at once, also while a job runs.
+type AgentQuery struct {
+	ID     string         `json:"id"`
+	Browse *BrowseRequest `json:"browse,omitempty"`
+}

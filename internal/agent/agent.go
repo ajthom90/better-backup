@@ -31,6 +31,7 @@ import (
 	"github.com/ajthom90/better-backup/internal/agentctl"
 	"github.com/ajthom90/better-backup/internal/api"
 	"github.com/ajthom90/better-backup/internal/backup"
+	"github.com/ajthom90/better-backup/internal/browse"
 	"github.com/ajthom90/better-backup/internal/hypervisor"
 	_ "github.com/ajthom90/better-backup/internal/hypervisor/all"
 	"github.com/ajthom90/better-backup/internal/keys"
@@ -317,6 +318,7 @@ func New(dir string, log *slog.Logger) (*Agent, error) {
 // Run polls for jobs until ctx is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
 	a.log.Info("better-backup agent started", "server", a.cfg.Server, "agent", a.cfg.AgentID, "version", Version)
+	go a.answerQueries(ctx)
 	backoff := time.Second
 	// Until the server has answered once, ask without waiting for work:
 	// whoever is watching wants to know now whether the server is there.
@@ -357,6 +359,52 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.runJob(ctx, &j)
 	}
 	return nil
+}
+
+// answerQueries waits for the server's questions about this machine
+// (what folders, disks and virtual machines it has, for someone writing
+// a policy) and answers them. It has a connection of its own, so that
+// questions are answered while a backup runs.
+func (a *Agent) answerQueries(ctx context.Context) {
+	pause := func(d time.Duration) {
+		select {
+		case <-ctx.Done():
+		case <-time.After(d):
+		}
+	}
+	backoff := 5 * time.Second
+	for ctx.Err() == nil {
+		data, code, err := a.c.pollOnce(ctx, "/agent/v1/queries/next?wait=25")
+		if err != nil {
+			if code == http.StatusNotFound {
+				// An older server, which has no questions.
+				pause(10 * time.Minute)
+				continue
+			}
+			pause(backoff)
+			backoff = min(backoff*2, time.Minute)
+			continue
+		}
+		backoff = 5 * time.Second
+		if code == http.StatusNoContent {
+			continue
+		}
+		var q api.AgentQuery
+		if err := json.Unmarshal(data, &q); err != nil || q.ID == "" {
+			continue
+		}
+		go func() {
+			qctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			res := &api.BrowseResult{Entries: []api.BrowseEntry{}, Error: "this agent version cannot answer that; update the agent"}
+			if q.Browse != nil {
+				res = browse.Run(qctx, q.Browse)
+			}
+			if err := a.c.json(qctx, "POST", "/agent/v1/queries/"+q.ID, res, nil); err != nil {
+				a.log.Warn("could not answer the server's question", "err", err)
+			}
+		}()
+	}
 }
 
 func newRequest(ctx context.Context, method, url string) (*http.Request, error) {

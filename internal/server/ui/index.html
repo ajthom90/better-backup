@@ -238,6 +238,47 @@ function keeps(r) {
   return parts.length ? parts.join(", ") : "everything";
 }
 const lines = v => v.split("\n").map(x => x.trim()).filter(Boolean);
+
+// picker makes a button that asks the chosen machine what it has (its folders, volumes, disks or virtual machines)
+// and a list to tick from, which fills the field. Typing in the field still works: the list is a help, not the only way.
+function picker(id, label, agent, field, kind, extra) {
+  const box = el("div", { id: id + "Pick", className: "picklist", hidden: true });
+  const many = field.tagName === "TEXTAREA";
+  const get = () => (many ? field.value.split("\n") : field.value.split(",")).map(x => x.trim()).filter(Boolean);
+  const put = (value, on) => { const cur = get().filter(x => x !== value); if (on) cur.push(value); field.value = cur.join(many ? "\n" : ", "); };
+  const say = text => el("div", { className: "hint", textContent: text });
+  const show = async path => {
+    box.hidden = false;
+    box.replaceChildren(say("Asking " + (agent.selectedOptions[0] ? agent.selectedOptions[0].textContent : "the machine") + "…"));
+    try {
+      const res = await call("POST", "/api/v1/agents/" + agent.value + "/browse", Object.assign({ kind, path: path || "" }, extra ? extra() : {}));
+      if (res.error) throw new Error(res.error);
+      const rows = [];
+      const tick = (value, text, open) => {
+        const t = el("input", { type: "checkbox", checked: get().includes(value) });
+        t.onchange = () => put(value, t.checked);
+        return el("label", { className: "check" }, t, open ? el("button", { className: "link", type: "button", textContent: text, title: "Open this folder", onclick: ev => { ev.preventDefault(); show(value); } }) : text);
+      };
+      if (kind === "folders") {
+        const head = el("div", { className: "crumbs" });
+        if (res.up != null) head.append(el("button", { type: "button", textContent: "↑ Up", onclick: () => show(res.up) }));
+        head.append(el("strong", { textContent: res.path || "This machine" }));
+        rows.push(head);
+        if (res.path) rows.push(tick(res.path, "All of this folder"));
+      }
+      if (kind === "vms") rows.push(tick("*", "Every machine on the host, including ones added later"));
+      for (const e of res.entries) rows.push(tick(e.value, e.name + (kind === "folders" && e.dir ? "" : (e.size ? " · " + size(e.size) : "")) + (e.detail ? " · " + e.detail : ""), kind === "folders" && e.dir));
+      if (!res.entries.length) rows.push(say(kind === "folders" ? "This folder is empty." : "Nothing was found."));
+      if (res.truncated) rows.push(say("There is more here than can be shown. Type the path of what is missing."));
+      if (kind === "folders") rows.push(say("Tick what to back up. Click a folder's name to look inside it."));
+      box.replaceChildren(...rows);
+    } catch (e) { const m = e.message.charAt(0).toUpperCase() + e.message.slice(1).replace(/\.$/, ""); box.replaceChildren(say(m + "." + (/type the/i.test(m) ? "" : " You can still type it in the box above."))); }
+  };
+  const open = el("button", { id: id + "Browse", type: "button", textContent: label, style: "margin-top:8px" });
+  open.onclick = () => { if (box.hidden) show(""); else box.hidden = true; };
+  agent.addEventListener("change", () => { box.hidden = true; });
+  return el("div", null, open, box);
+}
 // m365Summary says in a few words what a policy takes from Microsoft 365.
 function m365Summary(m) {
   const t = m365List.find(x => x.id === m.tenant);
@@ -358,22 +399,27 @@ function policyDialog(p) {
     el("label", { textContent: "Name" }), name,
     el("label", { textContent: "Machine to back up" }), agent,
     el("label", { textContent: "Folders and files to back up" }), paths,
+    picker("paths", "Browse the machine…", agent, paths, "folders"),
     el("div", { className: "hint", textContent: "Files are read from a snapshot where there is one, so files in use are backed up as they were at one instant: VSS on Windows, and ZFS on TrueNAS and other systems with ZFS, where every dataset under these folders is included." }),
     el("label", { textContent: "Leave out (optional)" }), excludes,
     el("label", { className: "check" }, bareMetal, "Back up the whole machine, for bare-metal recovery"),
     el("div", { className: "hint", textContent: "Windows and Linux. Saves the layout of the disk the system starts from and an image of every partition on it, including the hidden boot and recovery partitions. With it the machine can be rebuilt on blank hardware from the recovery disc, or brought up as a virtual machine. See “Bare-metal recovery” at the top of the page." }),
     el("label", { textContent: "Disks to include in the whole-machine backup (optional)" }), machineDisks,
+    picker("disks", "Choose from the machine's disks…", agent, machineDisks, "disks"),
     el("div", { className: "hint", textContent: "Only needed for more than the system disk. Disk numbers on Windows, such as 0, 1. Devices on Linux, such as /dev/sda, /dev/sdb." }),
     el("label", { textContent: "Whole volumes to back up as images (optional)" }), volumes,
+    picker("volumes", "Choose from the machine's volumes…", agent, volumes, "volumes"),
     el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS. A ZFS volume (zvol) is read from a snapshot taken together with the folders above." }),
     el("label", { textContent: "Virtual machines (optional)" }), vms,
     el("div", { className: "hint", textContent: "Choose the agent on the virtual machine host: Hyper-V, Proxmox VE, or KVM with libvirt. For VMware choose it below, and any agent that reaches the VMware server. On Proxmox a machine can also be named by its id. Each machine is backed up while it runs, from a checkpoint or a backup job of the hypervisor." }),
-    el("label", { textContent: "Hypervisor" }), hypervisor, vmwareBox, trackingBox,
+    el("label", { textContent: "Hypervisor" }), hypervisor, vmwareBox,
+    picker("vms", "Choose from the host's virtual machines…", agent, vms, "vms", () => ({ hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "" })),
+    trackingBox,
     el("label", { textContent: "Microsoft 365 (optional)" }), m365Tenant,
     el("div", { className: "hint", textContent: m365List.length ? "Mailboxes and OneDrive are read from Microsoft over the internet, so the machine chosen above only has to reach the internet; nothing of it needs to be on that machine. The first backup downloads everything, later ones only what is new or changed. A policy can hold nothing else." : "Add your tenant first: close this and choose “Microsoft 365” at the top." }),
     m365Box,
     el("label", { className: "check" }, sysState, "Windows: back up the system state"),
-    el("div", { className: "hint", textContent: "The registry, boot and system files, and on a domain controller the Active Directory database and SYSVOL. It can be restored to a folder; restoring it over a running system is not built yet." }),
+    el("div", { className: "hint", textContent: "The registry, boot and system files, and on a domain controller the Active Directory database and SYSVOL. It can be restored to a folder, or put back over the machine it came from." }),
     el("label", { className: "check" }, trueNAS, "TrueNAS: back up the system configuration"),
     el("div", { className: "hint", textContent: "Every setting of the TrueNAS system (pools, shares, users, apps, network) and the secret seed that unlocks the passwords saved in it. It is restored to a folder as truenas-config.tar, which TrueNAS takes back under System, General Settings, Manage Configuration, Upload File." }),
     el("label", { textContent: "Schedule" }), el("div", { className: "two" }, kind, el("div", null, at, every)),
@@ -1177,7 +1223,9 @@ async function addAgentDialog() {
     const first = files[0] ? files[0].name : os === "windows" ? "better-backup-agent.msi" : "the agent package";
     const how = os === "windows"
       ? ["Run the installer on the machine and paste the code when it asks for it.", "Or install without any dialogs, from a script or Group Policy:", "msiexec /i " + first + " /qn ENROLL_CODE=" + c]
-      : ["Install the agent on the machine, then open “better-backup agent” there and paste the code.", "Or register it from a terminal:", "sudo bb-agent enroll " + c];
+      : os === "darwin"
+      ? ["Open the installer on the Mac. If macOS will not open it because it is not signed yet, open System Settings, Privacy & Security, and choose “Open Anyway”. The Better Backup app opens when the installer is done: paste the code there and press Connect. The app then shows how to give the agent Full Disk Access.", "Or register it from Terminal:", "sudo bb-agent enroll " + c]
+      : ["Install the package on the machine, then register it from a terminal:", "The command, with the code in it:", "sudo bb-agent enroll " + c];
     silent.set(how[2]);
     steps.replaceChildren(el("label", { textContent: "1. Download the agent installer" }), ...links, el("div", { className: "hint", textContent: which[system.value] }),
       el("label", { textContent: "2. Give the agent this enrollment code" }), code.box, el("div", { className: "hint", textContent: how[0] + " The code works " + (t.uses > 1 ? "for " + t.uses + " machines" : "once") + ", until " + when(t.expires) + "." }),

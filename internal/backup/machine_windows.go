@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -117,6 +118,40 @@ func volumeExtent(dev string) (disk uint32, off int64, ok bool) {
 		return 0, 0, false
 	}
 	return ext.Disk, ext.Start, true
+}
+
+// DiskOfVolume says which disk a drive such as "C:" lies on, if it lies
+// on one.
+func DiskOfVolume(letter string) (uint32, bool) {
+	n, _, ok := volumeExtent(`\\.\` + letter)
+	return n, ok
+}
+
+// SystemDisk is the number of the disk that holds Windows.
+func SystemDisk() (uint32, bool) {
+	sys := os.Getenv("SystemDrive")
+	if len(sys) != 2 {
+		sys = "C:"
+	}
+	return DiskOfVolume(sys)
+}
+
+// DiskSize returns the size of the disk with this number, or false if
+// there is none.
+func DiskSize(number uint32) (int64, bool) {
+	dp, _ := windows.UTF16PtrFromString(fmt.Sprintf(`\\.\PhysicalDrive%d`, number))
+	h, err := windows.CreateFile(dp, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		return 0, false
+	}
+	defer windows.CloseHandle(h)
+	// DISK_GEOMETRY_EX: the disk size is at offset 24.
+	var geo [256]byte
+	var n uint32
+	if err := windows.DeviceIoControl(h, ioctlDiskGetGeometryEx, nil, 0, &geo[0], uint32(len(geo)), &n, nil); err != nil {
+		return 0, false
+	}
+	return int64(binary.LittleEndian.Uint64(geo[24:])), true
 }
 
 // PlanMachine looks at the disks this machine starts from. disks names

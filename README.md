@@ -297,6 +297,12 @@ email alerts. The `bb` command line does the same things for scripts. Sign in wi
 password you created on the first visit. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
 
+**Choose what to back up without typing.** In a policy, "Browse the
+machine…" asks the agent for its folders and lets you tick them, and the
+buttons beside volumes, disks and virtual machines list what the machine
+has. The machine must be connected and run an agent at least as new as the
+server; the boxes can always be typed in instead.
+
 **Find a file.** The box above the list of snapshots finds files and folders
 by name in every snapshot: part of the name, or a pattern such as `*.xlsx`.
 Each match is shown as the newest snapshot that holds it has it, with how

@@ -101,9 +101,11 @@ type Server struct {
 	// garbage collection waits for it.
 	offsiteBusy bool
 	wake        map[string]chan struct{}
-	kick        chan struct{}
-	stop        chan struct{} // closed at shutdown to release long polls
-	mail        chan mailMsg  // alerts waiting to be sent
+	// queries are the questions waiting for agents; see browse.go.
+	queries queryHub
+	kick    chan struct{}
+	stop    chan struct{} // closed at shutdown to release long polls
+	mail    chan mailMsg  // alerts waiting to be sent
 	// recovery holds the machines waiting at the recovery disc, and
 	// isoLinks the short-lived download links for the disc image.
 	recovery map[string]*recoverySession
@@ -417,6 +419,8 @@ func (s *Server) routes() http.Handler {
 	ag("GET /agent/v1/chunks/{id}", s.handleGetChunk)
 	ag("GET /agent/v1/summary", s.handleAgentSummary)
 	ag("POST /agent/v1/backup", s.handleAgentBackup)
+	ag("GET /agent/v1/queries/next", s.handleNextQuery)
+	ag("POST /agent/v1/queries/{id}", s.handleQueryAnswer)
 
 	// route registers an admin API call. role is the least role that
 	// may make it. action, when set, is what the activity log says after
@@ -470,6 +474,7 @@ func (s *Server) routes() http.Handler {
 	route("POST /api/v1/enroll-tokens", operator, "Created an enrollment token for a new agent", s.handleCreateToken)
 	route("GET /api/v1/installers", operator, "", s.handleInstallers)
 	route("GET /api/v1/agents", viewer, "", s.handleAgents)
+	route("POST /api/v1/agents/{id}/browse", operator, "", s.handleBrowse)
 	route("DELETE /api/v1/agents/{id}", operator, "Revoked an agent", s.handleRevokeAgent)
 	route("GET /api/v1/policies", viewer, "", s.handlePolicies)
 	route("POST /api/v1/policies", operator, "Created a policy", s.handleSavePolicy)
