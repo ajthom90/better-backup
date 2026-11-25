@@ -260,7 +260,13 @@ func (r *restorer) entry(e *tree.Entry, orig, dest string, full bool) error {
 				}
 				r.warn("%s: restoring alternate data streams: %v", dest, err)
 			}
-			r.applyMeta(dest, e)
+			// Not on the root of a drive, which a system state restore
+			// passes through: Windows would hand its permissions down
+			// to every file on the drive, which takes many minutes and
+			// is not what was backed up.
+			if r.sys == nil || filepath.VolumeName(dest)+`\` != dest {
+				r.applyMeta(dest, e)
+			}
 		}
 		if full {
 			r.stats.Dirs++
