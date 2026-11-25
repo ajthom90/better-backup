@@ -24,7 +24,7 @@ import (
 
 const alertSettingsKey = "alerts"
 
-type mailMsg struct{ subject, body string }
+type mailMsg struct{ level, subject, body string }
 
 // alertSettings returns the stored settings, including the password.
 func (s *Server) alertSettings() api.AlertSettings {
@@ -72,6 +72,9 @@ func checkAlertSettings(a *api.AlertSettings) error {
 	if err := checkWebhook(a.Webhook); err != nil {
 		return err
 	}
+	if err := checkNtfy(a.Ntfy); err != nil {
+		return err
+	}
 	if a.Summary != "" && a.Summary != "daily" && a.Summary != "weekly" {
 		return errors.New(`summary must be "daily", "weekly" or empty`)
 	}
@@ -95,9 +98,46 @@ func checkAlertSettings(a *api.AlertSettings) error {
 }
 
 func (s *Server) handleAlertSettings(w http.ResponseWriter, r *http.Request) {
-	a := s.alertSettings()
+	reply(w, http.StatusOK, withoutSecrets(s.alertSettings()))
+}
+
+// withoutSecrets is what a browser may see of the settings.
+func withoutSecrets(a api.AlertSettings) api.AlertSettings {
 	a.PasswordSet, a.Password = a.Password != "", ""
-	reply(w, http.StatusOK, a)
+	if a.Ntfy != nil {
+		n := *a.Ntfy
+		n.TokenSet, n.Token = n.Token != "", ""
+		n.PasswordSet, n.Password = n.Password != "", ""
+		a.Ntfy = &n
+	}
+	return a
+}
+
+// alertsOn reports whether alerts go anywhere at all.
+func alertsOn(a api.AlertSettings) bool {
+	return a.Enabled || a.Webhook != "" || ntfyOn(a)
+}
+
+// sendAll sends one alert everywhere the settings say, and logs what
+// could not be sent.
+func (s *Server) sendAll(a api.AlertSettings, m mailMsg) {
+	if a.Enabled {
+		if err := sendMail(a, m.subject, m.body); err != nil {
+			s.log.Error("sending alert email", "subject", m.subject, "err", err)
+		} else {
+			s.log.Info("sent alert email", "subject", m.subject)
+		}
+	}
+	if a.Webhook != "" {
+		if err := postWebhook(s.ctx, a.Webhook, m.subject, m.body); err != nil {
+			s.log.Error("sending alert to the webhook", "subject", m.subject, "err", err)
+		}
+	}
+	if ntfyOn(a) {
+		if err := postNtfy(s.ctx, *a.Ntfy, m.level, m.subject, m.body); err != nil {
+			s.log.Error("sending alert to ntfy", "subject", m.subject, "err", err)
+		}
+	}
 }
 
 func (s *Server) handleSaveAlertSettings(w http.ResponseWriter, r *http.Request) {
@@ -109,33 +149,34 @@ func (s *Server) handleSaveAlertSettings(w http.ResponseWriter, r *http.Request)
 		a.Password = s.alertSettings().Password
 	}
 	a.PasswordSet = false
+	if n := a.Ntfy; n != nil {
+		if old := s.alertSettings().Ntfy; old != nil {
+			if n.Token == "" && n.TokenSet {
+				n.Token = old.Token
+			}
+			if n.Password == "" && n.PasswordSet {
+				n.Password = old.Password
+			}
+		}
+		n.TokenSet, n.PasswordSet = false, false
+	}
 	if err := checkAlertSettings(&a); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// Whoever got the alerts until now hears that this is changing: an
 	// intruder's first step is to make the server quiet.
-	if old := s.alertSettings(); (old.Enabled || old.Webhook != "") && alertsReduced(old, a) {
+	if old := s.alertSettings(); alertsOn(old) && alertsReduced(old, a) {
 		subject := "[better-backup] Security: The alert settings were changed"
 		body := fmt.Sprintf("%s, signed in from %s, changed where the better-backup server %s sends its alerts, or switched them off. This message went to where they were sent until now.\n\nIf this was not meant, look at “Alerts and reports” in the web UI and change that user's password.\n", who(r).name, remoteHost(r), serverName())
-		go func() {
-			if old.Enabled {
-				if err := sendMail(old, subject, body); err != nil {
-					s.log.Error("sending alert email", "subject", subject, "err", err)
-				}
-			}
-			if old.Webhook != "" {
-				postWebhook(s.ctx, old.Webhook, subject, body)
-			}
-		}()
+		go s.sendAll(old, mailMsg{api.AlertSecurity, subject, body})
 	}
 	b, _ := json.Marshal(a)
 	if err := s.setSetting(alertSettingsKey, string(b)); err != nil {
 		s.internal(w, err)
 		return
 	}
-	a.PasswordSet, a.Password = a.Password != "", ""
-	reply(w, http.StatusOK, a)
+	reply(w, http.StatusOK, withoutSecrets(a))
 }
 
 // handleTestAlert sends a test message now and reports what the mail
@@ -164,9 +205,10 @@ func serverName() string {
 }
 
 // alert queues a message if alerts are on. It never blocks.
-func (s *Server) alert(subject, body string) {
+// level is one of the api.Alert* constants.
+func (s *Server) alert(level, subject, body string) {
 	select {
-	case s.mail <- mailMsg{subject, body}:
+	case s.mail <- mailMsg{level, subject, body}:
 	default:
 		s.log.Error("too many alerts waiting; dropped one", "subject", subject)
 	}
@@ -179,19 +221,7 @@ func (s *Server) mailer(stop <-chan struct{}) {
 		case <-stop:
 			return
 		case m := <-s.mail:
-			a := s.alertSettings()
-			if a.Enabled {
-				if err := sendMail(a, m.subject, m.body); err != nil {
-					s.log.Error("sending alert email", "subject", m.subject, "err", err)
-				} else {
-					s.log.Info("sent alert email", "subject", m.subject)
-				}
-			}
-			if a.Webhook != "" {
-				if err := postWebhook(s.ctx, a.Webhook, m.subject, m.body); err != nil {
-					s.log.Error("sending alert to the webhook", "subject", m.subject, "err", err)
-				}
-			}
+			s.sendAll(s.alertSettings(), m)
 		}
 	}
 }
@@ -203,7 +233,7 @@ func (s *Server) alertJob(j *api.Job, status, errMsg string, warnings []string) 
 		return
 	}
 	a := s.alertSettings()
-	if (!a.Enabled && a.Webhook == "") || (status == api.StatusWarning && !a.OnWarning) {
+	if !alertsOn(a) || (status == api.StatusWarning && !a.OnWarning) {
 		return
 	}
 	what := map[string]string{api.JobBackup: "Backup", api.JobRestore: "Restore", api.JobGC: "Garbage collection", api.JobVerify: "Repository verification", api.JobOffsite: "Offsite copy"}[j.Type]
@@ -240,7 +270,11 @@ func (s *Server) alertJob(j *api.Job, status, errMsg string, warnings []string) 
 			fmt.Fprintf(&b, "  %s\n", w)
 		}
 	}
-	s.alert("[better-backup] "+subject, b.String())
+	level := api.AlertFailed
+	if status == api.StatusWarning {
+		level = api.AlertWarning
+	}
+	s.alert(level, "[better-backup] "+subject, b.String())
 }
 
 // overdue reports whether a scheduled policy has gone too long without a
@@ -273,7 +307,7 @@ func overdue(p *api.Policy, lastGood, now time.Time) bool {
 // checkMissed sends one alert when a policy becomes overdue, and forgets
 // about it once the policy has a good backup again.
 func (s *Server) checkMissed(now time.Time) {
-	if a := s.alertSettings(); !a.Enabled && a.Webhook == "" {
+	if !alertsOn(s.alertSettings()) {
 		return
 	}
 	ps, err := s.policies("")
@@ -325,7 +359,7 @@ func (s *Server) checkMissed(now time.Time) {
 		if last != 0 {
 			lastText = fromMS(last).Local().Format("2006-01-02 15:04 MST")
 		}
-		s.alert("[better-backup] Backup missed: "+p.Name+" on "+name,
+		s.alert(api.AlertFailed, "[better-backup] Backup missed: "+p.Name+" on "+name,
 			fmt.Sprintf("The policy %q on %s has not had a successful backup when one was due.\n\nLast successful backup: %s\n%s\nThis alert is sent once. Another is sent if backups resume and are missed again.\n",
 				p.Name, name, lastText, state))
 	}
@@ -423,6 +457,9 @@ func alertsReduced(old, cur api.AlertSettings) bool {
 		return true
 	}
 	if old.Webhook != "" && old.Webhook != cur.Webhook {
+		return true
+	}
+	if ntfyOn(old) && (!ntfyOn(cur) || ntfyServer(*old.Ntfy) != ntfyServer(*cur.Ntfy) || old.Ntfy.Topic != cur.Ntfy.Topic) {
 		return true
 	}
 	if old.Enabled {

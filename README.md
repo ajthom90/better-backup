@@ -1043,6 +1043,15 @@ emailed every day or every Monday, and give a webhook address (Slack,
 Microsoft Teams, Discord, Mattermost) that receives every alert and summary,
 with or without email.
 
+Alerts and summaries can also arrive as push notifications through
+[ntfy](https://ntfy.sh/), on the public service or on an ntfy server of your
+own. Under "Alerts and reports", give the server, a topic, and if the server
+asks for a sign-in an access token or a user name and password. Each kind of
+alert (security, failures, warnings, summaries) has its own priority and
+tags, so a failed backup can sound on a phone that is set to do not disturb
+while the daily summary arrives quietly. "Save and send a test notification" shows what a
+failed backup's notification looks like.
+
 Set email up under "Alerts and reports" in the web UI, or from the command line:
 
 ```sh

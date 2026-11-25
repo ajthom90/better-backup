@@ -550,6 +550,52 @@ type AlertSettings struct {
 	// Microsoft Teams, Discord and similar services understand. It works
 	// with or without email.
 	Webhook string `json:"webhook,omitempty"`
+	// Ntfy, if set and enabled, sends every alert and summary as a push
+	// notification through ntfy. It works with or without email.
+	Ntfy *NtfySettings `json:"ntfy,omitempty"`
+}
+
+// How serious an alert is. Ntfy gives each its own priority and tags.
+const (
+	AlertSecurity = "security" // touches the safety of the backups themselves
+	AlertFailed   = "failed"   // a job failed or a backup was missed
+	AlertWarning  = "warning"  // worth a look: warnings, a disk filling up
+	AlertInfo     = "info"     // summaries
+)
+
+// AlertLevels lists the levels, most serious first.
+var AlertLevels = []string{AlertSecurity, AlertFailed, AlertWarning, AlertInfo}
+
+// NtfySettings says where and how to publish alerts with ntfy
+// (https://ntfy.sh or a server of one's own).
+type NtfySettings struct {
+	Enabled bool `json:"enabled"`
+	// Server is the address of the ntfy server; empty means
+	// https://ntfy.sh.
+	Server string `json:"server,omitempty"`
+	Topic  string `json:"topic"`
+	// Sign in with an access token, or with a user name and password,
+	// or with neither for a topic anyone may publish to. Token and
+	// Password are never returned by the server. When saving, leave one
+	// empty and set TokenSet or PasswordSet to keep what is stored.
+	Token       string `json:"token,omitempty"`
+	TokenSet    bool   `json:"token_set,omitempty"`
+	Username    string `json:"username,omitempty"`
+	Password    string `json:"password,omitempty"`
+	PasswordSet bool   `json:"password_set,omitempty"`
+	// Levels gives the priority and tags of each alert level; the keys
+	// are the Alert* constants. A level left out gets its default.
+	Levels map[string]NtfyLevel `json:"levels,omitempty"`
+}
+
+// NtfyLevel is how alerts of one level show up on a phone.
+type NtfyLevel struct {
+	// Priority is 1 (lowest) to 5 (highest, breaks through do not
+	// disturb); 0 means 3, ntfy's own default.
+	Priority int `json:"priority"`
+	// Tags are ntfy tags separated by commas. A tag that names an emoji,
+	// such as "warning", is shown as that emoji.
+	Tags string `json:"tags"`
 }
 
 // MonitorSettings are the checks the server runs on itself.

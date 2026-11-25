@@ -512,6 +512,7 @@ func (s *Server) routes() http.Handler {
 	route("GET /api/v1/monitor", viewer, "", s.handleMonitorSettings)
 	route("PUT /api/v1/monitor", admin, "Changed the checks the server runs on itself", s.handleSaveMonitorSettings)
 	route("POST /api/v1/alerts/test-webhook", admin, "Sent a test message to the webhook", s.handleTestWebhook)
+	route("POST /api/v1/alerts/test-ntfy", admin, "Sent a test notification to ntfy", s.handleTestNtfy)
 	route("POST /api/v1/alerts/summary", admin, "", s.handleTestSummary)
 	route("GET /api/v1/snapshots", viewer, "", s.handleSnapshots)
 	route("GET /api/v1/snapshots/{id}", viewer, "", s.handleSnapshot)

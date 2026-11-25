@@ -204,7 +204,7 @@ func (s *Server) applyPendingProtection(now time.Time) {
 // securityAlert tells whoever gets alerts about something that touches
 // the safety of the backups themselves.
 func (s *Server) securityAlert(subject, body string) {
-	s.alert("[better-backup] Security: "+subject, body+"\n\nTime: "+time.Now().Format("2006-01-02 15:04 MST")+"\n")
+	s.alert(api.AlertSecurity, "[better-backup] Security: "+subject, body+"\n\nTime: "+time.Now().Format("2006-01-02 15:04 MST")+"\n")
 }
 
 // lockedUntil is when a snapshot may first be deleted; the zero time
