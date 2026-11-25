@@ -1,0 +1,1 @@
+The web UI has a side menu with pages for Sources, Schedules, Restore, Reports, Graphs and Offsite copy; schedules can run on chosen weekdays and repeat through the day, and one schedule can back up different things on each machine.
