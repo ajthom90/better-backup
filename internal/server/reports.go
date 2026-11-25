@@ -61,7 +61,8 @@ func (s *Server) report(j *api.Job, names func(agentID, policyID string) (string
 			r.SnapshotID = j.Restore.SnapshotID
 		}
 	}
-	if r.Seconds >= 1 {
+	// A run that took no time to speak of has no speed worth showing.
+	if r.Seconds >= 0.05 {
 		r.ReadRate = float64(r.BytesRead) / r.Seconds
 		r.StoreRate = float64(r.BytesStored) / r.Seconds
 		r.ScanRate = float64(r.Files+r.Folders) / r.Seconds

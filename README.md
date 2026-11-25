@@ -55,8 +55,17 @@ backup until it has run beside your current one for a while.
 - **Agents for Windows, macOS and Linux**, enrolled with a one-time token and
   authenticated with per-agent TLS certificates. Agents dial out to the
   server, so only the server needs an open port.
-- **Schedules and retention**: run every N hours or daily at a set time; keep
-  the last N, daily, weekly, monthly and yearly snapshots.
+- **Schedules and retention**: run on the days of the week you tick, at a set
+  time, and again every N hours or minutes until a closing time; or around
+  the clock every N hours. Keep the last N, daily, weekly, monthly and yearly
+  snapshots.
+- **Reports and graphs**: for every backup what was added, changed and
+  removed, how long it took and how fast it read, as a table and as CSV;
+  graphs of the space used, what each day read and stored, the backup speed
+  and how much deduplication and compression saved; the largest files.
+- **Restore browser**: pick a machine and a day and walk its files as the
+  backups had them, with the items that were since removed, every version of
+  a file, and several items restored at once.
 - **Email alerts** when a backup, restore or repository check fails, and when
   a scheduled backup is missed, for example because a machine is switched off.
 - **Encryption at rest** (AES-256-GCM) and zstd compression.
@@ -349,12 +358,16 @@ program is updated by hand. Agents installed before this feature have no
 updater yet: install the newer agent on them once by hand, and from then on
 they update themselves.
 
-### 3. Create a policy and back up
+### 3. Create a schedule and back up
 
-In the web UI choose **New policy**: name it, pick the machine, press
-"Browse the machine…" and tick the folders, set a time and how many
-snapshots to keep, and save. **Back up now** on the policy starts the first
-backup. The same from a command line, for scripts:
+A schedule (a policy, on the command line) says which machines to back up,
+what on each, when, and how long to keep it. In the web UI open
+**Schedules** and choose **New schedule**: name it, tick the machines, press
+"Browse…" under each and tick its folders, tick the days and set a time, say
+how many snapshots to keep, and save. **Back up now** starts the first
+backup. **Sources** shows the same from the side of the machines: what is
+backed up on each and by which schedule, with a switch to stop one machine's
+backups and keep what was backed up. The same from a command line, for scripts:
 
 ```sh
 bb agents
@@ -366,8 +379,10 @@ bb policy run documents --wait
 
 ### 4. Restore
 
-In the web UI, **Browse** on a snapshot walks its folders, and **Restore**
-puts a file, a folder or all of it back, in place or somewhere else. The
+In the web UI open **Restore**, pick the machine and the day, and walk its
+folders as they were then. **Restore** puts a file, a folder or everything
+you ticked back, in place or somewhere else; **Versions** lists every backup
+that holds a file; "Show removed items" brings back what was deleted since. The
 same from a command line:
 
 ```sh
@@ -390,7 +405,8 @@ password you created on the first visit. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
 
 **One policy, several machines.** Tick every machine a policy is for. Each
-is backed up on its own, with the same folders, schedule and rules, and keeps
+is backed up on its own, on the same schedule and rules, with the same
+folders or with its own (the schedule's page has a list for each machine), and keeps
 its own snapshots: "keep 14 daily" is 14 for each machine, and Health has a
 line for each. A folder one of them does not have is skipped there with a
 warning. Microsoft 365 and VMware policies take a single machine, since they

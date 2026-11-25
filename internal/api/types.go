@@ -1282,9 +1282,9 @@ type RestoreEntry struct {
 
 // RestoreListing is a folder in the restore browser.
 type RestoreListing struct {
-	Path    string        `json:"path"`
-	At      time.Time     `json:"at"`
-	OS      string        `json:"os"`
+	Path    string         `json:"path"`
+	At      time.Time      `json:"at"`
+	OS      string         `json:"os"`
 	Entries []RestoreEntry `json:"entries"`
 	// More: there are older snapshots that were not read for removed items.
 	More bool `json:"more,omitempty"`
