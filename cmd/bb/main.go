@@ -852,6 +852,13 @@ func printOffsite(st *api.OffsiteStatus) {
 }
 
 func printAlerts(a *api.AlertSettings) {
+	if n := a.Ntfy; n != nil && n.Topic != "" {
+		server := n.Server
+		if server == "" {
+			server = "https://ntfy.sh"
+		}
+		defer fmt.Fprintf(tabs, "ntfy\t%s/%s (sending: %s)\n", server, n.Topic, map[bool]string{true: "yes", false: "no"}[n.Enabled])
+	}
 	if a.Host == "" {
 		fmt.Println("email alerts are not set up; see: bb help")
 		return

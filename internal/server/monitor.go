@@ -188,7 +188,7 @@ func (s *Server) recordUsage(now time.Time) {
 	switch was := s.setting("alert_disk") != ""; {
 	case low && !was:
 		s.setSetting("alert_disk", "1")
-		s.alert("[better-backup] The backup disk is nearly full on "+serverName(),
+		s.alert(api.AlertWarning, "[better-backup] The backup disk is nearly full on "+serverName(),
 			fmt.Sprintf("The disk that holds the repository (%s) on %s has %s free of %s, which is less than %d%%.\n\nWhen it is full, backups fail. Add space, keep fewer snapshots in the policies, or choose \"Reclaim space\" after snapshots were deleted.\n\nThis alert is sent once, and again if the disk fills up after having had room.\n",
 				s.cfg.RepoDir, serverName(), byteSize(d.Free), byteSize(d.Total), m.DiskWarnPercent))
 	case !low && was && (!d.Known || m.DiskWarnPercent == 0 || d.Free*100 > d.Total*int64(m.DiskWarnPercent+2)):
@@ -369,8 +369,8 @@ func (s *Server) health(now time.Time) (*api.Health, error) {
 	if s.setting("key_saved") == "" {
 		issue("warning", "Nobody has downloaded the repository key. Without a copy of it the backups cannot be read after the server is lost.")
 	}
-	if a := s.alertSettings(); !a.Enabled && a.Webhook == "" {
-		issue("warning", "Email alerts are off and no webhook is set, so nobody is told when a backup fails.")
+	if !alertsOn(s.alertSettings()) {
+		issue("warning", "Email alerts are off and neither ntfy nor a webhook is set up, so nobody is told when a backup fails.")
 	}
 	if vs, _ := s.jobs(`WHERE type = ? AND status IN (?, ?) ORDER BY created DESC LIMIT 1`, api.JobVerify, api.StatusSuccess, api.StatusFailed); len(vs) > 0 {
 		if vs[0].Status == api.StatusFailed {
@@ -495,7 +495,7 @@ func (s *Server) summaryText(now time.Time, period string) (subject, body string
 // sendSummary mails the daily or weekly report when its time has come.
 func (s *Server) sendSummary(now time.Time) {
 	a := s.alertSettings()
-	if a.Summary == "" || (!a.Enabled && a.Webhook == "") {
+	if a.Summary == "" || !alertsOn(a) {
 		return
 	}
 	at := a.SummaryAt
@@ -531,7 +531,7 @@ func (s *Server) sendSummary(now time.Time) {
 		s.log.Error("writing the summary", "err", err)
 		return
 	}
-	s.alert(subject, body)
+	s.alert(api.AlertInfo, subject, body)
 }
 
 func (s *Server) handleTestSummary(w http.ResponseWriter, r *http.Request) {

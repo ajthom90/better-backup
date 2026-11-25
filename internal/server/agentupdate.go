@@ -299,7 +299,7 @@ func (s *Server) updateFinished(a *api.Agent, rep api.AgentUpdateReport) {
 	}
 	s.setUpdate(a.ID, "state = ?, target = ?, error = ?, at = ?, asked = 0, failed = ?, failed_at = ?", api.UpdateFailed, rep.Target, rep.Error, now, rep.Target, now)
 	s.audit("server", "", "An agent's update failed", a.Name+": version "+rep.Target+": "+rep.Error)
-	s.alert("The update of the agent on "+a.Name+" failed",
+	s.alert(api.AlertWarning, "The update of the agent on "+a.Name+" failed",
 		"The agent on "+a.Name+" tried to install version "+rep.Target+" and could not:\n\n"+rep.Error+
 			"\n\nIt carries on with the version it had ("+a.Version+"), and its backups run as before. The server offers it the update again tomorrow; "+
 			"\"Update now\" under \"Agent updates\" in the web UI tries at once. If it keeps failing, install the newest agent on the machine by hand.")

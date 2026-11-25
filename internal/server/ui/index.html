@@ -94,6 +94,9 @@ table.loose .sub { word-break:normal; } td.reasons { min-width:240px; } td.reaso
 progress { width:100%; height:14px; }
 body.role-viewer .need-operator, body.role-viewer .need-admin, body.role-operator .need-admin { display:none !important; }
 h4 { margin:18px 0 4px; }
+.levels { display:grid; grid-template-columns:max-content minmax(120px,170px) 1fr; gap:8px 10px; align-items:center; margin-top:4px; }
+.levels small { color:var(--muted); font-size:12px; } .levels > span { font-weight:600; }
+@media (max-width:520px) { .levels { grid-template-columns:1fr 1fr; } .levels > span, .levels > small:first-child { grid-column:1 / -1; } .levels > small:first-child { display:none; } }
 [hidden] { display:none !important; }
 </style>
 </head>
@@ -536,18 +539,56 @@ async function alertsDialog() {
   summary.value = a.summary || "";
   const summaryAt = el("input", { type: "time", id: "summaryAt", value: a.summary_at || "07:00" });
   const hook = el("input", { id: "webhook", value: a.webhook || "", placeholder: "https://… (optional)", autocomplete: "off" });
+  const n = a.ntfy || {};
+  const ntfyOn = el("input", { type: "checkbox", id: "ntfyOn", checked: !!n.enabled });
+  const ntfyServer = el("input", { id: "ntfyServer", value: n.server || "", placeholder: "https://ntfy.sh", autocomplete: "off" });
+  const ntfyTopic = el("input", { id: "ntfyTopic", value: n.topic || "", placeholder: "backups-k3v9x2", autocomplete: "off" });
+  const ntfyAuth = el("select", { id: "ntfyAuth" }, el("option", { value: "", textContent: "No sign-in (anyone may publish to the topic)" }),
+    el("option", { value: "token", textContent: "Access token" }), el("option", { value: "password", textContent: "User name and password" }));
+  ntfyAuth.value = n.username ? "password" : n.token_set ? "token" : "";
+  const ntfyToken = el("input", { type: "password", id: "ntfyToken", placeholder: n.token_set ? "Saved. Type to replace it." : "tk_…", autocomplete: "new-password" });
+  const ntfyUser = el("input", { id: "ntfyUser", value: n.username || "", placeholder: "User name", autocomplete: "off" });
+  const ntfyPass = el("input", { type: "password", id: "ntfyPass", placeholder: n.password_set ? "Saved. Type to replace it." : "Password", autocomplete: "new-password" });
+  const tokenBox = el("div", null, el("label", { textContent: "Access token" }), ntfyToken);
+  const userBox = el("div", null, el("label", { textContent: "Sign in as" }), el("div", { className: "two" }, ntfyUser, ntfyPass));
+  const showAuth = () => { tokenBox.hidden = ntfyAuth.value !== "token"; userBox.hidden = ntfyAuth.value !== "password"; };
+  ntfyAuth.onchange = showAuth; showAuth();
+  const levelDefaults = { security: [5, "rotating_light"], failed: [4, "x"], warning: [3, "warning"], info: [2, "bar_chart"] };
+  const levelNames = { security: "Security", failed: "Failures", warning: "Warnings", info: "Summaries" };
+  const levelHints = { security: "Deleted snapshots, weaker protection, changed alert settings", failed: "Failed or missed backups, failed restores and checks",
+    warning: "Backups with warnings, a disk that fills up, an agent update that failed", info: "The daily or weekly summary" };
+  const priorities = [[5, "5, urgent"], [4, "4, high"], [3, "3, normal"], [2, "2, low"], [1, "1, lowest"]];
+  const levelInputs = {};
+  const levels = el("div", { className: "levels" }, el("small", { textContent: "Kind of alert" }), el("small", { textContent: "Priority" }), el("small", { textContent: "Tags" }));
+  for (const k of Object.keys(levelDefaults)) {
+    const cur = (n.levels || {})[k] || { priority: levelDefaults[k][0], tags: levelDefaults[k][1] };
+    const pr = el("select", { id: "ntfyPriority-" + k, title: "Priority of " + levelNames[k].toLowerCase() }, ...priorities.map(([v, t]) => el("option", { value: v, textContent: t })));
+    pr.value = cur.priority || 3;
+    const tg = el("input", { id: "ntfyTags-" + k, value: cur.tags || "", placeholder: "No tags", title: "Tags of " + levelNames[k].toLowerCase(), autocomplete: "off" });
+    levelInputs[k] = [pr, tg];
+    levels.append(el("span", { textContent: levelNames[k], title: levelHints[k] }), pr, tg);
+  }
+  const ntfyBody = () => {
+    const out = { enabled: ntfyOn.checked, server: ntfyServer.value.trim(), topic: ntfyTopic.value.trim(), levels: {} };
+    if (ntfyAuth.value === "token") { out.token = ntfyToken.value.trim(); out.token_set = !out.token && !!n.token_set; }
+    if (ntfyAuth.value === "password") { out.username = ntfyUser.value.trim(); out.password = ntfyPass.value; out.password_set = !out.password && !!n.password_set && out.username === (n.username || ""); }
+    for (const k in levelInputs) out.levels[k] = { priority: parseInt(levelInputs[k][0].value, 10), tags: levelInputs[k][1].value.trim() };
+    return out;
+  };
+  const ntfySaved = saved => { Object.assign(n, saved.ntfy || {}); ntfyToken.value = ntfyPass.value = "";
+    if (n.token_set) ntfyToken.placeholder = "Saved. Type to replace it."; if (n.password_set) ntfyPass.placeholder = "Saved. Type to replace it."; };
   const msg = el("div", { id: "err" });
-  const body = () => ({ enabled: enabled.checked, host: host.value.trim(), port: parseInt(port.value, 10) || 0, security: sec.value, username: user.value.trim(),
+  const body = () => ({ ntfy: ntfyBody(), enabled: enabled.checked, host: host.value.trim(), port: parseInt(port.value, 10) || 0, security: sec.value, username: user.value.trim(),
     password: pass.value, password_set: !pass.value && !!a.password_set && !!user.value.trim(), from: from.value.trim(), to: lines(to.value), on_warning: warn.checked,
     summary: summary.value, summary_at: summaryAt.value || "07:00", webhook: hook.value.trim() });
   const say = (text, good) => { msg.textContent = text; msg.style.color = good ? "var(--good)" : ""; };
   const save = el("button", { className: "primary", textContent: "Save" });
   save.onclick = async () => { try { await call("PUT", "/api/v1/alerts", body()); $("dlg").close(); } catch (e) { say(e.message); } };
-  const test = el("button", { textContent: "Save and send a test", style: "margin-right:auto" });
+  const test = el("button", { id: "testEmail", textContent: "Save and send a test email" });
   test.onclick = async () => {
     say("Sending…", true);
     try {
-      const saved = await call("PUT", "/api/v1/alerts", body());
+      const saved = await call("PUT", "/api/v1/alerts", body()); ntfySaved(saved);
       a.password_set = saved.password_set; pass.value = ""; if (saved.password_set) pass.placeholder = "Saved. Type to replace it.";
       port.value = saved.port;
       await call("POST", "/api/v1/alerts/test");
@@ -559,6 +600,12 @@ async function alertsDialog() {
     say("Sending…", true);
     try { await call("PUT", "/api/v1/alerts", body()); await call("POST", "/api/v1/alerts/test-webhook"); say("Test message delivered to the webhook.", true); } catch (e) { say(e.message); }
   };
+  const testNtfy = el("button", { id: "testNtfy", textContent: "Save and send a test notification" });
+  testNtfy.onclick = async () => {
+    say("Sending…", true);
+    try { ntfySaved(await call("PUT", "/api/v1/alerts", body())); await call("POST", "/api/v1/alerts/test-ntfy");
+      say("Test notification sent to the topic “" + n.topic + "”, the way a failed backup's would arrive. Check the phone.", true); } catch (e) { say(e.message); }
+  };
   const preview = el("button", { id: "previewSummary", textContent: "Show what the summary says now" });
   preview.onclick = async () => {
     try { await call("PUT", "/api/v1/alerts", body()); const r = await call("POST", "/api/v1/alerts/summary");
@@ -566,21 +613,35 @@ async function alertsDialog() {
     } catch (e) { say(e.message); }
   };
   $("dlgBody").replaceChildren(el("h3", { textContent: "Alerts and reports" }),
-    el("div", { className: "hint", textContent: "Sends an email when a backup, restore or repository check fails, and when a scheduled backup is missed, for example because a machine is switched off." }),
+    el("div", { className: "hint", textContent: "Tells you when a backup, restore or repository check fails, and when a scheduled backup is missed, for example because a machine is switched off. By email, by push notification through ntfy, by webhook, or all of them." }),
+    el("h4", { textContent: "Email" }),
     el("label", { className: "check" }, enabled, "Send email alerts"),
     el("label", { textContent: "Mail server (SMTP)" }), el("div", { className: "two" }, host, port),
     el("label", { textContent: "Connection security" }), sec,
     el("label", { textContent: "Sign in as" }), el("div", { className: "two" }, user, pass),
     el("label", { textContent: "From address" }), from,
     el("label", { textContent: "Send alerts to" }), to,
+    el("div", { style: "margin-top:6px" }, test),
+    el("h4", { textContent: "Push notifications with ntfy" }),
+    el("div", { className: "hint" }, "Every alert and summary is also sent to phones and desktops that subscribe to a topic in the ", el("a", { href: "https://ntfy.sh/", target: "_blank", rel: "noopener", textContent: "ntfy" }), " app, with or without email."),
+    el("label", { className: "check" }, ntfyOn, "Send notifications with ntfy"),
+    el("label", { textContent: "ntfy server" }), ntfyServer,
+    el("div", { className: "hint", textContent: "Leave empty for the public service at ntfy.sh, or give the address of your own ntfy server." }),
+    el("label", { textContent: "Topic" }), ntfyTopic,
+    el("div", { className: "hint", textContent: "On a server without sign-in, anyone who knows the topic can read the alerts: choose a name that is hard to guess." }),
+    el("label", { textContent: "Sign-in" }), ntfyAuth, tokenBox, userBox,
+    el("label", { textContent: "How each kind of alert arrives" }), levels,
+    el("div", { className: "hint" }, "Priority 5 sounds even when the phone is set to do not disturb; 1 and 2 arrive quietly. Tags are separated by commas, and a tag that names an ", el("a", { href: "https://docs.ntfy.sh/emojis/", target: "_blank", rel: "noopener", textContent: "emoji" }), ", such as warning, shows as that emoji."),
+    el("div", { style: "margin-top:6px" }, testNtfy),
+    el("h4", { textContent: "Webhook" }), hook,
+    el("div", { className: "hint", textContent: "Every alert and summary is also posted here. Works with incoming webhooks of Slack, Microsoft Teams, Discord and Mattermost, with or without email." }),
+    el("div", { style: "margin-top:6px" }, testHook),
+    el("h4", { textContent: "What is sent" }),
     el("label", { className: "check" }, warn, "Also alert when a backup finishes with warnings, such as skipped files"),
     el("label", { textContent: "Summary of all backups" }), el("div", { className: "two" }, summary, summaryAt),
     el("div", { className: "hint", textContent: "A report of every backup, what needs attention, and how full the disk is, at this time in the server's time zone." }),
     el("div", { style: "margin-top:6px" }, preview),
-    el("label", { textContent: "Webhook" }), hook,
-    el("div", { className: "hint", textContent: "Every alert and summary is also posted here. Works with incoming webhooks of Slack, Microsoft Teams, Discord and Mattermost, with or without email." }),
-    el("div", { style: "margin-top:6px" }, testHook),
-    msg, el("div", { className: "row" }, test, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
+    msg, el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() }), save));
   $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
 }
 // offsiteSummary says in a few words how the second copy is doing.
