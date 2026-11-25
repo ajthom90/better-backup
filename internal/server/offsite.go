@@ -100,6 +100,37 @@ func (s *Server) offsiteStatus() api.OffsiteStatus {
 	if st.LockDays > 0 {
 		st.LockedUntil = settingTime(s.setting(offsiteLockKey))
 	}
+	if st.Kind == "" {
+		return st
+	}
+	// What the last good run left in the copy, how fast it went, and
+	// what was written to the repository since it started.
+	var since time.Time
+	if js, err := s.jobs(`WHERE type = ? AND status = ? ORDER BY created DESC LIMIT 1`, api.JobOffsite, api.StatusSuccess); err == nil && len(js) > 0 {
+		var res offsite.Result
+		json.Unmarshal(js[0].Result, &res)
+		st.StoredObjects, st.StoredBytes = res.Objects, res.Bytes
+		if j := js[0]; j.Started != nil && j.Finished != nil {
+			since = *j.Started
+			if secs := j.Finished.Sub(*j.Started).Seconds(); secs >= 1 && res.UploadedBytes > 0 {
+				st.Rate = float64(res.UploadedBytes) / secs
+			}
+		}
+	}
+	s.mu.Lock()
+	if s.queueAt.IsZero() || time.Since(s.queueAt) > 30*time.Second || !s.queueSince.Equal(since) {
+		q := api.OffsiteQueue{}
+		if n, size, oldest, err := offsite.Pending(s.cfg.RepoDir, since); err == nil {
+			q.Files, q.Bytes = n, size
+			if !oldest.IsZero() {
+				q.Oldest = &oldest
+			}
+		}
+		s.queue, s.queueAt, s.queueSince = q, time.Now(), since
+	}
+	q := s.queue
+	s.mu.Unlock()
+	st.Queue = &q
 	return st
 }
 

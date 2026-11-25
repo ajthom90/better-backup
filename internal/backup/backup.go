@@ -372,6 +372,10 @@ func (a *archiver) node(path, name string, fi fs.FileInfo, parent *tree.Entry) (
 			return nil, err
 		}
 		a.stats.FilesChanged++
+		if parent == nil || parent.Type != tree.TypeFile {
+			a.stats.FilesNew++
+		}
+		a.stats.BytesChanged += e.Size
 		a.stats.Bytes += e.Size
 		a.progress()
 		return e, a.streams(path, e)
@@ -539,6 +543,18 @@ func (a *archiver) dir(path string, parent *tree.Entry) ([]keys.ID, error) {
 		}
 	}
 	pw := tree.NewPageWriter(a.put)
+	// What the backup before had here and this one does not is removed.
+	if parent != nil && err == nil {
+		here := make(map[string]struct{}, len(items))
+		for _, d := range items {
+			here[d.Name()] = struct{}{}
+		}
+		for name := range prev {
+			if _, ok := here[name]; !ok {
+				a.stats.FilesRemoved++
+			}
+		}
+	}
 	for _, d := range items {
 		child := filepath.Join(path, d.Name())
 		if a.excluded(child) {

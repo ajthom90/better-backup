@@ -3,113 +3,210 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>better-backup</title>
+<title>Better Backup</title>
 <style>
-:root { --bg:#f6f7f9; --card:#fff; --ink:#1c2330; --muted:#647084; --line:#dfe3ea; --accent:#1f6feb; --good:#1a7f4b; --warn:#9a6700; --bad:#c62828; }
-@media (prefers-color-scheme: dark) { :root { --bg:#12151b; --card:#1b2029; --ink:#e6e9ef; --muted:#97a1b3; --line:#2c3340; --accent:#6ea8ff; --good:#4ac38a; --warn:#e0b341; --bad:#ff7b72; } }
+:root { color-scheme: light; --bg:#f3f4f5; --card:#fff; --ink:#1a1f24; --muted:#56616b; --line:#d7dce0; --accent:#0b6b5d; --on-accent:#fff; --tint:#e6f1ee; --good:#1c7a45; --warn:#855600; --bad:#b3261e; --s1:#257de0; --s2:#f47230; --r:8px; }
+@media (prefers-color-scheme: dark) { :root { color-scheme: dark; --bg:#14181b; --card:#1c2125; --ink:#e8ebed; --muted:#a3adb6; --line:#313940; --accent:#4fc3ad; --on-accent:#0b1a17; --tint:#1d302c; --good:#5fcf8f; --warn:#e3b341; --bad:#ff8a80; --s1:#338ced; --s2:#e76624; } }
 * { box-sizing:border-box; }
-body { margin:0; font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
-header { display:flex; align-items:center; gap:12px; padding:14px 20px; border-bottom:1px solid var(--line); background:var(--card); }
-header h1 { font-size:17px; margin:0; flex:1; }
-main { max-width:1100px; margin:0 auto; padding:20px 16px 60px; }
-section { background:var(--card); border:1px solid var(--line); border-radius:10px; margin-bottom:18px; overflow:hidden; }
-section h2 { font-size:14px; margin:0; padding:12px 16px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
-section h2 span { flex:1; }
-#searchForm { display:flex; gap:6px; margin:0; } #searchForm input { width:300px; max-width:42vw; font-weight:400; }
-.sub { color:var(--muted); font-size:12px; word-break:break-all; }
-#searchHits td { white-space:normal; overflow-wrap:anywhere; vertical-align:top; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+h1,h2,h3,h4 { text-wrap:balance; line-height:1.25; }
+p,li,.hint,dd { text-wrap:pretty; }
+a { color:var(--accent); }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.skip { position:absolute; left:-999px; } .skip:focus { left:8px; top:8px; background:var(--card); padding:8px 12px; z-index:5; }
+
+/* The frame: pages on the left, the page itself on the right. */
+#app { display:grid; grid-template-columns:232px minmax(0,1fr); min-height:100vh; }
+#side { border-right:1px solid var(--line); background:var(--card); padding:20px 12px; display:flex; flex-direction:column; gap:2px; position:sticky; top:0; height:100vh; overflow-y:auto; }
+.brand { font-weight:700; font-size:17px; padding:0 10px 14px; }
+.brand span { display:block; font-weight:400; font-size:13px; color:var(--muted); }
+#side a.nav, #side button { display:flex; justify-content:space-between; align-items:center; gap:8px; width:100%; text-align:left; font:inherit; font-size:15px; color:var(--ink); background:none; border:0; border-radius:6px; padding:7px 10px; text-decoration:none; cursor:pointer; white-space:normal; }
+#side a.nav:hover, #side button:hover { background:var(--bg); filter:none; }
+#side a.nav[aria-current=page] { background:var(--tint); font-weight:600; }
+#side .count { font-size:13px; font-weight:600; color:var(--bad); }
+.navhead { font-size:13px; color:var(--muted); padding:18px 10px 4px; }
+.who { margin-top:auto; padding-top:18px; } #whoami { display:block; font-size:13px; color:var(--muted); padding:0 10px 4px; overflow-wrap:anywhere; }
+main { padding:28px 32px 72px; max-width:1240px; width:100%; }
+@media (max-width:860px) {
+  #app { display:block; }
+  #side { position:static; height:auto; border-right:0; border-bottom:1px solid var(--line); flex-direction:row; flex-wrap:wrap; padding:10px 12px; }
+  #side a.nav, #side button { width:auto; } .brand { width:100%; padding-bottom:6px; } .navhead { display:none; } .who { margin:0; padding:0; display:flex; flex-wrap:wrap; align-items:center; } #whoami { padding:7px 10px; }
+  main { padding:20px 16px 56px; }
+}
+
+.pagehead { display:flex; flex-wrap:wrap; align-items:center; gap:10px 12px; margin:0 0 6px; }
+.pagehead h1 { font-size:26px; margin:0; flex:1 1 auto; }
+.lede { color:var(--muted); margin:0 0 22px; max-width:72ch; }
+section { background:var(--card); border:1px solid var(--line); border-radius:var(--r); margin:0 0 20px; overflow:hidden; }
+section > h2, .sechead { font-size:16px; margin:0; padding:12px 16px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; }
+section > h2 > span:first-child, .sechead > h2 { flex:1 1 auto; margin:0; font-size:16px; }
+.sechead .sub { flex:1 1 100%; }
+.pad { padding:14px 16px; }
+.sub { color:var(--muted); font-size:13px; overflow-wrap:anywhere; }
 .scroll { overflow-x:auto; }
-table { width:100%; border-collapse:collapse; }
-th,td { text-align:left; padding:8px 16px; border-bottom:1px solid var(--line); white-space:nowrap; }
-th { color:var(--muted); font-weight:600; font-size:12px; }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th,td { text-align:left; padding:9px 16px; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top; }
+th { color:var(--muted); font-weight:600; font-size:13px; }
 tr:last-child td { border-bottom:0; }
-td.wrap { white-space:normal; word-break:break-all; }
-.empty { padding:16px; color:var(--muted); }
-.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
-.stat { padding:14px 16px; border-right:1px solid var(--line); }
-.stat b { display:block; font-size:20px; }
-.stat small { color:var(--muted); }
-button { font:inherit; padding:5px 11px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
-button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-button:hover { filter:brightness(0.95); }
-input,select,textarea { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); width:100%; }
-.pill { font-size:12px; font-weight:600; }
-.success,.online { color:var(--good); } .warning,.queued,.running { color:var(--warn); } .failed,.revoked { color:var(--bad); } .offline,.cancelled,.paused,.never { color:var(--muted); } .ok { color:var(--good); } .overdue { color:var(--bad); }
-.issues { margin:0; padding:10px 16px 10px 34px; border-bottom:1px solid var(--line); } .issues li { margin:3px 0; } .issues li.failed { color:var(--bad); } .issues li.warning { color:var(--warn); }
-.usage { padding:10px 16px; border-top:1px solid var(--line); display:flex; gap:16px; align-items:center; flex-wrap:wrap; color:var(--muted); }
-.usage svg { flex:0 0 220px; height:44px; } .usage span { flex:1; min-width:240px; }
-#login { max-width:420px; margin:12vh auto; padding:22px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
-#login p { color:var(--muted); }
-#err { color:var(--bad); min-height:1.4em; }
-dialog { border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--ink); max-width:min(560px,92vw); max-height:92vh; overflow-y:auto; padding:20px; }
-dialog::backdrop { background:rgba(0,0,0,.45); }
-dialog label { display:block; margin:12px 0 4px; font-weight:600; }
-dialog label.check { font-weight:400; display:flex; gap:8px; align-items:center; }
-dialog label.check input { width:auto; }
-textarea { resize:vertical; min-height:64px; }
-.grid { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; }
-.grid small { color:var(--muted); display:block; }
-.two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-.hint { color:var(--muted); font-size:12px; margin-top:4px; }
-a.upd { font-size:12px; color:var(--muted); margin-left:4px; }
-a.upd.bad, td.bad { color:var(--bad, #b42318); }
-.warn { border:1px solid #d97706; border-left-width:4px; border-radius:6px; padding:8px 10px; margin-top:10px; font-size:13px; }
-td .acts { display:flex; gap:6px; }
-dialog.wide { max-width:min(860px,94vw); width:860px; }
-.crumbs { display:flex; flex-wrap:wrap; gap:4px; align-items:center; margin:10px 0; }
-.crumbs button, button.link { border:0; background:none; color:var(--accent); padding:2px 4px; }
-.list { border:1px solid var(--line); border-radius:8px; max-height:50vh; overflow:auto; }
-dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:12px 0; }
-dt { color:var(--muted); } dd { margin:0; word-break:break-word; }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+td.wrap { white-space:normal; overflow-wrap:anywhere; min-width:180px; }
+td .sub { white-space:normal; }
+.empty { padding:18px 16px; color:var(--muted); }
+.empty b { color:var(--ink); display:block; }
+#searchHits td { white-space:normal; overflow-wrap:anywhere; }
+
+button, .btn { font:inherit; font-size:14px; padding:6px 12px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; white-space:nowrap; transition:background-color .15s; }
+button:hover { background:var(--bg); }
+button.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+button.primary:hover { filter:brightness(1.08); background:var(--accent); }
 button.danger { color:var(--bad); }
-dialog .row { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
-.copybox { display:flex; gap:8px; align-items:flex-start; } .copybox pre { flex:1; margin:0; max-height:7.5em; overflow:auto; } #nasFolder ~ .copybox pre { max-height:none; }
+button.link, .crumbs button { border:0; background:none; color:var(--accent); padding:2px 4px; text-align:left; white-space:normal; }
+button:disabled { opacity:.55; cursor:default; }
+input,select,textarea { font:inherit; font-size:15px; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); width:100%; }
+input[type=checkbox], input[type=radio] { width:auto; accent-color:var(--accent); }
+textarea { resize:vertical; min-height:64px; }
+label { font-size:14px; }
+
+/* States: a shape and a word, never the colour alone. */
+.pill { font-size:13px; font-weight:600; white-space:nowrap; }
+.pill::before { content:"● "; }
+.pill.warning::before, .pill.overdue::before, .pill.queued::before { content:"▲ "; }
+.pill.failed::before, .pill.revoked::before, .pill.suspicious::before { content:"■ "; }
+.pill.offline::before, .pill.cancelled::before, .pill.paused::before, .pill.never::before, .pill.off::before { content:"○ "; }
+.success,.online,.ok { color:var(--good); } .warning,.queued,.running { color:var(--warn); } .failed,.revoked,.overdue,.suspicious { color:var(--bad); } .offline,.cancelled,.paused,.never,.off,.locked { color:var(--muted); }
+.issues { margin:0; padding:12px 16px 12px 36px; border-bottom:1px solid var(--line); } .issues li { margin:3px 0; } .issues li.failed { color:var(--bad); } .issues li.warning { color:var(--warn); }
+.facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px 24px; margin:0; padding:14px 16px; }
+.facts div { min-width:0; } .facts dt { color:var(--muted); font-size:13px; } .facts dd { margin:0; font-weight:600; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; } .facts .pill { white-space:normal; }
+.usage { padding:12px 16px; border-top:1px solid var(--line); display:flex; gap:16px; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:14px; }
+.usage svg { flex:0 0 220px; height:44px; } .usage span { flex:1; min-width:240px; }
+.banner { border:1px solid var(--warn); border-radius:var(--r); background:var(--card); padding:12px 16px; margin-bottom:20px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.banner span { flex:1; min-width:240px; } .banner.alarm { border-color:var(--bad); }
+.acts { display:flex; gap:6px; flex-wrap:wrap; } td .acts { flex-wrap:nowrap; align-items:center; justify-content:flex-end; }
+.bar { display:flex; flex-wrap:wrap; gap:10px 14px; align-items:end; padding:12px 16px; border-bottom:1px solid var(--line); }
+.bar label { display:grid; gap:3px; color:var(--muted); font-size:13px; } .bar label.check { display:flex; align-items:center; gap:6px; color:var(--ink); font-size:14px; padding-bottom:7px; }
+.bar select, .bar input:not([type=checkbox]) { width:auto; min-width:150px; max-width:100%; } .bar .grow { flex:1 1 220px; } .bar .grow input { width:100%; } .bar .end { margin-left:auto; display:flex; gap:8px; flex-wrap:wrap; }
+.tabs { display:flex; gap:4px; flex-wrap:wrap; margin:0 0 16px; border-bottom:1px solid var(--line); }
+.tabs button { border:0; border-bottom:2px solid transparent; border-radius:0; background:none; padding:8px 12px; font-size:15px; color:var(--muted); }
+.tabs button[aria-selected=true] { color:var(--ink); border-bottom-color:var(--accent); font-weight:600; }
+
+/* Sources and schedules. */
+.machine-head { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
+.machine-head h2 { font-size:17px; margin:0; } .machine-head .sub { flex:1 1 200px; }
+.week { display:inline-grid; grid-template-columns:repeat(7,auto); gap:4px; font-size:13px; }
+.week span { padding:2px 7px; border-radius:4px; border:1px solid var(--line); color:var(--muted); }
+.week span.on { background:var(--tint); border-color:transparent; color:var(--ink); font-weight:600; }
+.week span:not(.on) { text-decoration:line-through; text-decoration-thickness:1px; }
+.sched { display:grid; grid-template-columns:minmax(0,5fr) minmax(0,6fr); gap:16px 28px; padding:14px 16px; }
+.sched ul { margin:0; padding:0; list-style:none; } .sched li { padding:4px 0; } .sched li + li { border-top:1px solid var(--line); }
+@media (max-width:760px) { .sched { grid-template-columns:1fr; } }
+.switch { display:inline-flex; align-items:center; gap:6px; font-size:14px; cursor:pointer; }
+
+/* The editor: one column of fields with visible labels. */
+.form { max-width:820px; }
+.form section { overflow:visible; }
+.field { margin:0 0 16px; } .field:last-child { margin-bottom:0; }
+.field > label, .front label, dialog label { display:block; margin:0 0 4px; font-weight:600; font-size:14px; }
+label.check { font-weight:400 !important; display:flex !important; gap:8px; align-items:baseline; margin:6px 0 !important; }
+label.check input { flex:none; position:relative; top:1px; }
+.hint { color:var(--muted); font-size:13px; margin-top:4px; max-width:75ch; }
+.inline { display:flex; flex-wrap:wrap; gap:8px; align-items:center; } .inline input, .inline select { width:auto; } .inline input[type=number] { width:84px; }
+.days { display:flex; flex-wrap:wrap; gap:6px; } .days label { display:flex; align-items:center; gap:5px; border:1px solid var(--line); border-radius:6px; padding:5px 10px; cursor:pointer; font-size:14px; }
+.days label:has(input:checked) { background:var(--tint); border-color:var(--accent); }
+.tree { border:1px solid var(--line); border-radius:6px; }
+.node + .node { border-top:1px solid var(--line); }
+.node-head { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; padding:9px 12px; }
+.node-head label { display:flex; gap:8px; align-items:center; font-weight:600; font-size:15px; } .node-head .sub { flex:1 1 220px; }
+.node-body { padding:4px 12px 14px 38px; border-top:1px dashed var(--line); }
+.savebar { position:sticky; bottom:0; background:var(--bg); padding:12px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; border-top:1px solid var(--line); }
+.savebar .msg { flex:1 1 240px; margin:0; }
+.msg, #err { color:var(--bad); min-height:1.4em; margin-top:8px; font-size:14px; }
+
+/* Graphs. */
+.charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr)); gap:20px; }
+.charts section { margin:0; }
+.chart { position:relative; padding:8px 16px 12px; }
+.chart svg { display:block; width:100%; height:auto; overflow:visible; }
+.chart text { font-size:12px; fill:var(--muted); font-variant-numeric:tabular-nums; }
+.legend { display:flex; gap:16px; flex-wrap:wrap; font-size:13px; padding:10px 16px 0; }
+.legend i, .tip i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; }
+.tip { position:absolute; pointer-events:none; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:6px 9px; font-size:13px; white-space:nowrap; z-index:2; font-variant-numeric:tabular-nums; }
+.tip b { display:block; }
+details.numbers { padding:0 16px 12px; font-size:13px; margin:0; } details.numbers .scroll { max-height:240px; overflow:auto; margin-top:8px; border:1px solid var(--line); border-radius:6px; }
+.meter { height:10px; border-radius:5px; background:var(--bg); overflow:hidden; } .meter i { display:block; height:100%; background:var(--s1); border-radius:5px; }
+.savings { display:grid; grid-template-columns:max-content 1fr max-content; gap:8px 12px; align-items:center; padding:14px 16px; font-size:14px; }
+.savings .num { text-align:right; font-variant-numeric:tabular-nums; }
+
+/* Dialogs and the pages before sign-in. */
+dialog { border:1px solid var(--line); border-radius:var(--r); background:var(--card); color:var(--ink); width:560px; max-width:92vw; max-height:92vh; overflow-y:auto; padding:22px; }
+dialog.wide { max-width:94vw; width:900px; }
+dialog::backdrop { background:rgba(0,0,0,.45); }
+dialog h3 { margin:0 0 10px; font-size:19px; }
+dialog label { margin-top:14px; }
 dialog a { color:var(--accent); }
-pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:10px; border-radius:6px; }
-.machine { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin:10px 0; }
+dialog .row, .front .row { display:flex; justify-content:flex-end; gap:8px; margin-top:20px; flex-wrap:wrap; }
+.grid { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; } .grid small { color:var(--muted); display:block; font-size:13px; }
+@media (max-width:560px) { .grid { grid-template-columns:repeat(2,1fr); } .two { grid-template-columns:1fr !important; } }
+.two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+a.upd { font-size:13px; color:var(--muted); margin-left:4px; } a.upd.bad, td.bad { color:var(--bad); }
+.warn, .pending { border:1px solid var(--warn); border-radius:6px; padding:10px 12px; margin-top:12px; font-size:14px; }
+.pending { display:flex; gap:12px; align-items:center; flex-wrap:wrap; } .pending span { flex:1; min-width:220px; }
+.crumbs { display:flex; flex-wrap:wrap; gap:4px; align-items:center; margin:10px 0; font-size:14px; }
+.list { border:1px solid var(--line); border-radius:6px; max-height:50vh; overflow:auto; }
+dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:12px 0; font-size:14px; }
+dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; }
+.copybox { display:flex; gap:8px; align-items:flex-start; } .copybox pre { flex:1; margin:0; max-height:7.5em; overflow:auto; } #nasFolder ~ .copybox pre { max-height:none; }
+pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:10px; border-radius:6px; font-size:13px; }
+.machine { border:1px solid var(--line); border-radius:6px; padding:12px 14px; margin:10px 0; }
 .machine h4 { margin:0 0 6px; font-size:15px; display:flex; gap:10px; align-items:center; }
+.machine .acts { margin-top:10px; }
 .code { font:600 18px ui-monospace,Consolas,monospace; letter-spacing:1px; }
-.machine .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
 .steps { margin:8px 0; padding-left:20px; } .steps li { margin:4px 0; }
-.picklist { border:1px solid var(--line); border-radius:8px; max-height:220px; overflow:auto; padding:2px 10px 8px; margin-top:8px; }
-details { margin-top:12px; font-size:13px; } summary { cursor:pointer; color:var(--accent); }
+.picklist { border:1px solid var(--line); border-radius:6px; max-height:240px; overflow:auto; padding:4px 10px 8px; margin-top:8px; font-size:14px; }
+details { margin-top:12px; font-size:14px; } summary { cursor:pointer; color:var(--accent); } summary.sechead { display:list-item; list-style-position:inside; }
 .warnbox { color:var(--warn); margin:8px 0; }
-header { flex-wrap:wrap; }
-header h1 { min-width:140px; }
-#whoami { color:var(--muted); }
-.front { max-width:460px; margin:10vh auto; padding:22px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
-.front h1 { font-size:20px; margin:0 0 6px; }
-.front p { color:var(--muted); }
-.front label { display:block; margin:12px 0 4px; font-weight:600; }
-.front .row { display:flex; gap:8px; margin-top:16px; align-items:center; flex-wrap:wrap; }
-.front .msg, .msg { color:var(--bad); min-height:1.4em; margin-top:8px; }
-.front hr { border:0; border-top:1px solid var(--line); margin:18px 0; }
-.banner { border:1px solid #d97706; border-left-width:4px; border-radius:8px; background:var(--card); padding:10px 14px; margin-bottom:18px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-.banner span { flex:1; min-width:240px; }
-.banner.alarm { border-color:var(--bad); }
-.suspicious { color:var(--bad); } .locked { color:var(--muted); }
-table.loose td { white-space:normal; overflow-wrap:anywhere; vertical-align:top; padding:8px 10px; } table.loose th { padding:8px 10px; } table.loose td:last-child { white-space:nowrap; overflow-wrap:normal; }
-table.loose .sub { word-break:normal; } td.reasons { min-width:240px; } td.reasons ul { margin:0; padding-left:18px; } td.holds { min-width:150px; }
-.pending { border:1px solid #d97706; border-left-width:4px; border-radius:6px; padding:10px 12px; margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; } .pending span { flex:1; min-width:220px; }
+.front { max-width:460px; margin:10vh auto; padding:24px; background:var(--card); border:1px solid var(--line); border-radius:var(--r); }
+.front h1 { font-size:22px; margin:0 0 6px; } .front p { color:var(--muted); } .front label { margin-top:14px; }
+.front .row { justify-content:flex-start; align-items:center; } .front hr { border:0; border-top:1px solid var(--line); margin:18px 0; }
+table.loose td { white-space:normal; overflow-wrap:anywhere; padding:8px 10px; } table.loose th { padding:8px 10px; } table.loose td:last-child { white-space:nowrap; overflow-wrap:normal; }
+td.reasons { min-width:240px; } td.reasons ul { margin:0; padding-left:18px; } td.holds { min-width:150px; }
 progress { width:100%; height:14px; }
 body.role-viewer .need-operator, body.role-viewer .need-admin, body.role-operator .need-admin { display:none !important; }
 h4 { margin:18px 0 4px; }
 [hidden] { display:none !important; }
+@media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
 </style>
 </head>
 <body>
 <div id="front" class="front" hidden></div>
 <div id="app" hidden>
-<header><h1>better-backup</h1><span id="version" class="offline"></span><button id="recovery" class="need-operator">Bare-metal recovery</button><button id="vmware" class="need-admin">VMware servers</button><button id="m365" class="need-admin">Microsoft 365</button><button id="protect">Ransomware protection</button><button id="offsite" class="need-operator">Offsite copy</button><button id="alerts" class="need-admin">Alerts and reports</button><button id="users" class="need-admin">Users</button><button id="activity" class="need-admin">Activity log</button><button id="settings" class="need-admin">Settings</button><span id="whoami"></span><button id="account">My password</button><button id="logout">Sign out</button></header>
-<main>
+<a class="skip" href="#main">Skip to the page</a>
+<aside id="side">
+  <div class="brand">Better Backup<span id="version"></span></div>
+  <nav aria-label="Pages">
+    <a class="nav" href="#overview">Overview<span class="count" id="navCount"></span></a>
+    <a class="nav" href="#sources">Sources</a>
+    <a class="nav" href="#schedules">Schedules</a>
+    <a class="nav" href="#restore">Restore</a>
+    <a class="nav" href="#reports">Reports</a>
+    <a class="nav" href="#graphs">Graphs</a>
+    <a class="nav" href="#offsite">Offsite copy</a>
+  </nav>
+  <div class="navhead">Set up</div>
+  <button id="protect">Ransomware protection</button>
+  <button id="recovery" class="need-operator">Bare-metal recovery</button>
+  <button id="m365" class="need-admin">Microsoft 365</button>
+  <button id="vmware" class="need-admin">VMware servers</button>
+  <button id="alerts" class="need-admin">Alerts and summaries</button>
+  <button id="users" class="need-admin">Users</button>
+  <button id="activity" class="need-admin">Activity log</button>
+  <button id="settings" class="need-admin">Settings</button>
+  <div class="who"><span id="whoami"></span><button id="account">My password</button><button id="logout">Sign out</button></div>
+</aside>
+<main id="main" tabindex="-1">
   <div class="banner need-admin" id="keyBanner" hidden><span><b>Keep a copy of the repository key.</b> Without it, neither the backups on this server nor the offsite copy can be read. Download it and keep it somewhere other than this server.</span><button class="primary" id="keyBannerBtn">Download the key</button></div>
   <div class="banner alarm" id="susBanner" hidden><span id="susText"></span><button class="primary" id="susBtn">Look at it</button></div>
-  <section><h2><span>Health</span><span id="healthState" style="flex:none;white-space:nowrap"></span></h2><ul class="issues" id="issues" hidden></ul><div class="scroll" id="health"></div></section>
-  <section><h2><span>Repository</span><button id="runVerify" class="need-operator">Verify all data</button><button id="runGC" class="need-operator">Reclaim space</button></h2><div class="stats" id="stats"></div><div class="usage" id="usage" hidden></div></section>
-  <section><h2><span>Agents</span><button id="agentUpdates">Agent updates</button><button id="newToken" class="need-operator">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
-  <section><h2><span>Backup policies</span><button id="newPolicy" class="need-operator">New policy</button></h2><div class="scroll" id="policies"></div></section>
-  <section><h2><span>Recent jobs</span><button id="moreJobs">Show more</button></h2><div class="scroll" id="jobs"></div></section>
-  <section><h2><span>Snapshots</span><form id="searchForm"><input id="searchBox" type="search" placeholder="Find a file by name, in every snapshot" aria-label="Find a file by name"><button>Search</button></form></h2><div class="scroll" id="snapshots"></div></section>
+  <div id="page"></div>
 </main>
 </div>
 <dialog id="dlg"><div id="dlgBody"></div></dialog>
@@ -144,7 +241,8 @@ function table(target, heads, rows, empty) {
   for (const row of rows) t.append(el("tr", null, ...row.map(c => c instanceof Node ? el("td", null, c) : el("td", { textContent: c == null ? "" : String(c) }))));
   box.append(t);
 }
-function pill(s) { return el("span", { className: "pill " + s, textContent: s }); }
+const pillNames = { success: "Good", warning: "Warnings", failed: "Failed", running: "Running", queued: "Waiting", cancelled: "Cancelled", online: "Online", offline: "Offline", revoked: "Removed" };
+function pill(s) { return el("span", { className: "pill " + s, textContent: pillNames[s] || s }); }
 function button(label, fn) { const b = el("button", { textContent: label }); b.onclick = () => fn().catch(e => notice("Something went wrong", e.message)); return b; }
 function notice(title, text) {
   openDialog(false, el("h3", { textContent: title }), el("pre", { textContent: text }), el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
@@ -205,95 +303,263 @@ async function updatesDialog() {
     msg, el("div", { className: "row" }, el("button", { textContent: "Refresh", onclick: again }), el("button", { textContent: "Close", onclick: () => { $("dlg").close(); refresh().catch(() => {}); } })));
 }
 
-async function refresh() {
-  const [st, allAgents, policies, jobs, snaps, off, vmw, health, m365, prot, sus, upd] = await Promise.all([
+// What every page draws from, read together and again every few seconds.
+let shared = null;
+const pages = {};
+let cur = { name: "", arg: "" };
+const oops = e => notice("Something went wrong", e.message);
+function route() {
+  const h = (location.hash || "#overview").slice(1), i = h.indexOf("/");
+  return i < 0 ? { name: h, arg: "" } : { name: h.slice(0, i), arg: decodeURIComponent(h.slice(i + 1)) };
+}
+function go(hash) { if (location.hash === hash) show().catch(oops); else location.hash = hash; }
+async function load() {
+  const [st, allAgents, policies, snaps, off, vmw, health, m365, prot, sus, upd] = await Promise.all([
     call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
-    call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers"), call("GET", "/api/v1/health"), call("GET", "/api/v1/m365-tenants"),
+    call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers"), call("GET", "/api/v1/health"), call("GET", "/api/v1/m365-tenants"),
     call("GET", "/api/v1/protection"), call("GET", "/api/v1/suspicions"), call("GET", "/api/v1/agent-updates")]);
   agentNewest = upd.newest || "";
-  m365List = m365;
+  m365List = m365; vmwareList = vmw; snapList = snaps;
+  agentNames = Object.fromEntries(allAgents.map(a => [a.id, a.name]));
+  agentList = allAgents.filter(a => !a.recovery); // machines at the recovery disc are not machines to back up
   const open = sus.filter(x => !x.reviewed);
-  const suspect = new Set(open.map(x => x.snapshot_id));
+  shared = { st, policies, snaps, off, health, prot, upd, suspect: new Set(open.map(x => x.snapshot_id)) };
   $("susBanner").hidden = !open.length;
   if (open.length) $("susText").replaceChildren(el("b", { textContent: open.length === 1 ? "A backup of " + (open[0].agent || "a machine") + " looks like ransomware. " : open.length + " backups look like ransomware. " }),
     "Older backups of " + (open.length === 1 ? "that policy" : "those policies") + " are kept, whatever the retention rules say, until an administrator has looked.");
   $("protect").textContent = "Ransomware protection" + (prot.deleted ? " (" + prot.deleted + " deleted)" : "");
-  showHealth(health);
-  vmwareList = vmw;
-  $("version").textContent = "version " + st.version;
+  $("version").textContent = "Version " + st.version;
   $("keyBanner").hidden = st.key_saved;
-  agentNames = Object.fromEntries(allAgents.map(a => [a.id, a.name]));
-  const agents = allAgents.filter(a => !a.recovery); // machines at the recovery disc are not machines to back up
-  agentList = agents;
-  snapList = snaps;
-  const stat = (v, label) => el("div", { className: "stat" }, el("b", { textContent: v }), el("small", { textContent: label }));
-  $("stats").replaceChildren(stat(st.agents, "agents"), stat(st.snapshots, "snapshots"), stat(size(st.stored_bytes), "used on disk"),
-    stat(size(st.raw_bytes), "unique data before compression"), stat(st.running_jobs, "jobs running"),
-    stat(offsiteSummary(off), "offsite copy"), stat(health.disk.known ? size(health.disk.free) : "unknown", "free on the repository's disk"));
-  table("agents", ["Name", "Host", "System", "Version", "State", "Last seen", ""],
-    agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, versionCell(a), pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen),
-      a.revoked || !can("operator") ? "" : el("div", { className: "acts" },
-        can("admin") ? button("Log", async () => { const r = await call("POST", "/api/v1/agents/" + a.id + "/browse", { kind: "log" }); if (r.error) throw new Error(r.error); logDialog("Log of the agent on " + a.name, a.name + "-agent.log", r.text); }) : "",
-        confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); }))]),
-    "No agents yet. Choose “Add an agent” to enroll the first machine.");
-  table("policies", ["Name", "Machines", "Paths", "Schedule", "Keeps", ""],
-    policies.map(p => [p.name, (p.agent_ids && p.agent_ids.length ? p.agent_ids : [p.agent_id]).map(id => agentNames[id] || id).join(", "), (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : [], p.bare_metal ? ["whole machine"] : [], p.m365 ? [m365Summary(p.m365)] : []).join(", "),
-      (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
-      keeps(p.retention),
-      el("div", { className: "acts need-operator" },
-        button("Back up now", async () => { await call("POST", "/api/v1/policies/" + p.id + "/run"); await refresh(); }),
-        button("Edit", async () => policyDialog(p)))]),
-    "No policies yet. Choose “New policy” to say what to back up and when.");
-  table("jobs", ["Started", "Type", "Agent", "Status", "Detail", ""],
-    jobs.map(j => [when(j.created), j.type, agentNames[j.agent_id] || "server", pill(j.status),
-      j.error || (j.warnings ? j.warnings.length + " warnings" : "") || (j.snapshot_id ? "snapshot " + j.snapshot_id : ""),
-      el("div", { className: "acts" }, button("Details", async () => jobDialog(j.id)), cancelButton(j, refresh))]),
-    "No jobs have run yet.");
-  table("snapshots", ["Time", "Host", "Paths", "Files", "Size", "New data", ""],
-    snaps.slice(0, 50).map(s => [suspect.has(s.id) ? el("span", null, when(s.time) + " ", el("span", { className: "pill suspicious", textContent: "looks like ransomware" })) : when(s.time),
-      s.hostname, s.sources.map(x => x.name).join(", "), s.stats.files, size(s.stats.bytes), size(s.stats.bytes_uploaded),
-      el("div", { className: "acts" }, button("Browse", async () => browseDialog(s, "")), can("operator") ? button("Restore", async () => restoreDialog(s, "")) : "", can("admin") ? deleteButton(s, prot) : "")]),
-    "No snapshots yet.");
+  const bad = health.issues.filter(i => i.level === "failed").length;
+  $("navCount").textContent = bad ? String(bad) : ""; $("navCount").title = bad ? bad + (bad === 1 ? " thing needs" : " things need") + " attention" : "";
+}
+async function refresh() {
+  await load();
+  const p = pages[cur.name];
+  if (p && p.tick) await p.tick();
+}
+let shown = 0;
+async function show() {
+  const r = route(), turn = ++shown;
+  cur = { name: pages[r.name] ? r.name : "overview", arg: r.arg };
+  for (const a of document.querySelectorAll("#side a.nav")) { if (a.getAttribute("href") === "#" + cur.name) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); }
+  const root = el("div");
+  await pages[cur.name].enter(root, cur.arg);
+  if (turn !== shown) return; // another page was asked for meanwhile
+  $("page").replaceChildren(root);
+  document.title = (root.querySelector("h1") ? root.querySelector("h1").textContent + " · " : "") + "Better Backup";
+  window.scrollTo(0, 0);
+}
+window.addEventListener("hashchange", () => { if (token && shared) show().catch(oops); });
+
+// Building blocks of a page.
+function head(title, lede, ...acts) {
+  const h = el("div", { className: "pagehead" }, el("h1", { textContent: title }), ...acts);
+  return lede ? el("div", null, h, el("p", { className: "lede", textContent: lede })) : el("div", { style: "margin-bottom:18px" }, h);
+}
+function sec(title, acts, ...body) { return el("section", null, el("div", { className: "sechead" }, el("h2", { textContent: title }), ...(acts || [])), ...body); }
+// grid makes a table. A heading that starts with # is a column of numbers.
+function grid(heads, rows, empty) {
+  if (!rows.length) return typeof empty === "string" ? el("div", { className: "empty", textContent: empty }) : empty;
+  const num = heads.map(h => h.startsWith("#"));
+  const t = el("table", null, el("thead", null, el("tr", null, ...heads.map((h, i) => el("th", { textContent: num[i] ? h.slice(1) : h, className: num[i] ? "num" : "", scope: "col" })))));
+  const tb = el("tbody"); t.append(tb);
+  for (const row of rows) tb.append(el("tr", null, ...row.map((c, i) => { const td = c instanceof Node ? el("td", null, c) : el("td", { textContent: c == null ? "" : String(c) }); if (num[i]) td.className = "num"; return td; })));
+  return el("div", { className: "scroll" }, t);
+}
+function table(target, heads, rows, empty) { $(target).replaceChildren(grid(heads, rows, empty)); }
+function link(text, hash) { return el("a", { href: hash, textContent: text }); }
+function labeled(text, input) { return el("label", null, text, input); }
+function took(sec) {
+  if (sec == null) return "";
+  if (sec < 10) return (Math.round(sec * 10) / 10 || 0.1) + " s";
+  sec = Math.round(sec);
+  if (sec < 60) return sec + " s";
+  if (sec < 3600) return Math.floor(sec / 60) + " min" + (sec % 60 ? " " + sec % 60 + " s" : "");
+  return Math.floor(sec / 3600) + " h" + (Math.floor(sec % 3600 / 60) ? " " + Math.floor(sec % 3600 / 60) + " min" : "");
+}
+const rate = v => v > 0 ? size(Math.round(v)) + "/s" : "";
+function ago(t) {
+  if (!t) return "";
+  const s = (Date.now() - new Date(t).getTime()) / 1000;
+  if (s < 90) return "a minute";
+  if (s < 5400) return Math.round(s / 60) + " minutes";
+  if (s < 129600) return Math.round(s / 3600) + " hours";
+  return Math.round(s / 86400) + " days";
 }
 
-const stateNames = { ok: "protected", warning: "warnings", failed: "failed", overdue: "overdue", never: "no backup yet", running: "running", paused: "manual" };
-function day(t) { return t ? new Date(t).toLocaleDateString([], { dateStyle: "medium" }) : "never"; }
-// showHealth fills the health section: the verdict, what needs attention, every policy, and how the repository grows.
-function showHealth(h) {
-  const verdict = { ok: "Everything is protected", warning: "Needs a look", failed: "Needs attention" }[h.state];
-  $("healthState").replaceChildren(el("span", { className: "pill " + (h.state === "ok" ? "success" : h.state), id: "verdict", textContent: verdict }));
-  $("issues").hidden = !h.issues.length;
-  $("issues").replaceChildren(...h.issues.map(i => el("li", { className: i.level, textContent: i.text })));
-  table("health", ["Machine", "Policy", "State", "Last good backup", "Size", "New in 7 days", "Snapshots"],
-    h.policies.map(p => [p.agent, p.policy, Object.assign(el("span", { className: "pill " + p.state, textContent: stateNames[p.state] || p.state }), { title: p.detail || "" }),
-      when(p.last_good || ""), size(p.size), size(p.new_7_days), p.snapshots]),
-    "No backup policies yet.");
-  const parts = [];
-  if (h.growth_per_day > 0) parts.push("Grows by about " + size(h.growth_per_day) + " a day" + (h.days_left ? ", so the disk lasts about " + (h.days_left > 730 ? "more than two years" : h.days_left + " days") : "") + ".");
-  else if (h.usage.length > 1) parts.push("Not growing.");
-  parts.push(h.last_verify ? "All data was checked and found good on " + day(h.last_verify) + "." : "All data has not been checked yet.");
-  if (h.next_verify) parts.push("Next check: " + day(h.next_verify) + ".");
-  const box = $("usage"); box.hidden = false; box.replaceChildren();
-  if (h.usage.length > 1) {
-    const ns = "http://www.w3.org/2000/svg", w = 220, ht = 44;
-    const max = Math.max(...h.usage.map(u => u.stored), 1), min = Math.min(...h.usage.map(u => u.stored));
-    const span = Math.max(max - min, max * 0.02, 1);
-    const pts = h.usage.map((u, i) => (i * (w - 4) / (h.usage.length - 1) + 2).toFixed(1) + "," + (ht - 3 - (u.stored - min) / span * (ht - 6)).toFixed(1)).join(" ");
-    const svg = document.createElementNS(ns, "svg"); svg.setAttribute("viewBox", "0 0 " + w + " " + ht); svg.setAttribute("role", "img");
-    const title = document.createElementNS(ns, "title"); title.textContent = "Space used over the last " + h.usage.length + " days, from " + size(h.usage[0].stored) + " to " + size(h.usage[h.usage.length - 1].stored);
-    const line = document.createElementNS(ns, "polyline"); line.setAttribute("points", pts); line.setAttribute("fill", "none"); line.setAttribute("stroke", "currentColor"); line.setAttribute("stroke-width", "2"); line.setAttribute("stroke-linejoin", "round");
-    svg.style.color = "var(--accent)"; svg.append(title, line); box.append(svg);
-  }
-  box.append(el("span", { id: "usageText", textContent: parts.join(" ") }));
+// What a policy backs up on one machine, and when.
+const machinesOf = p => p.agent_ids && p.agent_ids.length ? p.agent_ids : [p.agent_id];
+function srcOf(p, id) {
+  return (p.per_machine && p.per_machine[id]) || { paths: p.paths, volumes: p.volumes, vms: p.vms, system_state: p.system_state, bare_metal: p.bare_metal, machine_disks: p.machine_disks, truenas_config: p.truenas_config };
 }
+function srcSays(s) {
+  const out = (s.paths || []).slice();
+  (s.volumes || []).forEach(v => out.push(v + " (image)"));
+  (s.vms || []).forEach(v => out.push(v === "*" ? "all virtual machines" : v + " (virtual machine)"));
+  if (s.system_state) out.push("system state");
+  if (s.bare_metal) out.push("whole machine");
+  if (s.truenas_config) out.push("TrueNAS configuration");
+  return out;
+}
+function coversSays(p, id) { const l = srcSays(srcOf(p, id)); if (p.m365) l.push(m365Summary(p.m365)); return l.join(", ") || "nothing"; }
+const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const weekOrder = [1, 2, 3, 4, 5, 6, 0];
+// span reads a Go duration such as 1h30m0s as minutes.
+function span(d) { let m = 0; for (const [, n, u] of String(d || "").matchAll(/([\d.]+)(h|m|s)/g)) m += parseFloat(n) * (u === "h" ? 60 : u === "m" ? 1 : 1 / 60); return m; }
+function spanSays(d) { const m = Math.round(span(d)); if (!m) return d; if (m % 1440 === 0) return plural(m / 1440, "day", "days"); if (m % 60 === 0) return plural(m / 60, "hour", "hours"); return plural(m, "minute", "minutes"); }
+function clock(hm) { if (!hm) return ""; const [h, m] = hm.split(":").map(Number); return new Date(2000, 0, 1, h, m).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
+function schedSays(p) {
+  const s = p.schedule || {};
+  let text;
+  if (s.interval) text = "Every " + spanSays(s.interval) + ", around the clock";
+  else if (s.daily_at) {
+    const d = s.days && s.days.length ? weekOrder.filter(x => s.days.includes(x)) : [];
+    const days = !d.length ? "Every day" : d.join() === "1,2,3,4,5" ? "Monday to Friday" : d.join() === "6,0" ? "Saturday and Sunday" : d.map(x => dayNames[x]).join(", ");
+    text = days + " at " + clock(s.daily_at) + (s.every ? ", then every " + spanSays(s.every) + " until " + clock(s.until || "23:59") : "");
+  } else text = "Only when started by hand";
+  return text + (p.enabled || text.startsWith("Only") ? "" : " (paused)");
+}
+function weekStrip(p) {
+  const s = p.schedule || {};
+  if (!s.daily_at && !s.interval) return "";
+  const on = d => !!s.interval || !s.days || !s.days.length || s.days.includes(d);
+  return el("div", { className: "week", role: "img", ariaLabel: "Runs on " + weekOrder.filter(on).map(d => dayNames[d]).join(", ") },
+    ...weekOrder.map(d => el("span", { className: on(d) ? "on" : "", textContent: dayNames[d].slice(0, 3) })));
+}
+const healthOf = (pid, aid) => shared.health.policies.find(h => h.policy_id === pid && h.agent_id === aid);
+function statePill(h) { return h ? Object.assign(el("span", { className: "pill " + h.state, textContent: stateNames[h.state] || h.state }), { title: h.detail || "" }) : ""; }
+async function backUp(p, agentID) { await call("POST", "/api/v1/policies/" + p.id + "/run" + (agentID ? "?agent_id=" + agentID : "")); await refresh(); }
+
+const stateNames = { ok: "Protected", warning: "Warnings", failed: "Failed", overdue: "Overdue", never: "No backup yet", running: "Running", paused: "Not scheduled" };
+function day(t) { return t ? new Date(t).toLocaleDateString([], { dateStyle: "medium" }) : "never"; }
+
+// Overview: is everything protected, what needs a look, and what happened last.
+pages.overview = {
+  async enter(root) {
+    root.append(head("Overview", "", el("span", { id: "healthState" })),
+      el("section", { id: "attention", hidden: true }, el("div", { className: "sechead" }, el("h2", { textContent: "Needs attention" })), el("ul", { className: "issues", id: "issues", style: "border-bottom:0" })),
+      sec("Protection", [link("Sources", "#sources"), link("Schedules", "#schedules")], el("div", { id: "health" })),
+      sec("Repository", [el("button", { id: "runVerify", className: "need-operator", textContent: "Verify all data", onclick: () => maintain("verify") }), el("button", { id: "runGC", className: "need-operator", textContent: "Reclaim space", onclick: () => maintain("gc") })],
+        el("dl", { className: "facts", id: "stats" }), el("div", { className: "usage", id: "usage" })),
+      sec("Latest activity", [link("All reports", "#reports")], el("div", { id: "jobs" })));
+    await this.tick(root);
+  },
+  async tick(root) {
+    const jobs = await call("GET", "/api/v1/jobs?limit=8");
+    const q = id => (root || document).querySelector("#" + id);
+    if (!q("health")) return;
+    const { st, health: h, off } = shared;
+    const verdict = { ok: "Everything is protected", warning: "Needs a look", failed: "Needs attention" }[h.state];
+    q("healthState").replaceChildren(el("span", { className: "pill " + (h.state === "ok" ? "success" : h.state), id: "verdict", textContent: verdict }));
+    q("attention").hidden = !h.issues.length;
+    q("issues").replaceChildren(...h.issues.map(i => el("li", { className: i.level, textContent: i.text })));
+    q("health").replaceChildren(grid(["Machine", "Schedule", "State", "Last good backup", "#Size", "#New in 7 days", "#Snapshots"],
+      h.policies.map(p => [p.agent, link(p.policy, "#schedules/" + p.policy_id), statePill(p), when(p.last_good || ""), size(p.size), size(p.new_7_days), p.snapshots]),
+      el("div", { className: "empty" }, el("b", { textContent: "Nothing is backed up yet." }), "Add a machine under Sources, then say what to back up and when under Schedules.")));
+    const fact = (k, v) => el("div", null, el("dt", { textContent: k }), el("dd", { textContent: v }));
+    q("stats").replaceChildren(fact("Machines", st.agents), fact("Snapshots", st.snapshots), fact("Used on disk", size(st.stored_bytes)),
+      fact("Free on the disk", h.disk.known ? size(h.disk.free) : "unknown"), fact("Jobs running", st.running_jobs), fact("Offsite copy", offsiteSummary(off)));
+    const parts = [];
+    if (h.growth_per_day > 0) parts.push("Grows by about " + size(h.growth_per_day) + " a day" + (h.days_left ? ", so the disk lasts about " + (h.days_left > 730 ? "more than two years" : h.days_left + " days") : "") + ".");
+    else if (h.usage.length > 1) parts.push("Not growing.");
+    parts.push(h.last_verify ? "All data was checked and found good on " + day(h.last_verify) + "." : "All data has not been checked yet.");
+    if (h.next_verify) parts.push("Next check: " + day(h.next_verify) + ".");
+    q("usage").replaceChildren(el("span", { id: "usageText", textContent: parts.join(" ") }), link("Graphs", "#graphs"));
+    q("jobs").replaceChildren(jobTable(jobs, "Nothing has run yet."));
+  }
+};
+const jobKinds = { backup: "Backup", restore: "Restore", offsite: "Offsite copy", gc: "Reclaim space", verify: "Verify all data" };
+function jobTable(jobs, empty) {
+  return grid(["Started", "What", "Machine", "State", "Detail", ""],
+    jobs.map(j => [when(j.created), jobKinds[j.type] || j.type, agentNames[j.agent_id] || "The server", pill(j.status),
+      Object.assign(el("div", { className: "sub", textContent: j.error || (j.warnings ? plural(j.warnings.length, "warning", "warnings") : "") }), { style: "max-width:340px" }),
+      el("div", { className: "acts" }, button("Details", async () => jobDialog(j.id)), cancelButton(j, refresh))]), empty);
+}
+async function maintain(kind) { try { const j = await call("POST", "/api/v1/repo/" + kind); await refresh(); await jobDialog(j.id); } catch (e) { oops(e); } }
 // cancelButton stops a job that is waiting or running.
 function cancelButton(j, after) {
   if (!can("operator") || (j.status !== "queued" && j.status !== "running") || (j.status === "running" && (j.type === "gc" || j.type === "verify"))) return "";
   return confirmButton("Cancel", "Click again to stop it", async () => { await call("POST", "/api/v1/jobs/" + j.id + "/cancel"); await after(); });
 }
 
+// Sources: every machine, what is backed up on it, and a switch for each.
+let srcFilter = "", srcSort = "name";
+pages.sources = {
+  async enter(root) {
+    const find = el("input", { type: "search", value: srcFilter, placeholder: "Part of a name", oninput: () => { srcFilter = find.value; this.tick(root); } });
+    const sort = el("select", { onchange: () => { srcSort = sort.value; this.tick(root); } }, el("option", { value: "name", textContent: "Name" }), el("option", { value: "seen", textContent: "Last seen" }), el("option", { value: "state", textContent: "What needs attention first" }));
+    sort.value = srcSort;
+    root.append(head("Sources", "Every machine with an agent, what is backed up on it, and by which schedule. Switch a line off to stop its backups without losing what was backed up.",
+      el("button", { id: "agentUpdates", textContent: "Agent updates", onclick: () => updatesDialog().catch(oops) }),
+      el("button", { id: "newToken", className: "primary need-operator", textContent: "Add a machine", onclick: () => addAgentDialog().catch(e => notice("Could not create a token", e.message)) })),
+      el("section", null, el("div", { className: "bar", style: "border-bottom:0" }, el("div", { className: "grow" }, labeled("Find a machine", find)), labeled("Sort by", sort))),
+      el("div", { id: "machineList" }));
+    this.tick(root);
+  },
+  tick(root) {
+    const box = (root || document).querySelector("#machineList");
+    if (!box) return;
+    const worst = a => Math.min(9, ...shared.policies.filter(p => machinesOf(p).includes(a.id)).map(p => ({ failed: 0, overdue: 0, warning: 1, never: 2 })[(healthOf(p.id, a.id) || {}).state] ?? 5), shared.policies.some(p => machinesOf(p).includes(a.id)) ? 9 : 3);
+    const list = agentList.filter(a => !a.revoked && (a.name + " " + a.hostname).toLowerCase().includes(srcFilter.trim().toLowerCase()))
+      .sort((a, b) => srcSort === "seen" ? new Date(b.last_seen) - new Date(a.last_seen) : srcSort === "state" ? worst(a) - worst(b) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name));
+    if (!agentList.some(a => !a.revoked)) { box.replaceChildren(el("section", null, el("div", { className: "empty" }, el("b", { textContent: "No machines yet." }), "Choose “Add a machine” to install the agent on the first computer you want backed up."))); return; }
+    if (!list.length) { box.replaceChildren(el("section", null, el("div", { className: "empty", textContent: "No machine has “" + srcFilter + "” in its name." }))); return; }
+    box.replaceChildren(...list.map(a => {
+      const ps = shared.policies.filter(p => machinesOf(p).includes(a.id));
+      const rows = ps.map(p => {
+        const h = healthOf(p.id, a.id), off = (p.off || []).includes(a.id);
+        const sw = el("input", { type: "checkbox", checked: !off, disabled: !can("operator"), ariaLabel: "Back up " + a.name + " with " + p.name });
+        sw.onchange = async () => { try { await call("PUT", "/api/v1/policies/" + p.id + "/machines/" + a.id, { off: !sw.checked }); await refresh(); } catch (e) { sw.checked = !sw.checked; oops(e); } };
+        return [Object.assign(el("div", null, coversSays(p, a.id)), { style: "white-space:normal;overflow-wrap:anywhere;min-width:200px;max-width:420px" }),
+          el("div", null, link(p.name, "#schedules/" + p.id), el("div", { className: "sub", textContent: schedSays(p) })),
+          off ? el("span", { className: "pill off", textContent: "Switched off" }) : statePill(h), when((h && h.last_good) || ""), h ? size(h.size) : "",
+          el("div", { className: "acts" }, el("label", { className: "switch" }, sw, "On"), can("operator") ? button("Back up now", async () => backUp(p, a.id)) : "")];
+      });
+      const more = can("operator") ? el("button", { textContent: ps.length ? "Back up more of this machine" : "Choose what to back up", className: ps.length ? "" : "primary", onclick: () => go("#schedules/new:" + a.id) }) : "";
+      return el("section", null,
+        el("div", { className: "machine-head" }, el("h2", { textContent: a.name }), pill(a.online ? "online" : "offline"),
+          el("div", { className: "sub" }, a.hostname + " · " + a.os + "/" + cpuName(a.arch) + " · agent ", versionCell(a), a.online ? "" : " · last seen " + when(a.last_seen)),
+          el("div", { className: "acts" }, more,
+            can("admin") ? button("Log", async () => { const r = await call("POST", "/api/v1/agents/" + a.id + "/browse", { kind: "log" }); if (r.error) throw new Error(r.error); logDialog("Log of the agent on " + a.name, a.name + "-agent.log", r.text); }) : "",
+            can("operator") ? confirmButton("Remove", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); }) : "")),
+        grid(["What is backed up", "Schedule", "State", "Last good backup", "#Size", ""], rows, "Nothing on this machine is backed up. No schedule includes it."));
+    }));
+  }
+};
+
+// Schedules: when backups run and what each covers.
+pages.schedules = {
+  async enter(root, arg) {
+    if (arg) return policyPage(root, arg);
+    root.append(head("Schedules", "A schedule says which machines to back up, what on each, when, and how long to keep it.",
+      el("button", { id: "newPolicy", className: "primary need-operator", textContent: "New schedule", onclick: () => go("#schedules/new") })), el("div", { id: "schedList" }));
+    this.tick(root);
+  },
+  tick(root) {
+    const box = (root || document).querySelector("#schedList");
+    if (!box) return;
+    const kids = [];
+    const covered = new Set(shared.policies.flatMap(p => p.enabled && (p.schedule.interval || p.schedule.daily_at) ? machinesOf(p).filter(id => !(p.off || []).includes(id)) : []));
+    const bare = agentList.filter(a => !a.revoked && !covered.has(a.id));
+    if (bare.length) kids.push(el("div", { className: "banner", id: "unscheduled" }, el("span", null, el("b", { textContent: bare.length === 1 ? "One machine is not backed up by any schedule: " : bare.length + " machines are not backed up by any schedule: " }), bare.map(a => a.name).join(", ") + "."),
+      link("Show them under Sources", "#sources")));
+    if (!shared.policies.length) kids.push(el("section", null, el("div", { className: "empty" }, el("b", { textContent: "No schedules yet." }), agentList.some(a => !a.revoked) ? "Choose “New schedule” to say what to back up and when." : "Add a machine under Sources first, then come back to say what to back up and when.")));
+    for (const p of shared.policies) {
+      const ids = machinesOf(p);
+      kids.push(el("section", null,
+        el("div", { className: "sechead" }, el("h2", { textContent: p.name }),
+          el("div", { className: "acts need-operator" }, button("Back up now", async () => backUp(p)), el("button", { textContent: "Edit", onclick: () => go("#schedules/" + p.id) }))),
+        el("div", { className: "sched" },
+          el("div", null, el("div", { textContent: schedSays(p) }), el("div", { style: "margin:8px 0" }, weekStrip(p)),
+            el("div", { className: "sub", textContent: (p.next_run ? "Next: " + when(p.next_run) + ". " : "") + "Keeps " + keeps(p.retention) + "." })),
+          el("ul", null, ...ids.map(id => { const h = healthOf(p.id, id), off = (p.off || []).includes(id); return el("li", null, el("b", { textContent: agentNames[id] || id }), " ", off ? el("span", { className: "pill off", textContent: "Switched off" }) : statePill(h), el("div", { className: "sub", textContent: coversSays(p, id) })); })))));
+    }
+    box.replaceChildren(...kids);
+  }
+};
 function keeps(r) {
-  const parts = [["keep_last", "last"], ["keep_daily", "daily"], ["keep_weekly", "weekly"], ["keep_monthly", "monthly"], ["keep_yearly", "yearly"]]
+  const parts = [["keep_last", "most recent"], ["keep_daily", "daily"], ["keep_weekly", "weekly"], ["keep_monthly", "monthly"], ["keep_yearly", "yearly"]]
     .filter(([k]) => r && r[k]).map(([k, label]) => r[k] + " " + label);
   return parts.length ? parts.join(", ") : "everything";
 }
@@ -346,68 +612,127 @@ function m365Summary(m) {
   return "Microsoft 365 " + [m.mail ? "mail" : "", m.onedrive ? "OneDrive" : ""].filter(Boolean).join(" and ") + " of " + who + (t ? " at " + t.name : "");
 }
 
-// policyDialog creates a policy, or edits p when one is given.
-function policyDialog(p) {
-  const mine = p ? (p.agent_ids && p.agent_ids.length ? p.agent_ids : [p.agent_id]) : [];
+// policyPage is the editor of a schedule: a new one, or the one whose id is given. "new:ID" starts with that machine ticked.
+function policyPage(root, arg) {
+  const fresh = arg === "new" || arg.startsWith("new:");
+  const p = fresh ? null : shared.policies.find(x => x.id === arg);
+  if (!fresh && !p) { root.append(head("Schedule not found", "It may have been deleted."), link("Back to schedules", "#schedules")); return; }
+  const preset = fresh && arg.includes(":") ? arg.slice(4) : "";
+  const mine = p ? machinesOf(p) : [];
   const active = agentList.filter(a => !a.revoked || mine.includes(a.id));
-  if (!active.length) { notice("Add an agent first", "A policy says which machines to back up, so enroll an agent before creating a policy."); return; }
-  const name = el("input", { value: p ? p.name : "", placeholder: "For example: File server documents" });
-  const agent = el("select", null, ...active.map(a => el("option", { value: a.id, textContent: a.name + " (" + a.os + ")" })));
-  if (p) agent.value = p.agent_id;
-  // A policy can back up several machines, each on its own. The list of ticks says which; the select above then only
-  // says which of them the Browse buttons look at.
-  const ticks = active.map(a => el("input", { type: "checkbox", value: a.id, checked: p ? mine.includes(a.id) : active.length === 1 }));
-  const machines = el("div", { id: "machines", className: "picklist" }, ...active.map((a, i) => el("label", { className: "check" }, ticks[i], a.name + " (" + a.os + ")" + (a.revoked ? ", revoked" : a.online ? "" : ", offline"))));
-  const chosen = () => ticks.filter(t => t.checked).map(t => t.value);
-  const browseOn = el("div", { id: "browseOn", hidden: true }, el("label", { textContent: "The Browse buttons below look at" }), agent);
-  const syncMachines = () => {
-    const ids = chosen();
-    for (const o of agent.options) o.hidden = o.disabled = !ids.includes(o.value);
-    if (!ids.includes(agent.value) && ids.length) { agent.value = ids[0]; agent.dispatchEvent(new Event("change")); }
-    browseOn.hidden = ids.length < 2;
-  };
-  ticks.forEach(t => { t.onchange = syncMachines; });
-  syncMachines();
-  const paths = el("textarea", { rows: 3, value: p ? (p.paths || []).join("\n") : "", placeholder: "One folder or file per line, for example D:\\Shares or /home" });
-  const excludes = el("textarea", { rows: 2, value: p && p.excludes ? p.excludes.join("\n") : "", placeholder: "One pattern per line, for example *.tmp or node_modules" });
-  const volumes = el("textarea", { rows: 2, value: p && p.volumes ? p.volumes.join("\n") : "", placeholder: "One per line, for example C: on Windows, /dev/vg0/data on Linux or /dev/zvol/tank/vm-disk on TrueNAS" });
-  const vms = el("textarea", { rows: 2, value: p && p.vms ? p.vms.join("\n") : "", placeholder: "One name per line, or * for every machine on the host" });
-  const kind = el("select", null, el("option", { value: "daily", textContent: "Every day at a set time" }),
-    el("option", { value: "interval", textContent: "Repeating, every so often" }), el("option", { value: "manual", textContent: "Only when started by hand" }));
-  const at = el("input", { type: "time", value: p && p.schedule.daily_at ? p.schedule.daily_at : "02:00" });
-  const every = el("input", { value: p && p.schedule.interval ? p.schedule.interval : "6h", placeholder: "Such as 30m, 6h or 24h" });
-  kind.value = !p ? "daily" : p.schedule.interval ? "interval" : p.schedule.daily_at ? "daily" : "manual";
-  const show = () => { at.hidden = kind.value !== "daily"; every.hidden = kind.value !== "interval"; };
-  kind.onchange = show; show();
-  const r = (p && p.retention) || (p ? {} : { keep_daily: 14, keep_weekly: 8, keep_monthly: 12 });
-  const keep = {};
-  const grid = el("div", { className: "grid" }, ...[["keep_last", "Most recent"], ["keep_daily", "Daily"], ["keep_weekly", "Weekly"], ["keep_monthly", "Monthly"], ["keep_yearly", "Yearly"]].map(([k, label]) => {
-    keep[k] = el("input", { type: "number", min: 0, value: r[k] || "", placeholder: "0" });
-    return el("div", null, keep[k], el("small", { textContent: label }));
-  }));
-  const enabled = el("input", { type: "checkbox", checked: p ? p.enabled : true });
-  const noSnap = el("input", { type: "checkbox", checked: p ? !!p.no_snapshot : false });
-  const sysState = el("input", { type: "checkbox", id: "sysState", checked: p ? !!p.system_state : false });
-  const bareMetal = el("input", { type: "checkbox", id: "bareMetal", checked: p ? !!p.bare_metal : false });
-  const machineDisks = el("input", { id: "machineDisks", value: p && p.machine_disks ? p.machine_disks.join(", ") : "", placeholder: "Leave empty for the disk the system starts from" });
-  const trueNAS = el("input", { type: "checkbox", id: "trueNAS", checked: p ? !!p.truenas_config : false });
-  const vmTracking = el("select", { id: "vmTracking" },
-    el("option", { value: "", textContent: "Read every disk in full" }),
-    el("option", { value: "on", textContent: "Read only what changed since the last backup" }),
-    el("option", { value: "check", textContent: "Read in full and check the change tracking" }));
-  vmTracking.value = (p && p.vm_tracking) || "";
+  if (!active.length) { root.append(head("New schedule", "A schedule says which machines to back up, so add a machine first."), link("Go to Sources", "#sources")); return; }
+  const field = (label, input, hint) => { const id = input.id || (input.id = "f" + Math.random().toString(36).slice(2, 8)); const kids = [el("label", { textContent: label, htmlFor: id }), input]; if (hint) kids.push(el("div", { className: "hint", textContent: hint })); return el("div", { className: "field" }, ...kids); };
+  const check = (input, text, hint) => el("div", { className: "field" }, el("label", { className: "check" }, input, text), hint ? el("div", { className: "hint", textContent: hint }) : "");
+  const name = el("input", { id: "polName", value: p ? p.name : "", placeholder: "For example: File server, hourly" });
+
+  // The machines, and what to back up on each.
   const hypervisor = el("select", { id: "hypervisor" },
-    el("option", { value: "", textContent: "Whichever the chosen machine is a host of" }),
-    el("option", { value: "hyperv", textContent: "Hyper-V" }),
-    el("option", { value: "proxmox", textContent: "Proxmox VE" }),
-    el("option", { value: "libvirt", textContent: "KVM with libvirt" }),
+    el("option", { value: "", textContent: "Whichever the machine is a host of" }), el("option", { value: "hyperv", textContent: "Hyper-V" }),
+    el("option", { value: "proxmox", textContent: "Proxmox VE" }), el("option", { value: "libvirt", textContent: "KVM with libvirt" }),
     el("option", { value: "vmware", textContent: "VMware vSphere (ESXi or vCenter), over the network" }));
   hypervisor.value = (p && p.hypervisor) || "";
   const vmwareServer = el("select", { id: "vmwareServer" }, ...vmwareList.map(v => el("option", { value: v.id, textContent: v.name })));
   if (p && p.vmware_server) vmwareServer.value = p.vmware_server;
-  const vmwareBox = el("div", null, el("label", { textContent: "VMware server" }), vmwareServer,
-    el("div", { className: "hint", textContent: vmwareList.length ? "The machines are read over the network from this server, so the agent above can be any machine that reaches it; it need not be a host. Each backup reads the disks in full." : "Add the vCenter Server or ESXi host first: close this and choose “VMware servers” at the top." }));
-  // Microsoft 365: a tenant, whose mail and files, and for whom.
+  const nodes = active.map(a => {
+    const s = p && mine.includes(a.id) ? srcOf(p, a.id) : {};
+    const n = { a, on: el("input", { type: "checkbox", id: "m-" + a.id, checked: p ? mine.includes(a.id) : (active.length === 1 || preset === a.id) }) };
+    const area = (key, rows, ph) => el("textarea", { id: key + "-" + a.id, rows, value: (s[key] || []).join("\n"), placeholder: ph, spellcheck: false });
+    n.paths = area("paths", 3, a.os === "windows" ? "One folder or file per line, for example D:\\Shares" : "One folder or file per line, for example /home");
+    n.volumes = area("volumes", 2, a.os === "windows" ? "One per line, for example C:" : "One per line, for example /dev/vg0/data");
+    n.vms = area("vms", 2, "One name per line, or * for every machine on the host");
+    n.sys = el("input", { type: "checkbox", id: "sys-" + a.id, checked: !!s.system_state });
+    n.bare = el("input", { type: "checkbox", id: "bare-" + a.id, checked: !!s.bare_metal });
+    n.disks = el("input", { id: "disks-" + a.id, value: (s.machine_disks || []).join(", "), placeholder: "Leave empty for the disk the system starts from" });
+    n.nas = el("input", { type: "checkbox", id: "nas-" + a.id, checked: !!s.truenas_config });
+    n.get = () => { const o = {}; const put = (k, v) => { if (Array.isArray(v) ? v.length : v) o[k] = v; };
+      put("paths", lines(n.paths.value)); put("volumes", lines(n.volumes.value)); put("vms", lines(n.vms.value)); put("system_state", n.sys.checked); put("bare_metal", n.bare.checked);
+      if (n.bare.checked) put("machine_disks", n.disks.value.split(",").map(x => x.trim()).filter(Boolean)); put("truenas_config", n.nas.checked); return o; };
+    n.set = o => { n.paths.value = (o.paths || []).join("\n"); n.volumes.value = (o.volumes || []).join("\n"); n.vms.value = (o.vms || []).join("\n"); n.sys.checked = !!o.system_state && a.os === "windows"; n.bare.checked = !!o.bare_metal && a.os !== "darwin"; n.disks.value = (o.machine_disks || []).join(", "); n.nas.checked = !!o.truenas_config && a.os === "linux"; say(); };
+    // The Browse buttons ask this machine.
+    const ask = { value: a.id, selectedOptions: [{ textContent: a.name }], addEventListener() {} };
+    const says = el("span", { className: "sub" });
+    const say = () => { const l = srcSays(n.get()); says.textContent = !n.on.checked ? "Not in this schedule" : l.length ? l.join(", ") : "Nothing chosen yet"; };
+    const win = a.os === "windows", linux = a.os === "linux";
+    const copy = el("select", { ariaLabel: "Copy what is chosen on another machine", style: "width:auto" });
+    copy.onchange = () => { const from = nodes.find(x => x.a.id === copy.value); if (from) n.set(from.get()); copy.value = ""; };
+    n.copies = () => { const others = nodes.filter(x => x !== n && x.on.checked); copy.replaceChildren(el("option", { value: "", textContent: "Copy from another machine…" }), ...others.map(x => el("option", { value: x.a.id, textContent: x.a.name }))); copy.hidden = !others.length; };
+    const body = el("div", { className: "node-body", hidden: true },
+      el("div", { className: "field", style: "margin-top:10px" }, copy),
+      field("Folders and files", n.paths), picker("paths-" + a.id, "Browse " + a.name + "…", ask, n.paths, "folders"),
+      win ? check(n.sys, "System state", "The registry, boot and system files, and on a domain controller Active Directory and SYSVOL.") : "",
+      win || linux ? check(n.bare, "The whole machine, for bare-metal recovery", "The layout of the system disk and an image of every partition on it, so the machine can be rebuilt on blank hardware or brought up as a virtual machine.") : "",
+      win || linux ? el("div", { hidden: !n.bare.checked, id: "diskbox-" + a.id }, field("More disks for the whole-machine backup (optional)", n.disks, win ? "Disk numbers, such as 0, 1." : "Devices, such as /dev/sda, /dev/sdb."), picker("disks-" + a.id, "Choose from the machine's disks…", ask, n.disks, "disks")) : "",
+      el("details", { open: !!(s.volumes || []).length || !!(s.vms || []).length || !!s.truenas_config }, el("summary", { textContent: "Volume images, virtual machines" + (linux ? " and TrueNAS" : "") }),
+        el("div", { style: "margin-top:12px" }),
+        field("Whole volumes, as images", n.volumes, "An image copies a volume block by block, so the whole volume can be put back."), picker("volumes-" + a.id, "Choose from the machine's volumes…", ask, n.volumes, "volumes"),
+        el("div", { style: "height:16px" }),
+        field("Virtual machines on this host", n.vms, "For a host of Hyper-V, Proxmox VE or KVM with libvirt. For VMware, any machine that reaches the VMware server."),
+        picker("vms-" + a.id, "Choose from the host's virtual machines…", ask, n.vms, "vms", () => ({ hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "" })),
+        linux ? el("div", { style: "height:8px" }) : "", linux ? check(n.nas, "TrueNAS: the system configuration", "Every setting of the TrueNAS system and the secret seed that unlocks the passwords saved in it.") : ""));
+    const toggle = el("button", { type: "button", textContent: "Change", ariaExpanded: "false" });
+    const open = on => { body.hidden = !on; toggle.textContent = on ? "Done" : "Change"; toggle.ariaExpanded = String(on); toggle.hidden = !n.on.checked; };
+    toggle.onclick = () => open(body.hidden);
+    n.on.onchange = () => { open(n.on.checked); say(); nodes.forEach(x => x.copies()); };
+    n.bare.onchange = () => { const b = body.querySelector("#diskbox-" + CSS.escape(a.id)); if (b) b.hidden = !n.bare.checked; say(); };
+    body.addEventListener("input", say); body.addEventListener("change", say);
+    n.el = el("div", { className: "node" }, el("div", { className: "node-head" },
+      el("label", null, n.on, a.name), el("span", { className: "sub", style: "flex:none", textContent: a.os + (a.revoked ? ", removed" : a.online ? "" : ", offline") }), says, toggle), body);
+    n.open = open; n.say = say;
+    return n;
+  });
+  nodes.forEach(n => { n.copies(); n.say(); n.open(n.on.checked && (fresh || !srcSays(n.get()).length) && nodes.filter(x => x.on.checked).length === 1); });
+  const all = el("button", { type: "button", textContent: "Tick every machine", hidden: active.length < 3, onclick: () => nodes.forEach(n => { if (!n.on.checked && !n.a.revoked) { n.on.checked = true; n.on.onchange(); n.open(false); } }) });
+
+  // When.
+  const s0 = (p && p.schedule) || { daily_at: "20:00" };
+  const kind = el("select", { id: "schedKind" }, el("option", { value: "daily", textContent: "On set days, at a set time" }),
+    el("option", { value: "interval", textContent: "Around the clock, every so often" }), el("option", { value: "manual", textContent: "Only when started by hand" }));
+  kind.value = s0.interval ? "interval" : s0.daily_at ? "daily" : "manual";
+  const dayBox = weekOrder.map(d => el("input", { type: "checkbox", value: d, checked: !s0.days || !s0.days.length || s0.days.includes(d) }));
+  const setDays = ds => dayBox.forEach(b => { b.checked = ds.includes(+b.value); });
+  const at = el("input", { type: "time", id: "schedAt", value: s0.daily_at || "20:00", style: "width:auto" });
+  const repeat = el("input", { type: "checkbox", id: "schedRepeat", checked: !!s0.every });
+  const unitOf = d => { const m = Math.round(span(d)); return m && m % 60 === 0 ? [m / 60, "h"] : [m || 3, m ? "m" : "h"]; };
+  const [en, eu] = unitOf(s0.every || "3h"), [inn, iu] = unitOf(s0.interval || "6h");
+  const everyN = el("input", { type: "number", min: 1, value: en, ariaLabel: "How often it repeats" });
+  const everyU = el("select", { ariaLabel: "Hours or minutes" }, el("option", { value: "h", textContent: "hours" }), el("option", { value: "m", textContent: "minutes" })); everyU.value = eu;
+  const until = el("input", { type: "time", id: "schedUntil", value: s0.until || "18:00", ariaLabel: "The last time a backup may start" });
+  const intN = el("input", { type: "number", min: 1, value: inn, id: "schedIntN" });
+  const intU = el("select", { ariaLabel: "Hours or minutes" }, el("option", { value: "h", textContent: "hours" }), el("option", { value: "m", textContent: "minutes" })); intU.value = iu;
+  const repeatBox = el("div", { className: "inline", style: "margin:6px 0 0 26px" }, "every", everyN, everyU, "until", until);
+  const dailyBox = el("div", null,
+    el("div", { className: "field" }, el("label", { textContent: "Days", id: "daysLabel" }),
+      el("div", { className: "days", role: "group", ariaLabel: "Days" }, ...dayBox.map(b => el("label", null, b, dayNames[+b.value]))),
+      el("div", { className: "inline", style: "margin-top:8px" }, el("button", { type: "button", textContent: "Every day", onclick: () => setDays(weekOrder) }), el("button", { type: "button", textContent: "Monday to Friday", onclick: () => setDays([1, 2, 3, 4, 5]) }))),
+    field("Start at", at),
+    el("div", { className: "field" }, el("label", { className: "check" }, repeat, "Back up again later the same day"), repeatBox,
+      el("div", { className: "hint", textContent: "For example every 3 hours until 6 PM, for a file server that changes all day. Times are in the server's time zone." })));
+  const intBox = el("div", { className: "field" }, el("label", { textContent: "Back up every", htmlFor: "schedIntN" }), el("div", { className: "inline" }, intN, intU));
+  const enabled = el("input", { type: "checkbox", id: "polEnabled", checked: p ? p.enabled : true });
+  const pauseBox = check(enabled, "Run on this schedule", "Clear this to pause every machine of the schedule. What was backed up is kept.");
+  const showWhen = () => { dailyBox.hidden = kind.value !== "daily"; intBox.hidden = kind.value !== "interval"; pauseBox.hidden = kind.value === "manual"; repeatBox.hidden = !repeat.checked; };
+  kind.onchange = repeat.onchange = showWhen; showWhen();
+
+  // How long to keep.
+  const r = (p && p.retention) || (p ? {} : { keep_daily: 14, keep_weekly: 8, keep_monthly: 12 });
+  const keep = {};
+  const keepGrid = el("div", { className: "grid" }, ...[["keep_last", "Most recent"], ["keep_daily", "Daily"], ["keep_weekly", "Weekly"], ["keep_monthly", "Monthly"], ["keep_yearly", "Yearly"]].map(([k, label]) => {
+    keep[k] = el("input", { type: "number", min: 0, value: r[k] || "", placeholder: "0", id: k });
+    return el("div", null, el("label", { textContent: label, htmlFor: k, style: "font-weight:400;color:var(--muted)" }), keep[k]);
+  }));
+
+  // More: what to leave out, how virtual machines are read, Microsoft 365.
+  const excludes = el("textarea", { rows: 2, value: p && p.excludes ? p.excludes.join("\n") : "", placeholder: "One pattern per line, for example *.tmp or node_modules" });
+  const noSnap = el("input", { type: "checkbox", checked: p ? !!p.no_snapshot : false });
+  const vmTracking = el("select", { id: "vmTracking" }, el("option", { value: "", textContent: "Read every disk in full" }),
+    el("option", { value: "on", textContent: "Read only what changed since the last backup" }), el("option", { value: "check", textContent: "Read in full and check the change tracking" }));
+  vmTracking.value = (p && p.vm_tracking) || "";
+  const vmScratch = el("input", { id: "vmScratch", value: (p && p.vm_scratch_dir) || "", placeholder: "Leave empty for the host's usual place", spellcheck: false });
+  const vmwareBox = field("VMware server", vmwareServer, vmwareList.length ? "The machines are read over the network from this server, so the machine ticked above can be any that reaches it. Each backup reads the disks in full." : "Add the vCenter Server or ESXi host first, under “VMware servers” in the menu.");
+  const trackingBox = field("How virtual machine disks are read", vmTracking, "Reading only what changed is much faster and relies on the hypervisor's change tracking. Run a few backups with the checking option first: it reads everything and warns if the tracking missed a change.");
+  const scratchBox = field("Scratch folder on a KVM or Proxmox host (optional)", vmScratch, "While a running machine is backed up, what it overwrites is kept in this folder until the backup ends. Empty uses /var/lib/libvirt/images on KVM and /var/tmp on Proxmox.");
+  const showHyper = () => { const v = hypervisor.value === "vmware"; vmwareBox.hidden = !v; trackingBox.hidden = v; scratchBox.hidden = v || hypervisor.value === "hyperv"; };
+  hypervisor.onchange = showHyper; showHyper();
   const m = p && p.m365;
   const m365Tenant = el("select", { id: "m365Tenant" }, el("option", { value: "", textContent: "Nothing from Microsoft 365" }), ...m365List.map(t => el("option", { value: t.id, textContent: t.name })));
   if (m) m365Tenant.value = m.tenant;
@@ -415,7 +740,7 @@ function policyDialog(p) {
   const m365Drive = el("input", { type: "checkbox", id: "m365Drive", checked: m ? !!m.onedrive : true });
   const m365Users = el("textarea", { id: "m365Users", rows: 2, value: m ? (m.users || []).join("\n") : "*", placeholder: "One sign-in name per line, such as alice@example.com, or * for everyone with a licence" });
   const m365Pick = el("div", { id: "m365Pick", className: "picklist", hidden: true });
-  const m365Load = el("button", { id: "m365Load", textContent: "Choose from the users of the tenant", style: "margin-top:8px" });
+  const m365Load = el("button", { id: "m365Load", type: "button", textContent: "Choose from the users of the tenant", style: "margin-top:8px" });
   m365Load.onclick = async () => {
     m365Pick.hidden = false;
     m365Pick.replaceChildren(el("div", { className: "hint", textContent: "Asking Microsoft 365…" }));
@@ -423,101 +748,58 @@ function policyDialog(p) {
       const us = await call("GET", "/api/v1/m365-tenants/" + m365Tenant.value + "/users");
       const chosen = () => new Set(lines(m365Users.value).map(x => x.toLowerCase()));
       const everyone = el("input", { type: "checkbox", checked: chosen().has("*") });
-      const boxes = us.map(u => {
-        const box = el("input", { type: "checkbox", checked: chosen().has(u.upn.toLowerCase()), value: u.upn });
-        return [box, el("label", { className: "check" }, box, u.name + " (" + u.upn + ")" + (u.guest ? ", a guest" : u.licensed ? "" : ", no licence"))];
-      });
+      const boxes = us.map(u => { const box = el("input", { type: "checkbox", checked: chosen().has(u.upn.toLowerCase()), value: u.upn }); return [box, el("label", { className: "check" }, box, u.name + " (" + u.upn + ")" + (u.guest ? ", a guest" : u.licensed ? "" : ", no licence"))]; });
       const sync = () => { m365Users.value = (everyone.checked ? ["*"] : []).concat(boxes.filter(([b]) => b.checked).map(([b]) => b.value)).join("\n"); };
-      everyone.onchange = sync;
-      boxes.forEach(([b]) => { b.onchange = sync; });
+      everyone.onchange = sync; boxes.forEach(([b]) => { b.onchange = sync; });
       m365Pick.replaceChildren(el("label", { className: "check" }, everyone, "Everyone with a licence, including people who join later"), ...boxes.map(([, l]) => l));
     } catch (e) { m365Pick.replaceChildren(el("div", { className: "hint", textContent: e.message + " You can still type the sign-in names above." })); }
   };
-  const m365Box = el("div", { id: "m365Box" },
-    el("label", { className: "check" }, m365Mail, "Mail: every folder of the mailbox"),
-    el("label", { className: "check" }, m365Drive, "OneDrive: every file"),
-    el("label", { textContent: "Users" }), m365Users,
-    el("div", { className: "hint", textContent: "* takes every user who has a licence and is not a guest. A shared mailbox has no licence: name it here by its address to include it." }),
-    m365Load, m365Pick);
-  const showM365 = () => { m365Box.hidden = !m365Tenant.value; };
-  m365Tenant.onchange = showM365;
-  const vmScratch = el("input", { id: "vmScratch", value: (p && p.vm_scratch_dir) || "", placeholder: "Leave empty for the host's usual place", spellcheck: false });
-  const trackingBox = el("div");
-  const showHyper = () => { const v = hypervisor.value === "vmware"; vmwareBox.hidden = !v; trackingBox.hidden = v; };
-  hypervisor.onchange = showHyper;
-  const err = el("div", { id: "err" });
-  const save = el("button", { className: "primary", textContent: p ? "Save changes" : "Create policy" });
+  const m365Box = el("div", { id: "m365Box" }, el("label", { className: "check" }, m365Mail, "Mail: every folder of the mailbox"), el("label", { className: "check" }, m365Drive, "OneDrive: every file"),
+    field("Users", m365Users, "* takes every user who has a licence and is not a guest. A shared mailbox has no licence: name it here by its address to include it."), m365Load, m365Pick);
+  const showM365 = () => { m365Box.hidden = !m365Tenant.value; }; m365Tenant.onchange = showM365; showM365();
+
+  const err = el("div", { className: "msg", id: "err", role: "alert" });
+  const save = el("button", { className: "primary", id: "polSave", textContent: p ? "Save changes" : "Create schedule" });
+  const hm = (n, u) => Math.max(1, parseInt(n.value, 10) || 1) + u.value;
   save.onclick = async () => {
+    const on = nodes.filter(n => n.on.checked);
+    if (!on.length) { err.textContent = "Tick at least one machine to back up."; return; }
+    const first = on[0].get(), same = o => JSON.stringify(o) === JSON.stringify(first), per = {};
+    for (const n of on.slice(1)) if (!same(n.get())) per[n.a.id] = n.get();
     const retention = {};
-    for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
-    const body = { name: name.value.trim(), agent_ids: chosen(), agent_id: chosen()[0] || "", paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "", vm_tracking: hypervisor.value === "vmware" ? "" : vmTracking.value, vm_scratch_dir: hypervisor.value === "vmware" || hypervisor.value === "hyperv" ? "" : vmScratch.value.trim(), system_state: sysState.checked, truenas_config: trueNAS.checked,
-      bare_metal: bareMetal.checked, machine_disks: machineDisks.value.split(",").map(x => x.trim()).filter(Boolean),
-      schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
-      retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
+    for (const k in keep) { const v = parseInt(keep[k].value, 10); if (v > 0) retention[k] = v; }
+    const vmw = hypervisor.value === "vmware";
+    const days = dayBox.filter(b => b.checked).map(b => +b.value);
+    if (kind.value === "daily" && !days.length) { err.textContent = "Tick at least one day."; return; }
+    const schedule = kind.value === "interval" ? { interval: hm(intN, intU) } : kind.value === "daily" ? Object.assign({ daily_at: at.value, days: days.length === 7 ? [] : days }, repeat.checked ? { every: hm(everyN, everyU), until: until.value } : {}) : {};
+    const body = Object.assign({ name: name.value.trim(), agent_ids: on.map(n => n.a.id), agent_id: on[0].a.id, per_machine: per, off: (p && p.off) || [],
+      paths: [], excludes: lines(excludes.value), hypervisor: hypervisor.value, vmware_server: vmw ? vmwareServer.value : "", vm_tracking: vmw ? "" : vmTracking.value,
+      vm_scratch_dir: vmw || hypervisor.value === "hyperv" ? "" : vmScratch.value.trim(), schedule, retention, enabled: kind.value === "manual" ? true : enabled.checked, no_snapshot: noSnap.checked }, first);
     if (m365Tenant.value) body.m365 = { tenant: m365Tenant.value, users: lines(m365Users.value), mail: m365Mail.checked, onedrive: m365Drive.checked };
-    try {
-      await call(p ? "PUT" : "POST", "/api/v1/policies" + (p ? "/" + p.id : ""), body);
-      $("dlg").close(); await refresh();
-    } catch (e) { err.textContent = e.message; }
+    save.disabled = true;
+    try { await call(p ? "PUT" : "POST", "/api/v1/policies" + (p ? "/" + p.id : ""), body); await load(); go("#schedules"); }
+    catch (e) { err.textContent = e.message.charAt(0).toUpperCase() + e.message.slice(1); save.disabled = false; }
   };
-  const buttons = el("div", { className: "row" });
-  if (p) {
-    const del = el("button", { className: "danger", textContent: "Delete policy", style: "margin-right:auto" });
-    let armed = false;
-    del.onclick = async () => {
-      if (!armed) { armed = true; del.textContent = "Click again to delete"; err.textContent = "Deleting a policy stops its backups. Snapshots already taken are kept."; return; }
-      try { await call("DELETE", "/api/v1/policies/" + p.id); $("dlg").close(); await refresh(); } catch (e) { err.textContent = e.message; }
-    };
-    buttons.append(del);
-  }
-  buttons.append(el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), save);
-  $("dlgBody").replaceChildren(el("h3", { textContent: p ? "Edit policy" : "New backup policy" }),
-    el("label", { textContent: "Name" }), name,
-    el("label", { textContent: "Machines to back up" }), machines,
-    el("div", { className: "hint", textContent: "Tick every machine this policy is for. Each is backed up on its own, with the same folders, schedule and rules, and keeps its own snapshots: “keep 14 daily” means 14 for each machine. A folder that a machine does not have is skipped there with a warning." }),
-    browseOn,
-    el("label", { textContent: "Folders and files to back up" }), paths,
-    picker("paths", "Browse the machine…", agent, paths, "folders"),
-    el("div", { className: "hint", textContent: "Files are read from a snapshot where there is one, so files in use are backed up as they were at one instant: VSS on Windows, and ZFS on TrueNAS and other systems with ZFS, where every dataset under these folders is included." }),
-    el("label", { textContent: "Leave out (optional)" }), excludes,
-    el("label", { className: "check" }, bareMetal, "Back up the whole machine, for bare-metal recovery"),
-    el("div", { className: "hint", textContent: "Windows and Linux. Saves the layout of the disk the system starts from and an image of every partition on it, including the hidden boot and recovery partitions. With it the machine can be rebuilt on blank hardware from the recovery disc, or brought up as a virtual machine. See “Bare-metal recovery” at the top of the page." }),
-    el("label", { textContent: "Disks to include in the whole-machine backup (optional)" }), machineDisks,
-    picker("disks", "Choose from the machine's disks…", agent, machineDisks, "disks"),
-    el("div", { className: "hint", textContent: "Only needed for more than the system disk. Disk numbers on Windows, such as 0, 1. Devices on Linux, such as /dev/sda, /dev/sdb." }),
-    el("label", { textContent: "Whole volumes to back up as images (optional)" }), volumes,
-    picker("volumes", "Choose from the machine's volumes…", agent, volumes, "volumes"),
-    el("div", { className: "hint", textContent: "An image copies a volume block by block, so the whole volume can be put back. Free space is skipped on NTFS. A ZFS volume (zvol) is read from a snapshot taken together with the folders above." }),
-    el("label", { textContent: "Virtual machines (optional)" }), vms,
-    el("div", { className: "hint", textContent: "Choose the agent on the virtual machine host: Hyper-V, Proxmox VE, or KVM with libvirt. For VMware choose it below, and any agent that reaches the VMware server. On Proxmox a machine can also be named by its id. Each machine is backed up while it runs, from a checkpoint or a backup job of the hypervisor." }),
-    el("label", { textContent: "Hypervisor" }), hypervisor, vmwareBox,
-    picker("vms", "Choose from the host's virtual machines…", agent, vms, "vms", () => ({ hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "" })),
-    trackingBox,
-    el("label", { textContent: "Microsoft 365 (optional)" }), m365Tenant,
-    el("div", { className: "hint", textContent: m365List.length ? "Mailboxes and OneDrive are read from Microsoft over the internet, so the machine chosen above only has to reach the internet; nothing of it needs to be on that machine. The first backup downloads everything, later ones only what is new or changed. A policy can hold nothing else." : "Add your tenant first: close this and choose “Microsoft 365” at the top." }),
-    m365Box,
-    el("label", { className: "check" }, sysState, "Windows: back up the system state"),
-    el("div", { className: "hint", textContent: "The registry, boot and system files, and on a domain controller the Active Directory database and SYSVOL. It can be restored to a folder, or put back over the machine it came from." }),
-    el("label", { className: "check" }, trueNAS, "TrueNAS: back up the system configuration"),
-    el("div", { className: "hint", textContent: "Every setting of the TrueNAS system (pools, shares, users, apps, network) and the secret seed that unlocks the passwords saved in it. It is restored to a folder as truenas-config.tar, which TrueNAS takes back under System, General Settings, Manage Configuration, Upload File." }),
-    el("label", { textContent: "Schedule" }), el("div", { className: "two" }, kind, el("div", null, at, every)),
-    el("div", { className: "hint", textContent: "Times are in the server's time zone." }),
-    el("label", { textContent: "Snapshots to keep" }), grid,
-    el("div", { className: "hint", textContent: "Leave every box empty to keep all snapshots." }),
-    el("label", { className: "check" }, enabled, "Run on schedule"),
-    el("label", { className: "check" }, noSnap, "Read live files instead of a VSS or ZFS snapshot"),
-    err, buttons);
-  trackingBox.append(el("label", { textContent: "How virtual machine disks are read" }), vmTracking,
-    el("div", { className: "hint", textContent: "Reading only what changed is much faster and relies on the hypervisor's change tracking. Run a few backups with the checking option first: it reads everything and warns if the tracking missed a change." }));
-  const scratchBox = el("div", { id: "vmScratchBox" }, el("label", { textContent: "Scratch folder on a KVM or Proxmox host (optional)" }), vmScratch,
-    el("div", { className: "hint", textContent: "While a running machine is backed up, what it overwrites is kept in this folder until the backup ends. Empty uses /var/lib/libvirt/images on KVM and /var/tmp on Proxmox. Name a folder on a disk with room when a busy machine fills that." }));
-  trackingBox.append(scratchBox);
-  const showScratch = () => { scratchBox.hidden = hypervisor.value === "hyperv"; };
-  hypervisor.addEventListener("change", showScratch); showScratch();
-  showHyper(); showM365();
-  $("dlg").className = ""; if (!$("dlg").open) $("dlg").showModal();
+  const barKids = [save, el("button", { type: "button", textContent: "Cancel", onclick: () => go("#schedules") }), err];
+  if (p) barKids.push(confirmButton("Delete schedule", "Click again: backups stop, snapshots are kept", async () => { await call("DELETE", "/api/v1/policies/" + p.id); await load(); go("#schedules"); }));
+  root.append(el("div", { className: "form" },
+    el("div", { style: "margin-bottom:8px" }, link("‹ Schedules", "#schedules")),
+    head(p ? "Edit schedule" : "New schedule", ""),
+    sec("Name", null, el("div", { className: "pad" }, field("Name of the schedule", name, "Shown in reports and alerts. Say what is backed up and how often."))),
+    sec("What to back up", [all], el("div", { className: "pad" },
+      el("div", { className: "tree", id: "machines" }, ...nodes.map(n => n.el)),
+      el("div", { className: "hint", style: "margin-top:10px", textContent: "Tick each machine, then choose what to back up on it. Each machine keeps its own snapshots. Files are read from a snapshot of the disk where there is one (VSS on Windows, ZFS), so files in use are backed up as they were at one instant." }))),
+    sec("When", null, el("div", { className: "pad" }, field("How it starts", kind), dailyBox, intBox, pauseBox)),
+    sec("How long to keep backups", null, el("div", { className: "pad" }, keepGrid, el("div", { className: "hint", textContent: "How many snapshots of each kind to keep, for each machine. Leave every box empty to keep all of them." }))),
+    el("section", null, el("details", { style: "margin:0", open: !!(p && (p.excludes || []).length || m || (p && (p.hypervisor || p.vm_tracking || p.no_snapshot))) }, el("summary", { className: "sechead", style: "border-bottom:0;font-weight:600;color:var(--ink)", textContent: "More options: leave out files, virtual machines, Microsoft 365" }),
+      el("div", { className: "pad", style: "border-top:1px solid var(--line)" },
+        field("Leave out (optional)", excludes, "Applies to every machine of the schedule."),
+        check(noSnap, "Read live files instead of a VSS or ZFS snapshot"),
+        field("Hypervisor of the virtual machines", hypervisor), vmwareBox, trackingBox, scratchBox,
+        field("Microsoft 365 (optional)", m365Tenant, m365List.length ? "Mailboxes and OneDrive are read from Microsoft over the internet by the one machine ticked above. A schedule with Microsoft 365 holds nothing else." : "Add your tenant first, under “Microsoft 365” in the menu."),
+        m365Box))),
+    el("div", { className: "savebar" }, ...barKids)));
 }
-$("newPolicy").onclick = () => policyDialog(null);
 
 async function alertsDialog() {
   const a = await call("GET", "/api/v1/alerts");
@@ -1020,7 +1302,6 @@ function m365Edit(v) {
     result, err, el("div", { className: "row" }, test, el("button", { textContent: "Cancel", onclick: () => m365Dialog().catch(e => notice("Something went wrong", e.message)) }), save));
 }
 $("m365").onclick = () => m365Dialog().catch(e => notice("Something went wrong", e.message));
-$("offsite").onclick = () => offsiteDialog().catch(e => notice("Something went wrong", e.message));
 $("alerts").onclick = () => alertsDialog().catch(e => notice("Something went wrong", e.message));
 
 // confirmButton asks for a second click before doing something that
@@ -1138,7 +1419,7 @@ function restoreDialog(s, path) {
     vms.length ? el("div", { className: "hint", textContent: "For Hyper-V and KVM with libvirt. Restore onto the host the machine runs on. Without this, a virtual machine is restored as a new one beside the original." }) : "",
     vmOverOpts,
     el("div", { className: "hint", textContent: "Only for virtual machines. One is restored as a new machine, switched off, with its disks in the place above. Restore it onto a host of the same kind it was backed up from: Hyper-V, Proxmox VE, or KVM with libvirt (there a folder such as /var/lib/libvirt/images)." }),
-    el("div", { className: "hint", textContent: "A whole-machine backup goes into the folder above as virtual disks (.vhdx on Windows) that start like the original. Give a name here and a Hyper-V host above to have a new virtual machine built around them, switched off and not connected to the network. To rebuild a physical machine, use “Bare-metal recovery” at the top of the page." }),
+    el("div", { className: "hint", textContent: "A whole-machine backup goes into the folder above as virtual disks (.vhdx on Windows) that start like the original. Give a name here and a Hyper-V host above to have a new virtual machine built around them, switched off and not connected to the network. To rebuild a physical machine, use “Bare-metal recovery” in the menu." }),
     vmwareBox);
   $("dlgBody").append(err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), go));
 }
@@ -1151,7 +1432,7 @@ async function downloadFrom(s, path) {
   document.body.append(a); a.click(); a.remove();
 }
 function downloadButton(s, path, folder) {
-  return can("operator") ? button(folder ? "Download as zip" : "Download", async () => downloadFrom(s, path)) : "";
+  return can("operator") ? el("button", { textContent: "Download", title: folder ? "Downloads the folder as a zip file" : "", onclick: () => downloadFrom(s, path).catch(oops) }) : "";
 }
 
 // searchDialog finds files by name in every snapshot.
@@ -1188,7 +1469,6 @@ async function searchDialog(q) {
     n ? el("div", { className: "list" }, t) : "",
     el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
 }
-$("searchForm").onsubmit = ev => { ev.preventDefault(); const q = $("searchBox").value.trim(); if (q) searchDialog(q).catch(e => notice("Something went wrong", e.message)); };
 
 // browseDialog shows what a snapshot holds at a path.
 async function browseDialog(s, path, trail) {
@@ -1257,10 +1537,6 @@ async function jobDialog(id) {
   if (j.status === "queued" || j.status === "running") jobTimer = setTimeout(() => { if ($("dlg").open) jobDialog(id).catch(() => {}); }, 2000);
 }
 $("dlg").addEventListener("close", () => { clearTimeout(jobTimer); clearTimeout(recoveryTimer); });
-for (const [id, kind] of [["runGC", "gc"], ["runVerify", "verify"]]) {
-  $(id).onclick = async () => { try { const j = await call("POST", "/api/v1/repo/" + kind); await refresh(); await jobDialog(j.id); } catch (e) { notice("Something went wrong", e.message); } };
-}
-$("moreJobs").onclick = () => { jobLimit = jobLimit === 15 ? 100 : 15; $("moreJobs").textContent = jobLimit === 15 ? "Show more" : "Show fewer"; refresh().catch(() => {}); };
 
 // enrollCode packs what an agent needs to find and trust this server
 // into one string to paste: "bb1." and base64url JSON.
@@ -1344,8 +1620,6 @@ async function addAgentDialog() {
   }, 3000);
   $("dlg").addEventListener("close", () => clearInterval(poll), { once: true });
 }
-$("agentUpdates").onclick = () => updatesDialog().catch(e => notice("Something went wrong", e.message));
-$("newToken").onclick = () => addAgentDialog().catch(e => notice("Could not create a token", e.message));
 const ranks = { viewer: 1, operator: 2, admin: 3 };
 function can(role) { return !!me && ranks[me.role] >= ranks[role]; }
 const roleNames = { admin: "Administrator", operator: "Operator", viewer: "Viewer" };
@@ -1510,8 +1784,9 @@ async function start() {
   $("whoami").textContent = me.token ? "admin token" : me.name + " (" + roleNames[me.role].toLowerCase() + ")";
   $("account").hidden = !!me.token;
   $("front").hidden = true; $("app").hidden = false;
-  refresh().catch(() => {});
-  clearInterval(timer); timer = setInterval(() => { if (token && !$("dlg").open) refresh().catch(() => {}); }, 5000);
+  await load();
+  await show();
+  clearInterval(timer); timer = setInterval(() => { if (token && !$("dlg").open && !document.hidden) refresh().catch(() => {}); }, 5000);
 }
 
 // boot decides which page to show: recovery progress, the key prompt,
@@ -1747,6 +2022,301 @@ async function activityDialog() {
 }
 $("activity").onclick = () => activityDialog().catch(e => notice("Something went wrong", e.message));
 
+
+// Restore: one machine as its backups had it on a day, across all its schedules.
+const rb = { tab: "browse", agent: "", at: "", path: "", trail: [], removed: false, picked: new Map(), os: "" };
+const today = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+const snapOf = id => snapList.find(x => x.id === id);
+pages.restore = {
+  async enter(root) {
+    const tabs = tabBar([["browse", "Browse by date"], ["snapshots", "Every snapshot"]], rb.tab, t => { rb.tab = t; show().catch(oops); });
+    const find = el("input", { id: "searchBox", type: "search", placeholder: "Part of a name, or *.xlsx", ariaLabel: "Find a file by name in every backup" });
+    const form = el("form", { id: "searchForm", className: "inline", onsubmit: ev => { ev.preventDefault(); const q = find.value.trim(); if (q) searchDialog(q).catch(oops); } }, find, el("button", { textContent: "Find a file" }));
+    find.style.width = "min(300px, 60vw)";
+    root.append(head("Restore", "Pick a machine and a day to see its files as the backups had them, or find a file by name.", form), tabs, el("div", { id: "restoreBody" }));
+    const body = root.querySelector("#restoreBody");
+    if (rb.tab === "snapshots") return this.snapshots(body);
+    const backed = agentList.filter(a => snapList.some(s => s.agent_id === a.id));
+    if (!backed.length) { body.append(el("section", null, el("div", { className: "empty" }, el("b", { textContent: "No backups yet." }), "Once a backup has run, its files show here."))); return; }
+    if (!backed.some(a => a.id === rb.agent)) { rb.agent = backed[0].id; rb.path = ""; rb.trail = []; }
+    const machine = el("select", { id: "rbMachine" }, ...backed.map(a => el("option", { value: a.id, textContent: a.name })));
+    machine.value = rb.agent;
+    machine.onchange = () => { rb.agent = machine.value; rb.path = ""; rb.trail = []; rb.picked.clear(); list(); };
+    const at = el("input", { type: "date", id: "rbDate", value: rb.at || today(), max: today() });
+    at.onchange = () => { rb.at = at.value === today() ? "" : at.value; rb.picked.clear(); list(); };
+    const removed = el("input", { type: "checkbox", id: "rbRemoved", checked: rb.removed });
+    removed.onchange = () => { rb.removed = removed.checked; list(); };
+    const many = el("button", { id: "rbRestore", className: "primary need-operator", textContent: "Restore the ticked items", disabled: true, onclick: () => restoreMany() });
+    const crumbs = el("div", { className: "crumbs", style: "margin:0;padding:10px 16px;border-bottom:1px solid var(--line)" }), out = el("div", { id: "rbList" });
+    body.append(el("section", null, el("div", { className: "bar" }, labeled("Machine", machine), labeled("As it was on", at),
+      el("label", { className: "check" }, removed, "Show removed items"), el("div", { className: "end" }, many)), crumbs, out));
+    const open = (path, trail) => { rb.path = path; rb.trail = trail; rb.picked.clear(); list(); };
+    const list = async () => {
+      many.disabled = !rb.picked.size;
+      many.textContent = rb.picked.size ? "Restore " + plural(rb.picked.size, "ticked item", "ticked items") : "Restore the ticked items";
+      let l;
+      try { l = await call("GET", "/api/v1/browse?agent_id=" + rb.agent + (rb.at ? "&at=" + rb.at : "") + "&path=" + encodeURIComponent(rb.path) + (rb.removed ? "&removed=1" : "")); }
+      catch (e) { if (rb.path) { open("", []); return; } out.replaceChildren(el("div", { className: "empty", textContent: e.message })); return; }
+      rb.os = l.os;
+      crumbs.replaceChildren(el("button", { textContent: agentNames[rb.agent] || "Machine", onclick: () => open("", []) }));
+      rb.trail.forEach((t, i) => crumbs.append("›", el("button", { textContent: t.label, onclick: () => open(t.path, rb.trail.slice(0, i + 1)) })));
+      const rows = l.entries.map(e => {
+        const s = snapOf(e.snapshot_id), full = joinPath({ os: l.os }, rb.path, e.name), folder = e.type === "dir" || e.type === "vm" || e.type === "machine";
+        const tick = el("input", { type: "checkbox", checked: rb.picked.has(full), ariaLabel: "Tick " + e.name, disabled: !s });
+        tick.onchange = () => { if (tick.checked) rb.picked.set(full, e.snapshot_id); else rb.picked.delete(full); many.disabled = !rb.picked.size; many.textContent = rb.picked.size ? "Restore " + plural(rb.picked.size, "ticked item", "ticked items") : "Restore the ticked items"; };
+        const nameCell = el("div", { style: "white-space:normal;overflow-wrap:anywhere;min-width:180px" }, folder ? el("button", { className: "link", textContent: e.name, onclick: () => open(full, rb.trail.concat({ label: e.name, path: full })) }) : e.name,
+          e.removed ? el("span", { className: "pill off", style: "margin-left:8px", textContent: "Removed" }) : "", el("div", { className: "sub", textContent: kinds[e.type] || e.type }));
+        return [tick, nameCell, folder ? "" : size(e.size), when(e.mtime), el("div", null, when(e.snapshot_time), e.removed ? el("div", { className: "sub", textContent: "the last backup that had it" }) : ""),
+          !s ? "" : el("div", { className: "acts" }, button("Versions", async () => versionsDialog(full, e.name)), downloadButton(s, full, folder), can("operator") ? button("Restore", async () => restoreDialog(s, full)) : "")];
+      });
+      out.replaceChildren(grid(["", "Name", "#Size", "Changed", "Backed up", ""], rows,
+        rb.path ? "This folder is empty." : "No backup of this machine is that old. Pick a later day."),
+        l.more ? el("div", { className: "empty", textContent: "Older backups than the last 40 were not read for removed items. Pick an earlier day to look further back." }) : "");
+    };
+    await list();
+  },
+  snapshots(body) {
+    const { prot, suspect } = shared;
+    body.append(el("section", null, grid(["Time", "Machine", "What", "#Files", "#Size", "#New data", ""],
+      snapList.slice(0, 200).map(s => [suspect.has(s.id) ? el("span", null, when(s.time) + " ", el("span", { className: "pill suspicious", textContent: "Looks like ransomware" })) : when(s.time),
+        s.hostname, Object.assign(el("div", { textContent: s.sources.map(x => x.name).join(", ") }), { style: "white-space:normal;overflow-wrap:anywhere;min-width:180px;max-width:360px" }), s.stats.files, size(s.stats.bytes), size(s.stats.bytes_uploaded),
+        el("div", { className: "acts" }, button("Browse", async () => browseDialog(s, "")), can("operator") ? button("Restore", async () => restoreDialog(s, "")) : "", can("admin") ? deleteButton(s, prot) : "")]),
+      "No snapshots yet."), snapList.length > 200 ? el("div", { className: "empty", textContent: "The newest 200 of " + snapList.length + " snapshots are listed. Browse by date reaches the older ones." }) : ""));
+  }
+};
+function tabBar(tabs, on, pick) {
+  return el("div", { className: "tabs", role: "tablist" }, ...tabs.map(([id, label]) => Object.assign(el("button", { textContent: label, role: "tab", id: "tab-" + id, onclick: () => pick(id) }), { ariaSelected: String(id === on) })));
+}
+// versionsDialog lists every version the backups hold of one path.
+async function versionsDialog(path, name) {
+  const vs = await call("GET", "/api/v1/versions?agent_id=" + rb.agent + (rb.at ? "&at=" + rb.at : "") + "&path=" + encodeURIComponent(path));
+  const rows = vs.map(v => { const s = snapOf(v.snapshot_id), folder = v.type !== "file" && v.type !== "symlink";
+    return [el("div", null, when(v.snapshot_time), el("div", { className: "sub", textContent: v.snapshots > 1 ? "the same in " + v.snapshots + " backups, since " + when(v.oldest) : "in one backup" })),
+      folder ? "" : size(v.size), when(v.mtime), !s ? "" : el("div", { className: "acts" }, downloadButton(s, path, folder), can("operator") ? button("Restore", async () => restoreDialog(s, path)) : "")]; });
+  openDialog(true, el("h3", { textContent: "Versions of " + name }), el("div", { className: "hint", textContent: path }),
+    el("div", { className: "list", style: "margin-top:12px" }, grid(["Backed up", "#Size", "Changed", ""], rows, "No backup holds it.")),
+    el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
+}
+// restoreMany restores everything that is ticked in the restore browser: one restore for each snapshot the items come from.
+function restoreMany() {
+  const groups = new Map();
+  for (const [path, snap] of rb.picked) groups.set(snap, (groups.get(snap) || []).concat(path));
+  const agents = agentList.filter(a => !a.revoked);
+  const agent = el("select", { id: "manyAgent" }, ...agents.map(a => el("option", { value: a.id, textContent: a.name + (a.id === rb.agent ? ", the original machine" : "") })));
+  if (agents.some(a => a.id === rb.agent)) agent.value = rb.agent;
+  const target = el("input", { id: "manyTarget", placeholder: "Leave empty to restore in place, over the originals" });
+  const mode = el("select", { id: "manyMode" }, el("option", { value: "if-changed", textContent: "Replace files that differ from the backup" }), el("option", { value: "always", textContent: "Replace every file" }), el("option", { value: "never", textContent: "Only restore missing files" }));
+  const err = el("div", { id: "err" });
+  const goBtn = el("button", { className: "primary", textContent: "Start restore" });
+  goBtn.onclick = async () => {
+    goBtn.disabled = true;
+    try {
+      for (const [snap, paths] of groups) await call("POST", "/api/v1/restores", { snapshot_id: snap, agent_id: agent.value, target: target.value.trim(), include: paths, overwrite: mode.value });
+      rb.picked.clear(); $("dlg").close(); rep.tab = "restore"; go("#reports");
+    } catch (e) { err.textContent = e.message; goBtn.disabled = false; }
+  };
+  openDialog(false, el("h3", { textContent: "Restore " + plural(rb.picked.size, "item", "items") }),
+    el("pre", { style: "max-height:9em;overflow:auto", textContent: [...rb.picked.keys()].join("\n") }),
+    el("label", { textContent: "Restore onto", htmlFor: "manyAgent" }), agent,
+    el("label", { textContent: "Put them in", htmlFor: "manyTarget" }), target, el("div", { className: "hint", textContent: "A folder on the chosen machine. Restoring onto a different machine needs a folder here." }),
+    el("label", { textContent: "Existing files", htmlFor: "manyMode" }), mode,
+    groups.size > 1 ? el("div", { className: "hint", textContent: "The items come from " + groups.size + " backups, so " + groups.size + " restores start. Each shows under Reports." }) : "",
+    err, el("div", { className: "row" }, el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), goBtn));
+}
+
+// Reports: every backup and restore, how much changed and how fast it went.
+const rep = { tab: "backup", policy: "", agent: "", from: "", to: "", status: "", q: "" };
+pages.reports = {
+  async enter(root) {
+    root.append(head("Reports", "Every backup and restore: what changed, how long it took and how fast it went."),
+      tabBar([["backup", "Backups"], ["restore", "Restores"], ["large", "Largest files"], ["jobs", "Everything the server did"]], rep.tab, t => { rep.tab = t; show().catch(oops); }));
+    const out = el("div", { id: "repList" });
+    const again = () => this.tick(root).catch(oops);
+    const pick = (key, label, opts) => { const s = el("select", { id: "rep-" + key, onchange: () => { rep[key] = s.value; again(); } }, el("option", { value: "", textContent: "All" }), ...opts.map(([v, t]) => el("option", { value: v, textContent: t }))); s.value = rep[key]; return labeled(label, s); };
+    const date = (key, label) => { const i = el("input", { type: "date", value: rep[key], max: today(), onchange: () => { rep[key] = i.value; again(); } }); return labeled(label, i); };
+    const machines = agentList.map(a => [a.id, a.name]);
+    const bar = el("div", { className: "bar" });
+    if (rep.tab === "backup") bar.append(pick("policy", "Schedule", shared.policies.map(p => [p.id, p.name])), pick("agent", "Machine", machines), date("from", "From"), date("to", "To"),
+      pick("status", "State", [["success", "Good"], ["warning", "Warnings"], ["failed", "Failed"], ["cancelled", "Cancelled"]]),
+      el("div", { className: "end" }, button("Download as CSV", async () => download("backup-report-" + today() + ".csv", await csv("backup")))));
+    if (rep.tab === "restore") bar.append(pick("agent", "Machine", machines), date("from", "From"), date("to", "To"), el("div", { className: "end" }, button("Download as CSV", async () => download("restore-report-" + today() + ".csv", await csv("restore")))));
+    if (rep.tab === "large") { const q = el("input", { type: "search", value: rep.q, placeholder: "Part of a name", onchange: () => { rep.q = q.value; again(); } }); bar.append(pick("agent", "Machine", machines), el("div", { className: "grow" }, labeled("Name contains", q))); }
+    root.append(el("section", null, rep.tab === "jobs" ? "" : bar, out));
+    await this.tick(root);
+  },
+  query(type) { return "type=" + type + (rep.policy && type === "backup" ? "&policy_id=" + rep.policy : "") + (rep.agent ? "&agent_id=" + rep.agent : "") + (rep.from ? "&from=" + rep.from : "") + (rep.to ? "&to=" + rep.to : "") + (rep.status && type === "backup" ? "&status=" + rep.status : ""); },
+  async tick(root) {
+    const out = (root || document).querySelector("#repList");
+    if (!out) return;
+    if (rep.tab === "jobs") { out.replaceChildren(jobTable(await call("GET", "/api/v1/jobs?limit=100"), "Nothing has run yet.")); return; }
+    if (rep.tab === "large") {
+      const l = await call("GET", "/api/v1/large-files?limit=100" + (rep.agent ? "&agent_id=" + rep.agent : "") + (rep.q ? "&q=" + encodeURIComponent(rep.q) : ""));
+      out.replaceChildren(l.building ? el("div", { className: "empty" }, el("b", { textContent: "The index of file names is still being built." }), "The largest files show here when it is done.") :
+        grid(["#Size", "Name", "Machine", "Changed", "In backups"], l.files.map(f => [size(f.size), el("div", { style: "white-space:normal;overflow-wrap:anywhere;min-width:220px" }, f.name, el("div", { className: "sub", textContent: f.path })), f.hostname, when(f.mtime), f.snapshots]),
+          "No files" + (rep.q ? " with “" + rep.q + "” in their name" : "") + " in the newest backups."));
+      return;
+    }
+    const rs = await call("GET", "/api/v1/reports?" + this.query(rep.tab));
+    const what = r => el("div", null, r.policy || (rep.tab === "restore" ? "Restore" : "A schedule that was deleted"), el("div", { className: "sub", textContent: r.agent }));
+    const dur = r => r.started ? took(r.seconds) + (r.finished ? "" : " so far") : "";
+    if (rep.tab === "backup") out.replaceChildren(grid(["State", "Schedule and machine", "Started", "Changes since the backup before", "#Size of changes", "#Read speed", "#Warnings", ""],
+      rs.map(r => [pill(r.status), what(r), el("div", null, when(r.started || r.created), el("div", { className: "sub", textContent: r.started ? "took " + dur(r) : "" })),
+        r.status === "failed" && !r.files ? Object.assign(el("div", { className: "sub", textContent: r.error }), { style: "max-width:300px" }) : r.files_new + " added, " + r.files_modified + " changed, " + r.files_removed + " removed",
+        size(r.bytes_changed), rate(r.read_rate), r.warnings || "", button("Details", async () => reportDialog(r))]),
+      "No backups match. Change the filters above, or wait for the first backup to run."));
+    else out.replaceChildren(grid(["State", "Machine", "Started", "#Took", "#Files", "#Size", "#Speed", "Restored to", ""],
+      rs.map(r => [pill(r.status), r.agent, when(r.started || r.created), dur(r), r.files, size(r.bytes), rate(r.read_rate), Object.assign(el("div", { textContent: r.target || "The original place" }), { style: "white-space:normal;overflow-wrap:anywhere;max-width:280px" }), button("Details", async () => jobDialog(r.id))]),
+      "No restores match."));
+  }
+};
+async function csv(type) {
+  const r = await fetch("/api/v1/reports?format=csv&" + pages.reports.query(type), { headers: { Authorization: "Bearer " + token } });
+  if (!r.ok) throw new Error("The report could not be made.");
+  return r.text();
+}
+// reportDialog shows one backup: what it found, how fast it went, and the runs before it for comparison.
+async function reportDialog(r) {
+  const [j, before] = await Promise.all([call("GET", "/api/v1/jobs/" + r.id), r.policy_id ? call("GET", "/api/v1/reports?type=backup&limit=14&policy_id=" + r.policy_id + "&agent_id=" + r.agent_id) : []]);
+  const dl = el("dl"), add = (k, v) => { if (v !== "" && v != null) dl.append(el("dt", { textContent: k }), el("dd", null, v)); };
+  add("State", pill(r.status)); add("Machine", r.agent); add("Started", r.started ? when(r.started) : "Not started yet"); add("Took", r.started ? took(r.seconds) : "");
+  add("Files", r.files + " in " + plural(r.folders, "folder", "folders") + ", " + size(r.bytes));
+  add("Since the backup before", r.files_new + " added, " + r.files_modified + " changed, " + r.files_removed + " removed");
+  add("Size of what was added or changed", size(r.bytes_changed)); add("Read from the machine", size(r.bytes_read) + (r.read_rate ? " at " + rate(r.read_rate) : ""));
+  add("New data stored", size(r.bytes_stored) + (r.bytes_read > 0 ? ", " + Math.round(100 - 100 * r.bytes_stored / r.bytes_read) + "% saved by deduplication and compression" : ""));
+  add("Scan rate", r.scan_rate >= 1 ? Math.round(r.scan_rate) + " items a second" : r.scan_rate > 0 ? "under one item a second" : "");
+  add("Error", r.error || "");
+  const kids = [el("h3", { textContent: (r.policy || "Backup") + ", " + when(r.started || r.created) }), dl];
+  const runs = before.filter(x => x.finished).reverse();
+  if (runs.length > 1) kids.push(el("div", { className: "charts", style: "margin:14px 0;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))" },
+    chartBox("Size of changes, last " + runs.length + " backups", { kind: "bar", xs: runs.map(x => when(x.started)), series: [{ name: "Added and changed", color: "var(--s1)", pts: runs.map(x => x.bytes_changed) }], short: i => new Date(runs[i].started).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }), fmt: size, width: 400 }),
+    chartBox("Time taken, last " + runs.length + " backups", { kind: "bar", xs: runs.map(x => when(x.started)), series: [{ name: "Took", color: "var(--s1)", pts: runs.map(x => x.seconds) }], short: i => new Date(runs[i].started).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }), fmt: took, width: 400 })));
+  if (j.warnings && j.warnings.length) kids.push(el("h4", { textContent: "Warnings (" + j.warnings.length + ")" }), el("pre", { textContent: j.warnings.join("\n"), style: "max-height:30vh;overflow:auto" }));
+  const s = snapOf(r.snapshot_id);
+  kids.push(el("div", { className: "row" }, s ? button("Browse this backup", async () => browseDialog(s, "")) : "", el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
+  openDialog(true, ...kids);
+}
+
+// Charts: one measure for each chart, the numbers on hover and as a table.
+const svgNS = "http://www.w3.org/2000/svg";
+function svg(tag, attrs, ...kids) { const e = document.createElementNS(svgNS, tag); for (const k in attrs || {}) e.setAttribute(k, attrs[k]); for (const k of kids) e.append(k); return e; }
+function nice(v) { if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * p) return m * p; return 10 * p; }
+// niceBytes rounds up to a size that reads well in binary units.
+function niceBytes(v) { if (v <= 0) return 1024; const u = Math.pow(1024, Math.floor(Math.log(v) / Math.log(1024))); return nice(v / u) * u; }
+function chart(o) {
+  const n = o.xs.length, W = o.width || 560, H = 200, L = 64, R = 10, T = 10, B = 26, pw = W - L - R, ph = H - T - B;
+  const box = el("div", { className: "chart" });
+  const top = Math.max(0, ...o.series.flatMap(s => s.pts.map(v => v || 0)));
+  if (!n || !top) { box.append(el("div", { className: "empty", style: "padding:28px 0", textContent: o.empty || "Nothing to draw yet for this period." })); return box; }
+  const max = o.fmt === size ? niceBytes(top) : o.fmt === took ? (top > 7200 ? nice(top / 3600) * 3600 : top > 120 ? nice(top / 60) * 60 : nice(top)) : nice(top);
+  const x = i => o.kind === "bar" ? L + (i + .5) * pw / n : L + (n === 1 ? pw / 2 : i * pw / (n - 1)), y = v => T + ph - (v || 0) / max * ph;
+  const g = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": o.label || "" });
+  for (const f of [0, .5, 1]) { g.append(svg("line", { x1: L, x2: W - R, y1: y(max * f), y2: y(max * f), stroke: "var(--line)", "stroke-width": 1 }),
+    Object.assign(svg("text", { x: L - 8, y: y(max * f) + 4, "text-anchor": "end" }), { textContent: f ? o.fmt(max * f) : "0" })); }
+  const marks = Math.min(n, Math.max(2, Math.floor(pw / 110)));
+  for (let k = 0; k < marks; k++) { const i = marks === 1 ? 0 : Math.round(k * (n - 1) / (marks - 1)); const bar = o.kind === "bar", first = k === 0 && marks > 1, last = k === marks - 1 && marks > 1; g.append(Object.assign(svg("text", { x: first && bar ? Math.max(L, x(i) - 14) : last && bar ? Math.min(W, x(i) + 14) : x(i), y: H - 6, "text-anchor": first ? "start" : last ? "end" : "middle" }), { textContent: o.short ? o.short(i) : o.xs[i] })); }
+  if (o.kind === "bar") {
+    const w = Math.max(2, Math.min(28, pw / n - 2)), s = o.series[0];
+    s.pts.forEach((v, i) => { if (!v) return; const h = Math.max(1.5, T + ph - y(v)), r = Math.min(3, w / 2, h); g.append(svg("path", { fill: s.color, d: "M" + (x(i) - w / 2) + "," + (T + ph) + "v" + (-h + r) + "q0," + -r + " " + r + "," + -r + "h" + (w - 2 * r) + "q" + r + ",0 " + r + "," + r + "v" + (h - r) + "z" })); });
+  } else for (const s of o.series) {
+    g.append(svg("polyline", { fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round", points: s.pts.map((v, i) => x(i).toFixed(1) + "," + y(v).toFixed(1)).join(" ") }));
+    if (n === 1) g.append(svg("circle", { cx: x(0), cy: y(s.pts[0]), r: 4, fill: s.color }));
+  }
+  const cross = svg("line", { y1: T, y2: T + ph, stroke: "var(--muted)", "stroke-width": 1, visibility: "hidden" }), dots = o.kind === "bar" ? [] : o.series.map(s => svg("circle", { r: 4, fill: s.color, stroke: "var(--card)", "stroke-width": 2, visibility: "hidden" }));
+  g.append(cross, ...dots);
+  const tip = el("div", { className: "tip", hidden: true });
+  const over = svg("rect", { x: L, y: T, width: pw, height: ph, fill: "transparent" });
+  const move = ev => {
+    const b = g.getBoundingClientRect(), px = (ev.clientX - b.left) / b.width * W;
+    const i = Math.max(0, Math.min(n - 1, o.kind === "bar" ? Math.floor((px - L) / (pw / n)) : Math.round((px - L) / (n === 1 ? 1 : pw / (n - 1)))));
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    dots.forEach((d, k) => { d.setAttribute("cx", x(i)); d.setAttribute("cy", y(o.series[k].pts[i])); d.setAttribute("visibility", "visible"); });
+    tip.replaceChildren(el("b", { textContent: o.xs[i] }), ...o.series.map(s => el("div", null, el("i", { style: "background:" + s.color }), s.name + ": " + o.fmt(s.pts[i] || 0))), o.extra ? el("div", { className: "sub", textContent: o.extra(i) }) : "");
+    tip.hidden = false;
+    const left = x(i) / W * b.width + 16;
+    tip.style.top = "12px"; if (left + tip.offsetWidth + 24 > b.width) { tip.style.left = ""; tip.style.right = (b.width - left + 48) + "px"; } else { tip.style.right = ""; tip.style.left = (left + 12) + "px"; }
+  };
+  over.addEventListener("pointermove", move); over.addEventListener("pointerdown", move);
+  over.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); dots.forEach(d => d.setAttribute("visibility", "hidden")); });
+  g.append(over); box.append(g, tip);
+  return box;
+}
+function chartBox(title, o, note) {
+  o.label = title;
+  const kids = [el("div", { className: "sechead" }, el("h2", { textContent: title }), note ? el("div", { className: "sub", textContent: note }) : "")];
+  if (o.series.length > 1) kids.push(el("div", { className: "legend" }, ...o.series.map(s => el("span", null, el("i", { style: "background:" + s.color }), s.name))));
+  kids.push(chart(o));
+  if (o.xs.length) kids.push(el("details", { className: "numbers" }, el("summary", { textContent: "Show the numbers" }),
+    grid([o.xhead || "Day", ...o.series.map(s => "#" + s.name)], o.xs.map((xv, i) => [xv, ...o.series.map(s => o.fmt(s.pts[i] || 0))]).reverse(), "")));
+  return el("section", null, ...kids);
+}
+
+// Graphs.
+const gr = { days: 30, policy: "" };
+pages.graphs = {
+  async enter(root) {
+    const g = await call("GET", "/api/v1/graphs?days=" + gr.days);
+    const range = el("select", { id: "grDays", onchange: () => { gr.days = +range.value; show().catch(oops); } }, ...[[7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "A year"], [1095, "3 years"]].map(([v, t]) => el("option", { value: v, textContent: t })));
+    range.value = gr.days;
+    root.append(head("Graphs", "How much is stored, how much each day's backups read and kept, and how fast they ran.", labeled("Period ", range)));
+    range.parentElement.style.cssText = "display:flex;align-items:center;gap:8px;color:var(--muted)"; range.style.width = "auto";
+    const dayLabel = d => new Date(d + "T12:00:00").toLocaleDateString([], { month: "short", day: "numeric" });
+    const ds = g.daily.map(d => dayLabel(d.day)), us = g.usage.map(u => dayLabel(u.day));
+    const names = [...new Set(g.runs.map(r => r.policy + " · " + r.agent))].sort();
+    if (!names.includes(gr.policy)) gr.policy = "";
+    const runs = g.runs.filter(r => r.read_rate > 0 && (!gr.policy || r.policy + " · " + r.agent === gr.policy));
+    const localDay = t => { const d = new Date(t); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+    const oneDay = runs.length > 0 && localDay(runs[0].time) === localDay(runs[runs.length - 1].time);
+    const which = el("select", { id: "grRun", ariaLabel: "Which backups", style: "width:auto;max-width:100%", onchange: () => { gr.policy = which.value; show().catch(oops); } }, el("option", { value: "", textContent: "Every schedule and machine" }), ...names.map(n => el("option", { value: n, textContent: n })));
+    which.value = gr.policy;
+    const speed = chartBox("Backup speed", { kind: "line", xhead: "Backup", xs: runs.map(r => when(r.time)), short: i => oneDay ? new Date(runs[i].time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : dayLabel(localDay(runs[i].time)), series: [{ name: "Read speed", color: "var(--s1)", pts: runs.map(r => r.read_rate) }], fmt: rate,
+      extra: i => runs[i].policy + " · " + runs[i].agent + ", " + size(runs[i].bytes_read) + " in " + took(runs[i].seconds), empty: "No finished backups in this period." }, "How fast each backup read from its machine, over its whole run.");
+    speed.querySelector(".sechead").append(which);
+    const pct = (a, b) => b > 0 ? Math.round(100 - 100 * a / b) + "%" : "";
+    const bar = (label, v, of) => [el("div", { textContent: label }), el("div", { className: "meter", role: "img", ariaLabel: label + ": " + size(v) }, el("i", { style: "width:" + Math.max(of > 0 ? 100 * v / of : 0, v ? 1 : 0) + "%" })), el("div", { className: "num", textContent: size(v) })];
+    const widest = Math.max(g.protected, g.sources, g.raw, g.stored);
+    root.append(el("div", { className: "charts" },
+      chartBox("Space used on the backup disk", { kind: "line", xs: us, series: [{ name: "On disk", color: "var(--s1)", pts: g.usage.map(u => u.stored) }, { name: "Before compression", color: "var(--s2)", pts: g.usage.map(u => u.raw) }], fmt: size, empty: "The size is recorded once a day. The first point shows tomorrow." }, "Recorded once a day."),
+      el("section", null, el("div", { className: "sechead" }, el("h2", { textContent: "Storage efficiency" }), el("div", { className: "sub", textContent: !g.protected ? "Shows once there is a backup." : "Every snapshot added up is " + size(g.protected) + ". It takes " + size(g.stored) + " on disk" + (g.stored < g.protected ? ", " + pct(g.stored, g.protected) + " less." : ".") })),
+        el("div", { className: "savings", id: "savings" }, ...bar("Every snapshot, added up", g.protected, widest), ...bar("The newest backup of everything", g.sources, widest), ...bar("Unique data, after deduplication", g.raw, widest), ...bar("On disk, after compression", g.stored, widest))),
+      chartBox("Read from the machines, by day", { kind: "bar", xs: ds, series: [{ name: "Read", color: "var(--s1)", pts: g.daily.map(d => d.bytes_read) }], fmt: size, extra: i => plural(g.daily[i].backups, "backup", "backups") + (g.daily[i].failed ? ", " + g.daily[i].failed + " failed" : "") }),
+      chartBox("New data stored, by day", { kind: "bar", xs: ds, series: [{ name: "Stored", color: "var(--s1)", pts: g.daily.map(d => d.bytes_stored) }], fmt: size }, "What was left to store after deduplication."),
+      chartBox("Time spent backing up, by day", { kind: "bar", xs: ds, series: [{ name: "Time", color: "var(--s1)", pts: g.daily.map(d => d.seconds) }], fmt: took, extra: i => plural(g.daily[i].backups, "backup", "backups") }),
+      speed,
+      chartBox("Sent to the offsite copy, by day", { kind: "bar", xs: ds, series: [{ name: "Sent", color: "var(--s1)", pts: g.daily.map(d => d.offsite_bytes) }], fmt: size, extra: i => g.daily[i].offsite_seconds >= 1 ? "at " + rate(g.daily[i].offsite_bytes / g.daily[i].offsite_seconds) : "", empty: shared.off.kind ? "Nothing was sent in this period." : "The offsite copy is not set up." })));
+  }
+};
+
+// Offsite copy: is the second copy up to date, and what waits for it.
+pages.offsite = {
+  async enter(root) {
+    root.append(head("Offsite copy", "A second copy of every backup somewhere else, so a fire, theft or dead disk does not take the backups with it.",
+      el("button", { id: "offsiteNow", className: "need-operator", textContent: "Copy now", onclick: async () => { try { const j = await call("POST", "/api/v1/offsite/run"); await refresh(); await jobDialog(j.id); } catch (e) { oops(e); } } }),
+      el("button", { id: "offsite", className: "primary need-operator", textContent: "Settings", onclick: () => offsiteDialog().catch(oops) })), el("div", { id: "offBody" }));
+    await this.tick(root);
+  },
+  async tick(root) {
+    const box = (root || document).querySelector("#offBody");
+    if (!box) return;
+    const o = shared.off, btn = (root || document).querySelector("#offsiteNow");
+    if (btn) btn.hidden = !o.kind;
+    if (!o.kind) { box.replaceChildren(el("section", null, el("div", { className: "empty" }, el("b", { textContent: "The offsite copy is not set up." }), "Choose “Settings” to send a copy to S3-compatible storage or to a folder on another disk or share."))); return; }
+    const [jobs, g] = await Promise.all([call("GET", "/api/v1/jobs?type=offsite&limit=10"), call("GET", "/api/v1/graphs?days=30")]);
+    const j = o.last_job, q = o.queue || { files: 0, bytes: 0 }, busy = j && (j.status === "running" || j.status === "queued");
+    const state = busy ? ["running", "Copying now"] : j && j.status === "failed" ? ["failed", "The last run failed"] : !o.enabled ? ["paused", "Paused"] : !o.last_success ? ["never", "Not copied yet"] : q.files ? ["warning", "Behind: new backups wait to be copied"] : ["ok", "Up to date"];
+    const fact = (k, v, id) => el("div", null, el("dt", { textContent: k }), el("dd", { id: id || "" }, v));
+    const where = o.kind === "s3" ? "Bucket " + o.bucket + (o.prefix ? "/" + o.prefix : "") : o.folder;
+    box.replaceChildren(
+      sec("Status", [], el("dl", { className: "facts" },
+        fact("State", el("span", { className: "pill " + state[0], textContent: state[1] }), "offState"), fact("Where", where),
+        fact("Last complete copy", o.last_success ? when(o.last_success) : "Never"), fact("Stored in the copy", o.stored_bytes ? size(o.stored_bytes) + " in " + plural(o.stored_objects, "file", "files") : "Nothing yet"),
+        fact("Waiting to be copied", q.files ? size(q.bytes) + " in " + plural(q.files, "file", "files") : "Nothing", "offQueue"), fact("Oldest waiting", q.oldest ? ago(q.oldest) + " old" : "Nothing waits"),
+        fact("Speed of the last copy", o.rate ? rate(o.rate) : "Nothing was sent"), fact("Runs", o.enabled ? (o.daily_at ? "Every day at " + clock(o.daily_at) : "Only when started by hand") : "Paused"),
+        o.lock_days ? fact("Locked against deletion", o.locked_until ? "Until at least " + day(o.locked_until) : "From the next copy on") : ""),
+        j && j.status === "failed" ? el("div", { className: "pad", style: "border-top:1px solid var(--line);color:var(--bad)", textContent: "The run of " + when(j.created) + " failed: " + j.error }) : ""),
+      chartBox("Sent to the offsite copy, by day", { kind: "bar", width: 900, xs: g.daily.map(d => new Date(d.day + "T12:00:00").toLocaleDateString([], { month: "short", day: "numeric" })), series: [{ name: "Sent", color: "var(--s1)", pts: g.daily.map(d => d.offsite_bytes) }], fmt: size, empty: "Nothing was sent in the last 30 days." }, "The last 30 days."),
+      sec("Latest runs", [], jobTable(jobs, "The copy has not run yet.")));
+  }
+};
 boot();
 </script>
 </body>

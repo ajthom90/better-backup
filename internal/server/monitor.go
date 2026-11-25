@@ -277,12 +277,14 @@ func (s *Server) health(now time.Time) (*api.Health, error) {
 		last, _ := s.jobs(`WHERE policy_id = ? AND agent_id = ? AND type = ? AND status NOT IN (?, ?) ORDER BY created DESC LIMIT 1`, p.ID, agentID, api.JobBackup, api.StatusQueued, api.StatusCancelled)
 		var running int
 		s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE policy_id = ? AND agent_id = ? AND type = ? AND status = ?`, p.ID, agentID, api.JobBackup, api.StatusRunning).Scan(&running)
-		scheduled := p.Enabled && (p.Schedule.Interval != "" || p.Schedule.DailyAt != "")
+		scheduled := p.Enabled && !p.IsOff(agentID) && (p.Schedule.Interval != "" || p.Schedule.DailyAt != "")
 		switch {
 		case ag == nil || ag.Revoked:
 			ph.State, ph.Detail = "failed", "Its agent was revoked, so it cannot run."
 		case running > 0 || (len(last) > 0 && last[0].Status == api.StatusRunning):
 			ph.State = "running"
+		case p.IsOff(agentID):
+			ph.State, ph.Detail = "paused", "Backups of this machine are switched off."
 		case len(last) > 0 && last[0].Status == api.StatusFailed:
 			ph.State, ph.Detail = "failed", last[0].Error
 		case overdue(p, fromMS(good), now):
@@ -311,7 +313,7 @@ func (s *Server) health(now time.Time) (*api.Health, error) {
 		case "warning":
 			issue("warning", "The backup \"%s\" of %s finished with warnings.", p.Name, ph.Agent)
 		case "never":
-			if !scheduled {
+			if !scheduled && !p.IsOff(agentID) {
 				issue("warning", "The policy \"%s\" of %s has never run and is not scheduled.", p.Name, ph.Agent)
 			}
 		}

@@ -493,3 +493,38 @@ func fetchOne(ctx context.Context, t Target, o Object, dest string) error {
 	}
 	return err
 }
+
+// Pending says what the repository in dir holds that was written after
+// since, which is what a copy brought up to date at since does not have
+// yet: how many files, their size, and when the oldest was written.
+func Pending(dir string, since time.Time) (files int, size int64, oldest time.Time, err error) {
+	for _, sub := range []string{"snapshots", "packs"} {
+		root := filepath.Join(dir, sub)
+		werr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
+			}
+			rel, _ := filepath.Rel(dir, p)
+			if d.IsDir() || !wanted(filepath.ToSlash(rel)) {
+				return nil
+			}
+			fi, err := d.Info()
+			if err != nil || !fi.ModTime().After(since) {
+				return nil
+			}
+			files++
+			size += fi.Size()
+			if oldest.IsZero() || fi.ModTime().Before(oldest) {
+				oldest = fi.ModTime()
+			}
+			return nil
+		})
+		if werr != nil {
+			return files, size, oldest, werr
+		}
+	}
+	return files, size, oldest, nil
+}

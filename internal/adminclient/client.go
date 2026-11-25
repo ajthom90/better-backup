@@ -74,5 +74,28 @@ func (c *Client) Do(method, path string, in, out any) error {
 	return nil
 }
 
+// Raw performs a request and returns the body as it came, for answers
+// that are not JSON.
+func (c *Client) Raw(method, path string) ([]byte, error) {
+	req, err := http.NewRequest(method, c.base+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("server returned %s", resp.Status)
+	}
+	return data, nil
+}
+
 // Base is the address of the server, as given to New.
 func (c *Client) Base() string { return c.base }

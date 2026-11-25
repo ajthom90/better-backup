@@ -141,6 +141,11 @@ type Server struct {
 	// lastUsage is when the repository's size was last recorded. Only
 	// the background loop touches it.
 	lastUsage time.Time
+	// queue is what waits for the offsite copy, as last counted at
+	// queueAt for a copy brought up to date at queueSince. Under mu.
+	queue      api.OffsiteQueue
+	queueAt    time.Time
+	queueSince time.Time
 	// stateDirty: something changed since the server's configuration
 	// was last saved into the repository.
 	stateDirty atomic.Bool
@@ -554,6 +559,12 @@ func (s *Server) routes() http.Handler {
 	route("POST /api/v1/recovery/iso/link", operator, "", s.handleRecoveryLink)
 	route("PUT /api/v1/recovery/iso", admin, "Uploaded a recovery disc image", s.handleRecoveryUpload)
 	route("GET /api/v1/snapshots/{id}/machine", viewer, "", s.handleSnapshotMachine)
+	route("GET /api/v1/reports", viewer, "", s.handleReports)
+	route("GET /api/v1/graphs", viewer, "", s.handleGraphs)
+	route("GET /api/v1/browse", viewer, "", s.handleBrowseAt)
+	route("GET /api/v1/versions", viewer, "", s.handleVersions)
+	route("GET /api/v1/large-files", viewer, "", s.handleLargeFiles)
+	route("PUT /api/v1/policies/{id}/machines/{agent}", operator, "Switched the backups of a machine on or off", s.handleMachineOff)
 	route("POST /api/v1/repo/gc", operator, "Started reclaiming space", s.handleMaintenance(api.JobGC))
 	route("POST /api/v1/repo/verify", operator, "Started verifying all data", s.handleMaintenance(api.JobVerify))
 	if !s.locked {
