@@ -278,8 +278,10 @@ func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request, a *api.A
 				req.Warnings = append(req.Warnings, "Older backups of this policy are kept, whatever its retention rules say, until someone has looked at this one under “Ransomware protection”.")
 			}
 		}
-		err = s.finish(j, status, "", sn.Stats, req.Warnings)
+		// Before the job is reported as done: whoever waits for it may
+		// look at the snapshots at once.
 		s.applyRetention(j.PolicyID)
+		err = s.finish(j, status, "", sn.Stats, req.Warnings)
 	default:
 		if req.Restore != nil && req.Restore.Warnings > 0 {
 			status = api.StatusWarning
