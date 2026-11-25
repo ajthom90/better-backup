@@ -96,6 +96,10 @@ jobs:
           retention-days: 30
 
   images:
+    # Only main publishes. A run started by hand on another branch stops
+    # after the installers, which is how to try them (and their signing)
+    # before a merge.
+    if: github.ref == 'refs/heads/main'
     needs: [msi, packages, pkg]
     runs-on: ubuntu-latest
     steps:
