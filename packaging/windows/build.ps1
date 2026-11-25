@@ -25,10 +25,22 @@ $PSNativeCommandUseErrorActionPreference = $true
 $root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $wixVersion = '5.0.2'
 
-# Windows Installer versions are three numbers; 1.2.0-rc1 installs as 1.2.0.
+# Windows Installer compares three numbers. A build that is not a release
+# (1.2.0-rc.1, 1.2.1-edge.12) puts its last number in a fourth, which
+# Windows shows and does not compare: 1.2.0.1, 1.2.1.12. The installers
+# let a build replace another of the same three numbers
+# (AllowSameVersionUpgrades in the .wxs files), which is how one edge
+# build follows another, and refuse to go back to lower numbers. This is
+# what "go run ./internal/tools/release msi VERSION" prints; docs/versioning.md
+# has the whole policy.
 $Version = $Version -replace '^v', ''
 if ($Version -notmatch '^(\d+)\.(\d+)\.(\d+)') { throw "version must start with three numbers such as 1.2.0, got $Version" }
 $msiVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+if ($Version -match '^\d+\.\d+\.\d+-') {
+  $build = 0
+  foreach ($part in (($Version -replace '^\d+\.\d+\.\d+-', '') -replace '\+.*$', '').Split('.')) { if ($part -match '^\d{1,9}$') { $build = [int]$part } }
+  $msiVersion = "$msiVersion.$([Math]::Min($build, 65535))"
+}
 
 $out = New-Item -ItemType Directory -Force (Join-Path $root $OutDir)
 

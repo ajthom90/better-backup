@@ -8,12 +8,11 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"regexp"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/ajthom90/better-backup/internal/api"
+	"github.com/ajthom90/better-backup/internal/version"
 )
 
 // Keeping agents up to date. The server holds the agent installers it
@@ -76,48 +75,23 @@ func installerSHA256(path string) (string, int64, error) {
 	return sum, n, nil
 }
 
-var versionNumbers = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
-
-// parseVersion reads the three numbers a version starts with.
-func parseVersion(v string) (n [3]int, ok bool) {
-	m := versionNumbers.FindStringSubmatch(v)
-	if m == nil {
-		return n, false
-	}
-	for i := range n {
-		n[i], _ = strconv.Atoi(m[i+1])
-	}
-	return n, true
-}
-
-// newerVersion says whether version a is newer than b. Versions that do
-// not start with three numbers (a build from source says "dev") are
-// neither newer nor older than anything.
-func newerVersion(a, b string) bool {
-	x, ok1 := parseVersion(a)
-	y, ok2 := parseVersion(b)
-	if !ok1 || !ok2 {
-		return false
-	}
-	for i := range x {
-		if x[i] != y[i] {
-			return x[i] > y[i]
-		}
-	}
-	return false
-}
+// newerVersion says whether version a is newer than b, by the rules of
+// Semantic Versioning (1.2.0 is newer than 1.2.0-rc.1 and than
+// 1.2.0-edge.7). Versions that are not numbered (a build from source
+// says "dev") are neither newer nor older than anything.
+func newerVersion(a, b string) bool { return version.Newer(a, b) }
 
 // installerFor returns the newest installer the server holds for a kind
 // of machine and a kind of package.
-func (s *Server) installerFor(goos, arch, format string) (name, path, version string) {
+func (s *Server) installerFor(goos, arch, format string) (name, path, ver string) {
 	for n, p := range s.localInstallers() {
 		m := installerName.FindStringSubmatch(n)
 		// The macOS package is one for both kinds of Mac.
 		if m[2] != goos || m[4] != format || (m[3] != arch && m[3] != "universal") {
 			continue
 		}
-		if name == "" || newerVersion(m[1], version) || (!newerVersion(version, m[1]) && n > name) {
-			name, path, version = n, p, m[1]
+		if name == "" || newerVersion(m[1], ver) || (!newerVersion(ver, m[1]) && n > name) {
+			name, path, ver = n, p, m[1]
 		}
 	}
 	return
@@ -193,7 +167,7 @@ func (s *Server) updateState(a *api.Agent) *api.AgentUpdateState {
 		switch {
 		case v == "":
 			st.Why = "The server has no installer for this kind of machine, so there is nothing to update from."
-		case v == a.Version:
+		case version.Same(v, a.Version):
 		case newerVersion(v, a.Version):
 			st.Can, st.Available = true, v
 		case !isNumbered(a.Version):
@@ -212,14 +186,14 @@ func (s *Server) updateState(a *api.Agent) *api.AgentUpdateState {
 	return st
 }
 
-func isNumbered(v string) bool { _, ok := parseVersion(v); return ok }
+func isNumbered(v string) bool { return version.Valid(v) }
 
 // handleUpdateCheck answers an agent that asks whether to update itself.
 func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request, a *api.Agent) {
 	q := r.URL.Query()
-	version, install := q.Get("version"), q.Get("install")
-	if version == "" {
-		version = a.Version
+	ver, install := q.Get("version"), q.Get("install")
+	if ver == "" {
+		ver = a.Version
 	}
 	u := s.updateRow(a.ID)
 	if u.install != install {
@@ -228,8 +202,8 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request, a *ap
 	}
 	// The agent is back and asking: whatever it was installing is over.
 	s.releaseUpdateHold(a.ID)
-	if u.state == api.UpdateInstalling && u.target == version {
-		s.updateFinished(a, api.AgentUpdateReport{State: api.UpdateDone, Target: version})
+	if u.state == api.UpdateInstalling && u.target == ver {
+		s.updateFinished(a, api.AgentUpdateReport{State: api.UpdateDone, Target: ver})
 		u = s.updateRow(a.ID)
 	}
 	if !canInstall(install) {
@@ -239,11 +213,11 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request, a *ap
 	name, path, target := s.installerFor(a.OS, a.Arch, install)
 	want := false
 	switch {
-	case name == "" || target == version:
+	case name == "" || version.Same(target, ver):
 	case u.asked:
 		// "Update now": anything but an older version.
-		want = !newerVersion(version, target)
-	case newerVersion(target, version):
+		want = !newerVersion(ver, target)
+	case newerVersion(target, ver):
 		want = u.mode == api.AutoUpdateOn || (u.mode == api.AutoUpdateDefault && s.autoUpdate())
 		// Not the version that just failed, over and over.
 		if want && u.failed == target && time.Since(fromMS(u.failedAt)) < updateRetryAfter {

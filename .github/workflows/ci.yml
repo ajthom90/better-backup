@@ -36,6 +36,34 @@ jobs:
         # Go has no race detector for Windows on ARM64.
         run: go test ${{ matrix.os != 'windows-11-arm' && '-race' || '' }} -count=1 ./...
 
+  changelog:
+    # Every pull request says what it changes for the people who run
+    # better-backup, in a file under changelog.d: those files become the
+    # release notes. The label "no-changelog" is for changes nobody
+    # would notice.
+    name: Release notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: The entries are well formed
+        run: |
+          go run ./internal/tools/release check
+          echo "This build is version $(go run ./internal/tools/release version). Its notes:"
+          go run ./internal/tools/release notes
+      - name: This pull request adds one
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'no-changelog')
+        run: |
+          if git diff --name-only --diff-filter=A "origin/${{ github.base_ref }}...HEAD" -- changelog.d | grep -q .; then
+            exit 0
+          fi
+          echo "::error::Add a file to changelog.d that says what this changes for the people who run better-backup (changelog.d/README.md says how), or give the pull request the label no-changelog."
+          exit 1
+
   recovery:
     name: Recovery disc
     runs-on: ubuntu-24.04
@@ -183,13 +211,16 @@ jobs:
       - name: Build two versions
         shell: pwsh
         run: |
-          ./packaging/windows/build.ps1 -Version 0.0.0 -Arch amd64,arm64
-          ./packaging/windows/build.ps1 -Version 0.0.${{ github.run_number }} -Arch amd64,arm64
+          # Two builds between releases, as the "edge" channel has them:
+          # the same three numbers, and Windows Installer compares no
+          # more. The newer must still replace the older.
+          ./packaging/windows/build.ps1 -Version 0.0.1-edge.1 -Arch amd64,arm64
+          ./packaging/windows/build.ps1 -Version 0.0.1-edge.${{ github.run_number }} -Arch amd64,arm64
       - name: Upload the installers
         uses: actions/upload-artifact@v4
         with:
           name: better-backup-windows-installers
-          path: dist/*_0.0.${{ github.run_number }}_windows_*.msi
+          path: dist/*_0.0.1-edge.${{ github.run_number }}_windows_*.msi
           retention-days: 30
       - name: Hand both versions to the tests
         uses: actions/upload-artifact@v4
@@ -219,7 +250,7 @@ jobs:
           path: dist
       - name: Install, enroll, upgrade, remove
         shell: pwsh
-        run: ./packaging/windows/test.ps1 -Dir dist -Old 0.0.0 -New 0.0.${{ github.run_number }} -Arch ${{ matrix.arch }} -BothAgents
+        run: ./packaging/windows/test.ps1 -Dir dist -Old 0.0.1-edge.1 -New 0.0.1-edge.${{ github.run_number }} -Arch ${{ matrix.arch }} -BothAgents
       - name: Upload the installer logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -344,10 +375,23 @@ jobs:
       - name: Check the scripts
         if: matrix.arch == 'amd64'
         run: shellcheck -S error packaging/install.sh packaging/test/agent.sh packaging/test/macos-signing.sh packaging/scripts/*.sh packaging/macos/build.sh packaging/macos/ci-signing.sh packaging/macos/uninstall.sh packaging/macos/scripts/* packaging/macos/build-server.sh packaging/macos/server/uninstall.sh packaging/macos/server/scripts/* packaging/test/server-macos.sh
+      - name: Version
+        # Numbered as a build from main is, so that the packages are
+        # tried with such a version: 0.1.1-edge.12.
+        run: echo "BB_SNAPSHOT_VERSION=$(go run ./internal/tools/release version)" >> "$GITHUB_ENV"
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
           args: release --snapshot --clean --skip=publish
+      - name: The packages carry that version
+        run: |
+          ls -l dist/*.deb dist/*.rpm
+          test -f "dist/better-backup-agent_${BB_SNAPSHOT_VERSION}_linux_${{ matrix.arch }}.deb"
+          # A package manager must sort the build before its release.
+          deb="$(dpkg-deb -f "dist/better-backup-agent_${BB_SNAPSHOT_VERSION}_linux_${{ matrix.arch }}.deb" Version)"
+          echo "the .deb is version $deb"
+          dpkg --compare-versions "$deb" lt "${BB_SNAPSHOT_VERSION%%-*}"
+          dpkg --compare-versions "$deb" gt 0.0.9999
       - name: Install the agent package and use it
         run: |
           mkdir tools

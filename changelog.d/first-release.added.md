@@ -1,0 +1,6 @@
+- Backups of files, volumes, whole disks and Windows system state from Windows, macOS and Linux agents, on x64 and ARM64, stored deduplicated, compressed and encrypted.
+- Backups of virtual machines on Hyper-V, VMware, KVM/libvirt and Proxmox, and of Microsoft 365 mailboxes and files.
+- Restores from the web UI: browse or search any snapshot, download files, restore in place, restore a virtual machine, and recover a bare machine from the recovery disc.
+- Ransomware protection: deleted snapshots are kept for a while, suspicious backups raise an alarm, and the offsite copy can be locked against deletion.
+- An offsite copy to a folder or S3, health checks, email and webhook alerts, users with roles and an activity log.
+- Installers for Windows (.msi), macOS (.pkg, signed and notarized) and Linux (.deb, .rpm), container images for the server and the agent, and agents that update themselves from the server.

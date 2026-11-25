@@ -58,6 +58,11 @@ type Config struct {
 	// Default: DataDir/recovery-arm64.iso, then the installed copy.
 	RecoveryISOArm64 string
 
+	// UpdateURL lists the published releases, in the form of the GitHub
+	// API. The server reads it to tell the administrator of a newer
+	// version; empty, it never asks. bb-server sets DefaultUpdateURL.
+	UpdateURL string
+
 	// Tick is how often schedules and timeouts are checked.
 	Tick time.Duration
 	// ProtectionWait is how long a change that weakens the ransomware
@@ -100,7 +105,12 @@ type Server struct {
 	// updating are the agents installing a newer version of themselves;
 	// their jobs wait. See agentupdate.go.
 	updating map[string]updateHold
-	maint    bool // GC or verify in progress: no agent jobs start
+	// updateNext is when to look at the check for a newer server again
+	// (Unix nanoseconds), updateBusy that it is asking. See
+	// updatecheck.go.
+	updateNext atomic.Int64
+	updateBusy atomic.Bool
+	maint      bool // GC or verify in progress: no agent jobs start
 	// offsiteBusy is set while the offsite copy is being updated;
 	// garbage collection waits for it.
 	offsiteBusy bool
@@ -485,6 +495,10 @@ func (s *Server) routes() http.Handler {
 	route("POST /api/v1/settings/log", admin, "", s.handleServerLog)
 	route("POST /api/v1/settings/repo-key", admin, "Downloaded the repository key", s.handleRepoKey)
 	route("POST /api/v1/settings/admin-token", admin, "Replaced the admin token", s.handleNewAdminToken)
+
+	route("GET /api/v1/update", viewer, "", s.handleServerUpdate)
+	route("PUT /api/v1/update", admin, "Changed how the server checks for newer versions", s.handleSaveServerUpdate)
+	route("POST /api/v1/update/check", operator, "", s.handleCheckServerUpdate)
 
 	route("GET /api/v1/status", viewer, "", s.handleStatus)
 	route("POST /api/v1/enroll-tokens", operator, "Created an enrollment token for a new agent", s.handleCreateToken)
