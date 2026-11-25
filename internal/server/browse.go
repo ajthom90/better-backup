@@ -138,7 +138,7 @@ func (s *Server) handleQueryAnswer(w http.ResponseWriter, r *http.Request, a *ap
 
 // browseWait is how long the page waits for an agent's answer. A list of
 // virtual machines can take a while to gather.
-var browseWait = 25 * time.Second
+var browseWait = 60 * time.Second
 
 // browseWaitUnseen is how long it waits for an agent that has not asked
 // for questions since the server started. An agent that can answer asks

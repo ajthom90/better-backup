@@ -397,7 +397,9 @@ func (a *Agent) answerQueries(ctx context.Context) {
 			continue
 		}
 		go func() {
-			qctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			// Shorter than the server waits (browseWait there), so a slow
+			// list is answered with its reason and not with silence.
+			qctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 			defer cancel()
 			res := &api.BrowseResult{Entries: []api.BrowseEntry{}, Error: "this agent version cannot answer that; update the agent"}
 			switch {
@@ -411,7 +413,9 @@ func (a *Agent) answerQueries(ctx context.Context) {
 				}
 				a.log.Info("asked to restart for Directory Services Restore Mode", "action", q.Action, "result", text, "err", err)
 			}
-			if err := a.c.json(qctx, "POST", "/agent/v1/queries/"+q.ID, res, nil); err != nil {
+			actx, acancel := context.WithTimeout(ctx, 15*time.Second)
+			defer acancel()
+			if err := a.c.json(actx, "POST", "/agent/v1/queries/"+q.ID, res, nil); err != nil {
 				a.log.Warn("could not answer the server's question", "err", err)
 			}
 		}()

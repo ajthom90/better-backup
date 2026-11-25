@@ -114,9 +114,27 @@ func machines(ctx context.Context, req *api.BrowseRequest) ([]api.BrowseEntry, e
 	if err != nil {
 		return nil, err
 	}
-	names, err := drv.List(ctx, req.Connection)
-	if err != nil {
-		return nil, err
+	// Not every hypervisor gives up when the time is over (the first
+	// PowerShell start on a busy Windows machine can take a minute), so
+	// the wait ends here and the page is told why.
+	type listed struct {
+		names []string
+		err   error
+	}
+	done := make(chan listed, 1)
+	go func() {
+		names, err := drv.List(ctx, req.Connection)
+		done <- listed{names, err}
+	}()
+	var names []string
+	select {
+	case l := <-done:
+		if l.err != nil {
+			return nil, l.err
+		}
+		names = l.names
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%s took too long to list its virtual machines; try again in a moment, or type the name instead", drv.Label())
 	}
 	sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
 	out := make([]api.BrowseEntry, 0, len(names))
