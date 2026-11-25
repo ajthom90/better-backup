@@ -94,7 +94,7 @@ func main() {
 	given := req.Code != "" || (req.Server != "" && req.Token != "" && req.Fingerprint != "")
 
 	var err error
-	if root := os.Getenv("BB_HOST_ROOT"); root != "" && cmd != "version" && cmd != "service" && cmd != "fda-check" {
+	if root := os.Getenv("BB_HOST_ROOT"); root != "" && cmd != "version" && cmd != "service" && cmd != "fda-check" && cmd != "apply-update" {
 		if err := agent.EnterHostRoot(root); err != nil {
 			cli.Fatal(err)
 		}
@@ -114,6 +114,10 @@ func main() {
 		err = unenroll()
 	case "setup":
 		err = setup(*noBrowser)
+	case "apply-update":
+		// Run by the agent itself, from a copy of its program, to install
+		// a newer version: see internal/agent/update.go.
+		err = applyUpdate()
 	case "fda-check":
 		// Run by the agent itself on macOS: see watchFullDiskAccess.
 		if ok := agent.FullDiskAccess(); ok == nil || !*ok {
@@ -146,6 +150,18 @@ func main() {
 	if err != nil {
 		cli.Fatal(err)
 	}
+}
+
+// applyUpdate installs the update the agent prepared, writing what it
+// does to update/update.log in the agent's state directory.
+func applyUpdate() error {
+	log := slog.Default()
+	if f, err := os.OpenFile(filepath.Join(dir, "update", "update.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+		defer f.Close()
+		log = slog.New(slog.NewTextHandler(f, nil))
+	}
+	u := &agent.Updater{Dir: dir, Log: log}
+	return u.Run(context.Background())
 }
 
 // denied explains a refusal by the operating system.

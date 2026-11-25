@@ -51,6 +51,8 @@ textarea { resize:vertical; min-height:64px; }
 .grid small { color:var(--muted); display:block; }
 .two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
 .hint { color:var(--muted); font-size:12px; margin-top:4px; }
+a.upd { font-size:12px; color:var(--muted); margin-left:4px; }
+a.upd.bad, td.bad { color:var(--bad, #b42318); }
 .warn { border:1px solid #d97706; border-left-width:4px; border-radius:6px; padding:8px 10px; margin-top:10px; font-size:13px; }
 td .acts { display:flex; gap:6px; }
 dialog.wide { max-width:min(860px,94vw); width:860px; }
@@ -104,7 +106,7 @@ h4 { margin:18px 0 4px; }
   <div class="banner alarm" id="susBanner" hidden><span id="susText"></span><button class="primary" id="susBtn">Look at it</button></div>
   <section><h2><span>Health</span><span id="healthState" style="flex:none;white-space:nowrap"></span></h2><ul class="issues" id="issues" hidden></ul><div class="scroll" id="health"></div></section>
   <section><h2><span>Repository</span><button id="runVerify" class="need-operator">Verify all data</button><button id="runGC" class="need-operator">Reclaim space</button></h2><div class="stats" id="stats"></div><div class="usage" id="usage" hidden></div></section>
-  <section><h2><span>Agents</span><button id="newToken" class="need-operator">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
+  <section><h2><span>Agents</span><button id="agentUpdates">Agent updates</button><button id="newToken" class="need-operator">Add an agent</button></h2><div class="scroll" id="agents"></div></section>
   <section><h2><span>Backup policies</span><button id="newPolicy" class="need-operator">New policy</button></h2><div class="scroll" id="policies"></div></section>
   <section><h2><span>Recent jobs</span><button id="moreJobs">Show more</button></h2><div class="scroll" id="jobs"></div></section>
   <section><h2><span>Snapshots</span><form id="searchForm"><input id="searchBox" type="search" placeholder="Find a file by name, in every snapshot" aria-label="Find a file by name"><button>Search</button></form></h2><div class="scroll" id="snapshots"></div></section>
@@ -148,11 +150,67 @@ function notice(title, text) {
   openDialog(false, el("h3", { textContent: title }), el("pre", { textContent: text }), el("div", { className: "row" }, el("button", { textContent: "Close", onclick: () => $("dlg").close() })));
 }
 
+// updateWord says in a few words where an agent's own updating stands.
+function updateWord(a) {
+  const u = a.update;
+  if (!u || a.revoked) return "";
+  if (u.state === "installing") return "updating to " + u.target + "…";
+  if (u.asked) return "will update to " + u.available + (a.online ? " shortly" : " when it connects");
+  if (u.state === "failed" && u.available === u.target) return "update to " + u.target + " failed";
+  if (u.available) return u.available + " is available" + (u.auto ? ", updates by itself" : "");
+  if (!u.can && u.why && agentNewest && a.version !== agentNewest) return "does not update by itself";
+  return "";
+}
+function versionCell(a) {
+  const word = updateWord(a);
+  if (!word) return a.version;
+  const failed = a.update.state === "failed" && a.update.available === a.update.target;
+  return el("span", null, a.version + " ", el("a", { href: "#", className: "upd" + (failed ? " bad" : ""), textContent: word, title: "Agent updates",
+    onclick: ev => { ev.preventDefault(); updatesDialog().catch(e => notice("Something went wrong", e.message)); } }));
+}
+let agentNewest = "";
+// updatesDialog: whether agents update by themselves, each agent's version and state, and "Update now".
+async function updatesDialog() {
+  const [set, all] = await Promise.all([call("GET", "/api/v1/agent-updates"), call("GET", "/api/v1/agents")]);
+  const agents = all.filter(a => !a.recovery && !a.revoked && a.update);
+  agentNewest = set.newest || "";
+  const msg = el("div", { className: "msg", id: "updMsg" });
+  const again = () => updatesDialog().catch(e => { msg.textContent = e.message; });
+  const auto = el("input", { type: "checkbox", id: "autoUpdate", checked: set.auto, disabled: !can("admin") });
+  auto.onchange = async () => { try { await call("PUT", "/api/v1/agent-updates", { auto: auto.checked }); await again(); refresh().catch(() => {}); } catch (e) { msg.textContent = e.message; auto.checked = !auto.checked; } };
+  const t = el("table", { id: "updTable" }, el("tr", null, ...["Agent", "Version", "State", "Updates by itself", ""].map(h => el("th", { textContent: h }))));
+  for (const a of agents) {
+    const u = a.update;
+    let state = "Up to date", cls = "";
+    if (u.state === "installing") state = "Installing " + u.target + " now. The agent restarts and is back in a minute or two.";
+    else if (u.asked) state = "Will install " + u.available + (a.online ? " as soon as no job runs." : " when it connects.");
+    else if (u.state === "failed" && u.available === u.target) { state = "The update to " + u.target + " failed " + when(u.at || "") + ": " + u.error; cls = "bad"; }
+    else if (u.available) state = "Version " + u.available + " is available." + (u.auto ? (a.online ? " It installs it by itself when no job runs." : " It installs it by itself when it connects.") : "");
+    else if (!u.can && u.why) state = u.why;
+    else if (u.state === "updated" && u.at) state = "Up to date. Updated itself " + when(u.at) + ".";
+    const mode = el("select", { style: "min-width:165px", disabled: !can("admin") || (!u.can && !u.available && !!u.why), title: "Whether this agent updates by itself" },
+      el("option", { value: "", textContent: "As set above (" + (set.auto ? "yes" : "no") + ")" }), el("option", { value: "on", textContent: "Always" }), el("option", { value: "off", textContent: "Never" }));
+    mode.value = u.mode || "";
+    mode.onchange = async () => { try { await call("PUT", "/api/v1/agents/" + a.id + "/update-mode", { mode: mode.value }); await again(); } catch (e) { msg.textContent = e.message; } };
+    const now = u.can && u.available && u.state !== "installing" && !u.asked && can("operator")
+      ? el("button", { textContent: "Update now", style: "white-space:nowrap", onclick: async () => { try { await call("POST", "/api/v1/agents/" + a.id + "/update"); await again(); refresh().catch(() => {}); } catch (e) { msg.textContent = e.message; } } }) : "";
+    t.append(el("tr", null, el("td", null, a.name, el("div", { className: "hint", textContent: a.os + "/" + a.arch + (a.online ? "" : ", offline") })), el("td", { textContent: a.version }),
+      el("td", { className: cls, style: "white-space:normal;min-width:220px", textContent: state }), el("td", null, mode), el("td", null, now)));
+  }
+  openDialog(true, el("h3", { textContent: "Agent updates" }),
+    el("label", { className: "check" }, auto, " Agents update themselves when this server has a newer version"),
+    el("div", { className: "hint", textContent: (set.newest ? "The newest agent this server has installers for is version " + set.newest + ". " : "This server has no agent installers, so agents cannot update from it. ")
+      + "The server gets new installers when it is updated itself. Each agent then fetches the installer for its system from this server, checks that it arrived unchanged, and installs it while no backup or restore is running. If the new version does not come back, the agent puts the earlier one back and the failure shows here and goes out as an alert." }),
+    agents.length ? el("div", { className: "list", style: "margin-top:10px" }, t) : el("div", { className: "empty", textContent: "No agents yet." }),
+    msg, el("div", { className: "row" }, el("button", { textContent: "Refresh", onclick: again }), el("button", { textContent: "Close", onclick: () => { $("dlg").close(); refresh().catch(() => {}); } })));
+}
+
 async function refresh() {
-  const [st, allAgents, policies, jobs, snaps, off, vmw, health, m365, prot, sus] = await Promise.all([
+  const [st, allAgents, policies, jobs, snaps, off, vmw, health, m365, prot, sus, upd] = await Promise.all([
     call("GET", "/api/v1/status"), call("GET", "/api/v1/agents"), call("GET", "/api/v1/policies"),
     call("GET", "/api/v1/jobs?limit=" + jobLimit), call("GET", "/api/v1/snapshots"), call("GET", "/api/v1/offsite"), call("GET", "/api/v1/vmware-servers"), call("GET", "/api/v1/health"), call("GET", "/api/v1/m365-tenants"),
-    call("GET", "/api/v1/protection"), call("GET", "/api/v1/suspicions")]);
+    call("GET", "/api/v1/protection"), call("GET", "/api/v1/suspicions"), call("GET", "/api/v1/agent-updates")]);
+  agentNewest = upd.newest || "";
   m365List = m365;
   const open = sus.filter(x => !x.reviewed);
   const suspect = new Set(open.map(x => x.snapshot_id));
@@ -173,7 +231,7 @@ async function refresh() {
     stat(size(st.raw_bytes), "unique data before compression"), stat(st.running_jobs, "jobs running"),
     stat(offsiteSummary(off), "offsite copy"), stat(health.disk.known ? size(health.disk.free) : "unknown", "free on the repository's disk"));
   table("agents", ["Name", "Host", "System", "Version", "State", "Last seen", ""],
-    agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, a.version, pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen),
+    agents.map(a => [a.name, a.hostname, a.os + "/" + a.arch, versionCell(a), pill(a.revoked ? "revoked" : a.online ? "online" : "offline"), when(a.last_seen),
       a.revoked || !can("operator") ? "" : el("div", { className: "acts" },
         can("admin") ? button("Log", async () => { const r = await call("POST", "/api/v1/agents/" + a.id + "/browse", { kind: "log" }); if (r.error) throw new Error(r.error); logDialog("Log of the agent on " + a.name, a.name + "-agent.log", r.text); }) : "",
         confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); }))]),
@@ -1286,6 +1344,7 @@ async function addAgentDialog() {
   }, 3000);
   $("dlg").addEventListener("close", () => clearInterval(poll), { once: true });
 }
+$("agentUpdates").onclick = () => updatesDialog().catch(e => notice("Something went wrong", e.message));
 $("newToken").onclick = () => addAgentDialog().catch(e => notice("Could not create a token", e.message));
 const ranks = { viewer: 1, operator: 2, admin: 3 };
 function can(role) { return !!me && ranks[me.role] >= ranks[role]; }

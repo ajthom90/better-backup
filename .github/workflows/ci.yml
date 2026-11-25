@@ -352,6 +352,8 @@ jobs:
         run: |
           mkdir tools
           CGO_ENABLED=0 go build -o tools/ ./cmd/bb ./cmd/bb-server
+          # A newer agent, for the installed one to update itself to.
+          CGO_ENABLED=0 go build -ldflags "-X github.com/ajthom90/better-backup/internal/agent.Version=99.0.0" -o tools/bb-agent-next ./cmd/bb-agent
           packaging/test/agent.sh "$(ls dist/better-backup-agent_*_linux_${{ matrix.arch }}.deb)" tools
       - name: Install the .rpm on Rocky Linux
         run: |
@@ -401,7 +403,9 @@ jobs:
         run: |
           mkdir tools
           go build -o tools/ ./cmd/bb ./cmd/bb-server
-          packaging/test/agent.sh "$(ls dist/better-backup-agent_*.pkg)" tools shots
+          # A newer package, for the installed agent to update itself to.
+          packaging/macos/build.sh 99.0.0 next
+          BB_NEXT_PACKAGE="$(ls next/better-backup-agent_99.0.0_*.pkg)" packaging/test/agent.sh "$(ls dist/better-backup-agent_*.pkg)" tools shots
       - name: Build the server package
         run: packaging/macos/build-server.sh "0.0.0-ci-$(git rev-parse --short=12 HEAD)" dist "$(ls dist/better-backup-agent_*.pkg)"
       - name: Install the server package and use it

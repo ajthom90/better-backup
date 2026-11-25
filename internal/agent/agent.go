@@ -276,6 +276,11 @@ type Agent struct {
 
 	mu    sync.Mutex
 	state state
+	// work is held while a job runs, and by an update being installed:
+	// the installer stops the agent, which must not cut a job short.
+	work sync.Mutex
+	// updateNow has the agent ask the server at once whether to update.
+	updateNow chan struct{}
 	// Notify, if set, hears about jobs: "started", then "progress" with
 	// the job's latest figures, then "finished" with its error or nil.
 	Notify func(event string, j *api.Job, detail any)
@@ -315,14 +320,18 @@ func New(dir string, log *slog.Logger) (*Agent, error) {
 	if missing := vss.EnablePrivileges(); len(missing) > 0 {
 		log.Warn("could not enable some backup privileges; files this account cannot open will be skipped", "missing", missing)
 	}
-	return &Agent{dir: dir, cfg: cfg, c: c, log: log}, nil
+	return &Agent{dir: dir, cfg: cfg, c: c, log: log, updateNow: make(chan struct{}, 1)}, nil
 }
 
 // Run polls for jobs until ctx is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
 	a.log.Info("better-backup agent started", "server", a.cfg.Server, "agent", a.cfg.AgentID, "version", Version)
 	go a.answerQueries(ctx)
+	updates := make(chan struct{})
+	go func() { a.keepUpdated(ctx); close(updates) }()
+	defer func() { <-updates }()
 	backoff := time.Second
+	away := false // the server did not answer the last time
 	// Until the server has answered once, ask without waiting for work:
 	// whoever is watching wants to know now whether the server is there.
 	wait := "0"
@@ -335,7 +344,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			var p permanent
 			revoked := errors.As(err, &p) && code == http.StatusUnauthorized
 			a.setState(func(s *state) { s.connected, s.revoked, s.err = false, revoked, err.Error() })
-			wait = "0"
+			wait, away = "0", true
 			if revoked {
 				a.log.Error("the server rejected this agent; it may have been revoked", "err", err)
 				backoff = time.Minute
@@ -350,6 +359,11 @@ func (a *Agent) Run(ctx context.Context) error {
 			continue
 		}
 		backoff, wait = time.Second, "25"
+		if away {
+			// A server that was away may have come back newer.
+			away = false
+			a.nudgeUpdate()
+		}
 		a.setState(func(s *state) { s.connected, s.revoked, s.err, s.lastContact = true, false, "", time.Now() })
 		if code == http.StatusNoContent {
 			continue
@@ -405,6 +419,9 @@ func (a *Agent) answerQueries(ctx context.Context) {
 			switch {
 			case q.Browse != nil:
 				res = browse.Run(qctx, q.Browse)
+			case q.Action == api.ActionUpdate:
+				a.nudgeUpdate()
+				res = &api.BrowseResult{Entries: []api.BrowseEntry{}, Text: "asking the server whether to update"}
 			case q.Action == api.ActionEnterDSRM || q.Action == api.ActionLeaveDSRM:
 				text, err := restore.RestartDSRM(q.Action == api.ActionEnterDSRM)
 				res = &api.BrowseResult{Entries: []api.BrowseEntry{}, Text: text}
@@ -448,6 +465,8 @@ func (c *client) pollOnce(ctx context.Context, path string) ([]byte, int, error)
 }
 
 func (a *Agent) runJob(ctx context.Context, j *api.Job) {
+	a.work.Lock()
+	defer a.work.Unlock()
 	log := a.log.With("job", j.ID, "type", j.Type)
 	log.Info("job started")
 	var (

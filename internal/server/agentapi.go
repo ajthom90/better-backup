@@ -91,6 +91,13 @@ func (s *Server) handleNextJob(w http.ResponseWriter, r *http.Request, a *api.Ag
 		version = a.Version
 	}
 	s.db.Exec(`UPDATE agents SET last_seen = ?, version = ? WHERE id = ?`, ms(time.Now()), version, a.ID)
+	// Another version than the one that began an update: the installer
+	// is done with this agent, and its jobs may start.
+	s.mu.Lock()
+	if h, ok := s.updating[a.ID]; ok && h.from != version {
+		delete(s.updating, a.ID)
+	}
+	s.mu.Unlock()
 
 	// An agent only asks for work when idle, so a job it still holds was
 	// lost when the agent restarted.
@@ -140,7 +147,7 @@ func (s *Server) handleNextJob(w http.ResponseWriter, r *http.Request, a *api.Ag
 func (s *Server) dispatch(a *api.Agent) (*api.Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.maint || s.running[a.ID] != "" {
+	if s.maint || s.running[a.ID] != "" || s.updateHeldLocked(a.ID) {
 		return nil, nil
 	}
 	j, err := scanJob(s.db.QueryRow(`SELECT `+jobCols+` FROM jobs WHERE agent_id = ? AND status = ? ORDER BY created LIMIT 1`, a.ID, api.StatusQueued))

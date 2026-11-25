@@ -58,6 +58,86 @@ type Agent struct {
 	// Recovery marks a machine started from the recovery disc. It exists
 	// only to receive a restore and is not a machine to back up.
 	Recovery bool `json:"recovery,omitempty"`
+	// Update says how the agent's program is kept up to date. The list
+	// of agents fills it in.
+	Update *AgentUpdateState `json:"update,omitempty"`
+}
+
+// How an agent was put on its machine, which decides whether it can
+// install a newer version of itself.
+const (
+	InstallMSI       = "msi"       // the Windows installer
+	InstallPkg       = "pkg"       // the macOS installer
+	InstallDeb       = "deb"       // a Debian or Ubuntu package
+	InstallRPM       = "rpm"       // a Red Hat or SUSE package
+	InstallContainer = "container" // an image: Docker, an app on TrueNAS
+	InstallManual    = "manual"    // the plain program, set up by hand
+)
+
+// What an agent's own setting for automatic updates can be.
+const (
+	AutoUpdateDefault = ""    // as the server's setting says
+	AutoUpdateOn      = "on"  // always
+	AutoUpdateOff     = "off" // never by itself
+)
+
+// The states of an agent's update.
+const (
+	UpdateInstalling = "installing" // the agent has started the installer
+	UpdateDone       = "updated"    // the new version runs and reached the server
+	UpdateFailed     = "failed"     // it did not work; the earlier version runs
+)
+
+// AgentUpdateState is what the server knows about keeping one agent's
+// program up to date.
+type AgentUpdateState struct {
+	// Install is how the agent was installed; empty when the agent is
+	// older than automatic updates and has never said.
+	Install string `json:"install"`
+	// Mode is the agent's own setting: AutoUpdateDefault, On or Off.
+	Mode string `json:"mode"`
+	// Auto says whether the agent updates by itself, all told.
+	Auto bool `json:"auto"`
+	// Can says whether the agent is able to install an update itself;
+	// Why says why not.
+	Can bool   `json:"can"`
+	Why string `json:"why,omitempty"`
+	// Available is the newer version the server holds for this agent.
+	Available string `json:"available,omitempty"`
+	// Asked: someone chose "Update now" and the agent has not done it yet.
+	Asked bool `json:"asked,omitempty"`
+	// State, Target, Error and At describe the last update tried.
+	State  string     `json:"state,omitempty"`
+	Target string     `json:"target,omitempty"`
+	Error  string     `json:"error,omitempty"`
+	At     *time.Time `json:"at,omitempty"`
+}
+
+// AgentUpdateSettings is the server's setting for agent updates, with
+// the agent versions it has installers for.
+type AgentUpdateSettings struct {
+	// Auto: agents install a newer version by themselves.
+	Auto bool `json:"auto"`
+	// Newest is the newest agent version the server holds an installer
+	// of, empty when it holds none.
+	Newest string `json:"newest,omitempty"`
+}
+
+// AgentUpdate is the server's answer to an agent that asks whether to
+// update: the installer to fetch from /installers/ and what it must be.
+type AgentUpdate struct {
+	Version string `json:"version"`
+	Name    string `json:"name"`
+	Size    int64  `json:"size"`
+	SHA256  string `json:"sha256"`
+}
+
+// AgentUpdateReport is how an agent tells the server how an update goes.
+type AgentUpdateReport struct {
+	State  string `json:"state"`
+	From   string `json:"from"`
+	Target string `json:"target"`
+	Error  string `json:"error,omitempty"`
 }
 
 // Hypervisors are the kinds of virtual machine host a policy can name.
@@ -1002,6 +1082,9 @@ const (
 	ActionEnterDSRM = "dsrm-enter"
 	// ActionLeaveDSRM restarts it back into normal operation.
 	ActionLeaveDSRM = "dsrm-leave"
+	// ActionUpdate has the agent ask now whether there is a newer
+	// version of itself to install.
+	ActionUpdate = "update"
 )
 
 // Machines returns the agents a policy backs up.

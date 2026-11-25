@@ -77,6 +77,12 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, a)
 	}
+	rows.Close()
+	for _, a := range out {
+		if !a.Revoked && !a.Recovery {
+			a.Update = s.updateState(a)
+		}
+	}
 	reply(w, http.StatusOK, out)
 }
 

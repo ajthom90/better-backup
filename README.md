@@ -16,6 +16,9 @@ backup until it has run beside your current one for a while.
 - **File backup** with content-defined chunking: after the first run only
   changed data is read and sent, and identical data is stored once across
   every machine.
+- **Agents that update themselves** when the server is updated: checked
+  against the server's SHA-256, never in the middle of a backup, rolled back
+  if the new version does not come back, and controlled from the web UI.
 - **Restore in place** over the original files, or to another folder or
   another machine. Only files that differ from the backup are rewritten.
 - **VSS snapshots on Windows**: each backup reads a frozen shadow copy of the
@@ -308,6 +311,41 @@ macOS, administrators need no `sudo`. The desktop app also builds for Linux
 
 On Windows the installer does all of this, and "better-backup agent" in the
 Start menu is the same app: see [Windows installers](#windows-installers).
+
+#### Keeping agents up to date
+
+Agents update themselves. A server that is updated brings the agent
+installers of its own version with it (the Docker image and the Windows
+server installer carry them; otherwise put them in `installers` in the data
+folder). Each agent asks the server when it connects and every half hour
+whether there is a newer installer for its system, and if so:
+
+1. fetches it from the server, over the connection it already trusts;
+2. checks that it is byte for byte the file the server described (SHA-256).
+   A signed agent (the notarized macOS package, a signed Windows installer)
+   also refuses an installer that is not signed by the same publisher;
+3. waits until no backup or restore runs, and the server starts none
+   meanwhile;
+4. runs the installer: the same in-place upgrade as running it by hand, so
+   the machine stays the same agent and keeps its policies;
+5. checks that the new version reaches the server. If the installer fails or
+   the new version does not come back within five minutes, the earlier
+   program is put back and started, the failure shows in the web UI and goes
+   out as an alert, and the server offers that version again a day later.
+
+"Agent updates", above the list of agents, shows each agent's version and
+how its update went, turns updating off for the whole server or for one
+agent, and has "Update now" (`bb agent update AGENT`). What an agent does is
+in `update/update.log` in its state folder.
+
+This works for agents installed from the Windows installer, the macOS package
+and the .deb and .rpm packages (on systems with systemd). An agent that runs
+from a container image, such as the app on TrueNAS SCALE, cannot replace its
+own image: update it where the container is set up (on TrueNAS, edit the app
+and save, or pull the image again). An agent set up by hand from the plain
+program is updated by hand. Agents installed before this feature have no
+updater yet: install the newer agent on them once by hand, and from then on
+they update themselves.
 
 ### 3. Create a policy and back up
 

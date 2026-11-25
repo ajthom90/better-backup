@@ -8,6 +8,10 @@
 #
 # PACKAGE is the .deb or .pkg, TOOLS-DIR holds bb-server and bb built
 # for this machine, SHOTS-DIR receives screenshots (macOS).
+#
+# To have the agent update itself as well: on macOS set BB_NEXT_PACKAGE
+# to a package of version 99.0.0; on Linux put bb-agent-next, an agent
+# program of version 99.0.0, in TOOLS-DIR.
 set -eu
 
 pkg="$1"
@@ -164,6 +168,65 @@ if [ "$os" = Linux ]; then
     ls -l /var/run/better-backup-agent.sock
     # A new session, so that the new group counts.
     sudo -u "$(id -un)" bb-agent status | grep -q "silent-install" || fail "the group was not let in"
+fi
+
+# The agent updates itself from an installer the server holds. NEXT is a
+# newer package (macOS), or tools/bb-agent-next a newer agent program to
+# make one from (Linux).
+agents_has() { "$tools/bb" agents 2>&1 | grep -q "$1"; }
+update_fail() {
+    echo "--- agents"
+    "$tools/bb" agents || true
+    echo "--- updater log"
+    sudo cat "$state/update/update.log" "$state/update/install.log" 2>/dev/null || true
+    fail "$@"
+}
+next="${BB_NEXT_PACKAGE:-}"
+if [ "$os" = Linux ] && [ -x "$tools/bb-agent-next" ]; then
+    # repack VERSION PROGRAM [POSTINST-LINE]: this package, as VERSION, with PROGRAM as the agent.
+    repack() {
+        sudo rm -rf "$work/repack"
+        sudo dpkg-deb -R "$pkg" "$work/repack"
+        sudo sed -i "s/^Version: .*/Version: $1/" "$work/repack/DEBIAN/control"
+        sudo install -m 755 "$2" "$work/repack/usr/bin/bb-agent"
+        if [ -n "${3:-}" ]; then
+            printf '#!/bin/sh\n%s\n' "$3" | sudo tee "$work/repack/DEBIAN/postinst" >/dev/null
+        fi
+        sudo dpkg-deb -b "$work/repack" "$work/better-backup-agent_$1_linux_$cpu.deb" >/dev/null
+    }
+    before="$(sudo bb-agent version)"
+    mkdir -p "$BB_DATA/installers"
+
+    step "an update that fails is rolled back"
+    printf '#!/bin/sh\nexit 1\n' >"$work/broken"
+    repack 98.0.0 "$work/broken" "exit 1"
+    cp "$work/better-backup-agent_98.0.0_linux_$cpu.deb" "$BB_DATA/installers/"
+    until_ok 20 agents_has "98.0.0 available" || update_fail "the server does not offer the update"
+    "$tools/bb" agent update silent-install || update_fail "update now was refused"
+    until_ok 120 agents_has "update to 98.0.0 failed" || update_fail "the failed update was not reported"
+    "$tools/bb" agents
+    [ "$(sudo bb-agent version)" = "$before" ] || update_fail "the earlier program was not put back: $(sudo bb-agent version 2>&1)"
+    until_ok 30 status_has "connected (" || update_fail "not connected after the rollback"
+    rm "$BB_DATA/installers/better-backup-agent_98.0.0_linux_$cpu.deb"
+
+    repack 99.0.0 "$tools/bb-agent-next"
+    next="$work/better-backup-agent_99.0.0_linux_$cpu.deb"
+fi
+if [ -n "$next" ]; then
+    step "the agent updates itself"
+    mkdir -p "$BB_DATA/installers"
+    cp "$next" "$BB_DATA/installers/"
+    until_ok 20 agents_has "99.0.0 available" || update_fail "the server does not offer the update"
+    "$tools/bb" agent update silent-install || update_fail "update now was refused"
+    until_ok 180 agents_has "updated itself to 99.0.0" || update_fail "the agent did not update itself"
+    "$tools/bb" agents
+    sudo bb-agent version | grep -q "bb-agent 99.0.0 " || update_fail "the installed program is not the new one: $(sudo bb-agent version 2>&1)"
+    until_ok 30 service_running || update_fail "the service is not running after the update"
+    until_ok 30 status_has "connected (" || update_fail "not connected after the update"
+    status_has "silent-install" || update_fail "the updated agent is not the same agent"
+    if [ "$os" = Linux ]; then
+        dpkg-query -W -f '${Version}\n' better-backup-agent | grep -q '^99.0.0$' || update_fail "the package database does not know the new version"
+    fi
 fi
 
 step "remove"
