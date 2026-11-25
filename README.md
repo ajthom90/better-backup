@@ -324,6 +324,13 @@ email alerts. The `bb` command line does the same things for scripts. Sign in wi
 password you created on the first visit. Your browser will warn about the
 certificate, because the server uses its own private certificate authority.
 
+**One policy, several machines.** Tick every machine a policy is for. Each
+is backed up on its own, with the same folders, schedule and rules, and keeps
+its own snapshots: "keep 14 daily" is 14 for each machine, and Health has a
+line for each. A folder one of them does not have is skipped there with a
+warning. Microsoft 365 and VMware policies take a single machine, since they
+are read over the network. From the command line: `--agent pc1,pc2`.
+
 **Choose what to back up without typing.** In a policy, "Browse the
 machine…" asks the agent for its folders and lets you tick them, and the
 buttons beside volumes, disks and virtual machines list what the machine

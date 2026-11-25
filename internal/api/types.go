@@ -148,9 +148,14 @@ type Retention struct {
 }
 
 type Policy struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	AgentID  string   `json:"agent_id"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	AgentID string `json:"agent_id"`
+	// AgentIDs are all the machines the policy backs up, each on its
+	// own: one job, and one line of snapshots with its own retention,
+	// per machine. AgentID is the first of them; a policy saved with
+	// only AgentID has that one machine.
+	AgentIDs []string `json:"agent_ids,omitempty"`
 	Paths    []string `json:"paths"`
 	Excludes []string `json:"excludes,omitempty"`
 	// Volumes are backed up as block-level images: drive letters such as
@@ -998,3 +1003,24 @@ const (
 	// ActionLeaveDSRM restarts it back into normal operation.
 	ActionLeaveDSRM = "dsrm-leave"
 )
+
+// Machines returns the agents a policy backs up.
+func (p *Policy) Machines() []string {
+	if len(p.AgentIDs) > 0 {
+		return p.AgentIDs
+	}
+	if p.AgentID != "" {
+		return []string{p.AgentID}
+	}
+	return nil
+}
+
+// Covers says whether the policy backs up this agent's machine.
+func (p *Policy) Covers(agentID string) bool {
+	for _, id := range p.Machines() {
+		if id == agentID {
+			return true
+		}
+	}
+	return false
+}

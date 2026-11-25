@@ -34,7 +34,7 @@ Usage:
   bb agents                              list agents
   bb agent revoke AGENT                  block an agent
   bb policies                            list backup policies
-  bb policy add --name NAME --agent AGENT [--path PATH ...]
+  bb policy add --name NAME --agent AGENT[,AGENT...] [--path PATH ...]
         [--volume VOLUME ...]  (block-level image: C: or /dev/vg0/data)
         [--vm NAME ...]        (virtual machine on the agent's host: Hyper-V,
                                 Proxmox VE or KVM with libvirt; '*' for all
@@ -275,6 +275,17 @@ func need(pos []string, n int, what string) {
 	}
 }
 
+// agentIDs resolves a list of agents separated by commas.
+func agentIDs(refs string) []string {
+	var out []string
+	for _, r := range strings.Split(refs, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, agentID(r))
+		}
+	}
+	return out
+}
+
 func agentID(ref string) string {
 	var as []api.Agent
 	do("GET", "/api/v1/agents", nil, &as)
@@ -483,7 +494,7 @@ func main() {
 			if p.TrueNASConfig {
 				what = append(what, "TrueNAS configuration")
 			}
-			fmt.Fprintf(tabs, "%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.AgentID, sched, strings.Join(keep, ", "), strings.Join(what, ", "))
+			fmt.Fprintf(tabs, "%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, strings.Join(p.Machines(), ","), sched, strings.Join(keep, ", "), strings.Join(what, ", "))
 		}
 	case "policy":
 		switch sub {
@@ -492,7 +503,7 @@ func main() {
 				cli.Fatal(errors.New("policy add needs --name, --agent and at least one --path, --volume or --vm, or --system-state, --whole-machine or --truenas-config"))
 			}
 			var p api.Policy
-			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentID: agentID(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, Hypervisor: *fHyper, VMwareServer: vmwareID(*fVMware), VMTracking: *fVMTrack, SystemState: *fSysSt, TrueNASConfig: *fTrueNAS, BareMetal: *fMachine, MachineDisks: fMDisks,
+			do("POST", "/api/v1/policies", api.Policy{Name: *fName, AgentIDs: agentIDs(*fAgent), Paths: fPaths, Excludes: fExcl, Volumes: fVols, VMs: fVMs, Hypervisor: *fHyper, VMwareServer: vmwareID(*fVMware), VMTracking: *fVMTrack, SystemState: *fSysSt, TrueNASConfig: *fTrueNAS, BareMetal: *fMachine, MachineDisks: fMDisks,
 				Schedule: api.Schedule{Interval: *fEvery, DailyAt: *fDaily}, Retention: fKeep, NoSnapshot: *fNoSnap, Enabled: true}, &p)
 			fmt.Printf("created policy %s (%s)\n", p.Name, p.ID)
 		case "run":

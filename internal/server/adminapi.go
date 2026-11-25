@@ -145,9 +145,36 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 	if !p.BareMetal {
 		p.MachineDisks = nil
 	}
-	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.BareMetal && a.OS != "windows" && a.OS != "linux" {
-		bad("a whole machine can be backed up for bare-metal recovery on Windows and Linux only")
+	// The machines: agent_ids, or the single agent_id of older clients.
+	var machines []string
+	for _, id := range p.Machines() {
+		if id != "" && !slices.Contains(machines, id) {
+			machines = append(machines, id)
+		}
+	}
+	if len(machines) == 0 {
+		bad("choose at least one machine to back up")
 		return
+	}
+	p.AgentIDs, p.AgentID = machines, machines[0]
+	var agents []*api.Agent
+	for _, id := range machines {
+		a, err := s.agent(id)
+		if err != nil || a == nil || a.Revoked || a.Recovery {
+			bad("agent_id does not name an active agent")
+			return
+		}
+		agents = append(agents, a)
+	}
+	if len(agents) > 1 && (p.M365 != nil || p.Hypervisor == "vmware") {
+		bad("Microsoft 365 and VMware are read over the network, by one machine: choose a single machine for this policy")
+		return
+	}
+	for _, a := range agents {
+		if p.BareMetal && a.OS != "windows" && a.OS != "linux" {
+			bad("a whole machine can be backed up for bare-metal recovery on Windows and Linux only; " + a.Name + " runs " + a.OS)
+			return
+		}
 	}
 	if p.VMTracking != "" && p.VMTracking != "on" && p.VMTracking != "check" {
 		bad(`vm_tracking must be empty, "on" or "check"`)
@@ -174,17 +201,15 @@ func (s *Server) handleSavePolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.SystemState && a.OS != "windows" {
-		bad("the system state can only be backed up on a Windows machine")
-		return
-	}
-	if a, err := s.agent(p.AgentID); err == nil && a != nil && p.TrueNASConfig && a.OS != "linux" {
-		bad("the TrueNAS configuration can only be backed up by an agent running on TrueNAS SCALE")
-		return
-	}
-	if a, err := s.agent(p.AgentID); err != nil || a == nil || a.Revoked || a.Recovery {
-		bad("agent_id does not name an active agent")
-		return
+	for _, a := range agents {
+		if p.SystemState && a.OS != "windows" {
+			bad("the system state can only be backed up on a Windows machine; " + a.Name + " runs " + a.OS)
+			return
+		}
+		if p.TrueNASConfig && a.OS != "linux" {
+			bad("the TrueNAS configuration can only be backed up by an agent running on TrueNAS SCALE")
+			return
+		}
 	}
 	if p.Schedule.Interval != "" && p.Schedule.DailyAt != "" {
 		bad("set either interval or daily_at, not both")
@@ -231,18 +256,40 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// enqueueBackup queues a backup for a policy unless one is already
-// queued or running.
-func (s *Server) enqueueBackup(p *api.Policy) (*api.Job, error) {
+// enqueueBackup queues a backup of one of a policy's machines unless
+// one is already queued or running.
+func (s *Server) enqueueBackup(p *api.Policy, agentID string) (*api.Job, error) {
 	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE policy_id = ? AND status IN (?, ?)`, p.ID, api.StatusQueued, api.StatusRunning).Scan(&n); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE policy_id = ? AND agent_id = ? AND status IN (?, ?)`, p.ID, agentID, api.StatusQueued, api.StatusRunning).Scan(&n); err != nil {
 		return nil, err
 	}
 	if n > 0 {
 		return nil, nil
 	}
-	j := &api.Job{Type: api.JobBackup, AgentID: p.AgentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, VMScratchDir: p.VMScratchDir, SystemState: p.SystemState, TrueNASConfig: p.TrueNASConfig, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot, M365: p.M365}}
+	j := &api.Job{Type: api.JobBackup, AgentID: agentID, PolicyID: p.ID, Backup: &api.BackupSpec{Paths: p.Paths, Excludes: p.Excludes, Volumes: p.Volumes, VMs: p.VMs, Hypervisor: p.Hypervisor, VMwareServer: p.VMwareServer, VMTracking: p.VMTracking, VMScratchDir: p.VMScratchDir, SystemState: p.SystemState, TrueNASConfig: p.TrueNASConfig, BareMetal: p.BareMetal, MachineDisks: p.MachineDisks, NoSnapshot: p.NoSnapshot, M365: p.M365}}
 	return j, s.enqueue(j)
+}
+
+// enqueuePolicy queues a backup of every machine of a policy that has
+// none waiting, and returns the new jobs. Machines whose agent was
+// revoked are left out.
+func (s *Server) enqueuePolicy(p *api.Policy) ([]*api.Job, error) {
+	var out []*api.Job
+	for _, id := range p.Machines() {
+		if a, err := s.agent(id); err != nil || a == nil || a.Revoked {
+			if len(p.Machines()) > 1 {
+				continue
+			}
+		}
+		j, err := s.enqueueBackup(p, id)
+		if err != nil {
+			return out, err
+		}
+		if j != nil {
+			out = append(out, j)
+		}
+	}
+	return out, nil
 }
 
 func (s *Server) handleRunPolicy(w http.ResponseWriter, r *http.Request) {
@@ -255,16 +302,18 @@ func (s *Server) handleRunPolicy(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "no such policy")
 		return
 	}
-	j, err := s.enqueueBackup(p)
+	js, err := s.enqueuePolicy(p)
 	if err != nil {
 		s.internal(w, err)
 		return
 	}
-	if j == nil {
+	if len(js) == 0 {
 		fail(w, http.StatusConflict, "a backup for this policy is already queued or running")
 		return
 	}
-	reply(w, http.StatusAccepted, j)
+	// The first job, as before; a policy of several machines started
+	// one for each, which the list of jobs shows.
+	reply(w, http.StatusAccepted, js[0])
 }
 
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {

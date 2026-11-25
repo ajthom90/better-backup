@@ -178,8 +178,8 @@ async function refresh() {
         can("admin") ? button("Log", async () => { const r = await call("POST", "/api/v1/agents/" + a.id + "/browse", { kind: "log" }); if (r.error) throw new Error(r.error); logDialog("Log of the agent on " + a.name, a.name + "-agent.log", r.text); }) : "",
         confirmButton("Revoke", "Click again to block " + a.name, async () => { await call("DELETE", "/api/v1/agents/" + a.id); await refresh(); }))]),
     "No agents yet. Choose “Add an agent” to enroll the first machine.");
-  table("policies", ["Name", "Agent", "Paths", "Schedule", "Keeps", ""],
-    policies.map(p => [p.name, agentNames[p.agent_id] || p.agent_id, (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : [], p.bare_metal ? ["whole machine"] : [], p.m365 ? [m365Summary(p.m365)] : []).join(", "),
+  table("policies", ["Name", "Machines", "Paths", "Schedule", "Keeps", ""],
+    policies.map(p => [p.name, (p.agent_ids && p.agent_ids.length ? p.agent_ids : [p.agent_id]).map(id => agentNames[id] || id).join(", "), (p.paths || []).concat((p.volumes || []).map(v => v + " (image)"), (p.vms || []).map(v => v === "*" ? "all virtual machines" : v + " (VM)"), p.system_state ? ["system state"] : [], p.truenas_config ? ["TrueNAS configuration"] : [], p.bare_metal ? ["whole machine"] : [], p.m365 ? [m365Summary(p.m365)] : []).join(", "),
       (p.schedule.interval ? "every " + p.schedule.interval : p.schedule.daily_at ? "daily at " + p.schedule.daily_at : "manual") + (p.enabled ? "" : " (paused)"),
       keeps(p.retention),
       el("div", { className: "acts need-operator" },
@@ -290,11 +290,26 @@ function m365Summary(m) {
 
 // policyDialog creates a policy, or edits p when one is given.
 function policyDialog(p) {
-  const active = agentList.filter(a => !a.revoked || (p && a.id === p.agent_id));
-  if (!active.length) { notice("Add an agent first", "A policy backs up one machine, so enroll an agent before creating a policy."); return; }
+  const mine = p ? (p.agent_ids && p.agent_ids.length ? p.agent_ids : [p.agent_id]) : [];
+  const active = agentList.filter(a => !a.revoked || mine.includes(a.id));
+  if (!active.length) { notice("Add an agent first", "A policy says which machines to back up, so enroll an agent before creating a policy."); return; }
   const name = el("input", { value: p ? p.name : "", placeholder: "For example: File server documents" });
   const agent = el("select", null, ...active.map(a => el("option", { value: a.id, textContent: a.name + " (" + a.os + ")" })));
   if (p) agent.value = p.agent_id;
+  // A policy can back up several machines, each on its own. The list of ticks says which; the select above then only
+  // says which of them the Browse buttons look at.
+  const ticks = active.map(a => el("input", { type: "checkbox", value: a.id, checked: p ? mine.includes(a.id) : active.length === 1 }));
+  const machines = el("div", { id: "machines", className: "picklist" }, ...active.map((a, i) => el("label", { className: "check" }, ticks[i], a.name + " (" + a.os + ")" + (a.revoked ? ", revoked" : a.online ? "" : ", offline"))));
+  const chosen = () => ticks.filter(t => t.checked).map(t => t.value);
+  const browseOn = el("div", { id: "browseOn", hidden: true }, el("label", { textContent: "The Browse buttons below look at" }), agent);
+  const syncMachines = () => {
+    const ids = chosen();
+    for (const o of agent.options) o.hidden = o.disabled = !ids.includes(o.value);
+    if (!ids.includes(agent.value) && ids.length) { agent.value = ids[0]; agent.dispatchEvent(new Event("change")); }
+    browseOn.hidden = ids.length < 2;
+  };
+  ticks.forEach(t => { t.onchange = syncMachines; });
+  syncMachines();
   const paths = el("textarea", { rows: 3, value: p ? (p.paths || []).join("\n") : "", placeholder: "One folder or file per line, for example D:\\Shares or /home" });
   const excludes = el("textarea", { rows: 2, value: p && p.excludes ? p.excludes.join("\n") : "", placeholder: "One pattern per line, for example *.tmp or node_modules" });
   const volumes = el("textarea", { rows: 2, value: p && p.volumes ? p.volumes.join("\n") : "", placeholder: "One per line, for example C: on Windows, /dev/vg0/data on Linux or /dev/zvol/tank/vm-disk on TrueNAS" });
@@ -377,7 +392,7 @@ function policyDialog(p) {
   save.onclick = async () => {
     const retention = {};
     for (const k in keep) { const n = parseInt(keep[k].value, 10); if (n > 0) retention[k] = n; }
-    const body = { name: name.value.trim(), agent_id: agent.value, paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "", vm_tracking: hypervisor.value === "vmware" ? "" : vmTracking.value, vm_scratch_dir: hypervisor.value === "vmware" || hypervisor.value === "hyperv" ? "" : vmScratch.value.trim(), system_state: sysState.checked, truenas_config: trueNAS.checked,
+    const body = { name: name.value.trim(), agent_ids: chosen(), agent_id: chosen()[0] || "", paths: lines(paths.value), excludes: lines(excludes.value), volumes: lines(volumes.value), vms: lines(vms.value), hypervisor: hypervisor.value, vmware_server: hypervisor.value === "vmware" ? vmwareServer.value : "", vm_tracking: hypervisor.value === "vmware" ? "" : vmTracking.value, vm_scratch_dir: hypervisor.value === "vmware" || hypervisor.value === "hyperv" ? "" : vmScratch.value.trim(), system_state: sysState.checked, truenas_config: trueNAS.checked,
       bare_metal: bareMetal.checked, machine_disks: machineDisks.value.split(",").map(x => x.trim()).filter(Boolean),
       schedule: kind.value === "daily" ? { daily_at: at.value } : kind.value === "interval" ? { interval: every.value.trim() } : {},
       retention, enabled: enabled.checked, no_snapshot: noSnap.checked };
@@ -400,7 +415,9 @@ function policyDialog(p) {
   buttons.append(el("button", { textContent: "Cancel", onclick: () => $("dlg").close() }), save);
   $("dlgBody").replaceChildren(el("h3", { textContent: p ? "Edit policy" : "New backup policy" }),
     el("label", { textContent: "Name" }), name,
-    el("label", { textContent: "Machine to back up" }), agent,
+    el("label", { textContent: "Machines to back up" }), machines,
+    el("div", { className: "hint", textContent: "Tick every machine this policy is for. Each is backed up on its own, with the same folders, schedule and rules, and keeps its own snapshots: “keep 14 daily” means 14 for each machine. A folder that a machine does not have is skipped there with a warning." }),
+    browseOn,
     el("label", { textContent: "Folders and files to back up" }), paths,
     picker("paths", "Browse the machine…", agent, paths, "folders"),
     el("div", { className: "hint", textContent: "Files are read from a snapshot where there is one, so files in use are backed up as they were at one instant: VSS on Windows, and ZFS on TrueNAS and other systems with ZFS, where every dataset under these folders is included." }),
