@@ -17,9 +17,20 @@ fail() {
 # The system's openssl: it writes .p12 files the way Keychain Access does.
 ssl=/usr/bin/openssl
 
+# codesign only takes a certificate that is marked as one for signing code.
+cat >"$work/openssl.cnf" <<'CNF'
+[req]
+distinguished_name = dn
+x509_extensions = ext
+[dn]
+[ext]
+basicConstraints = critical, CA:false
+keyUsage = critical, digitalSignature
+extendedKeyUsage = critical, codeSigning
+CNF
 p12() { # FILE COMMON-NAME
     $ssl req -x509 -newkey rsa:2048 -nodes -keyout "$work/key.pem" -out "$work/cert.pem" -days 2 \
-        -subj "/CN=$2/OU=CITEST1234/O=CI Test" 2>/dev/null
+        -config "$work/openssl.cnf" -subj "/CN=$2/OU=CITEST1234/O=CI Test" 2>/dev/null
     $ssl pkcs12 -export -inkey "$work/key.pem" -in "$work/cert.pem" -name "$2" -out "$1" -passout pass:secret
 }
 p12 "$work/app.p12" "Developer ID Application: CI Test (CITEST1234)"
