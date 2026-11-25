@@ -1,0 +1,1 @@
+Alerts and summaries can also arrive as push notifications through ntfy, on ntfy.sh or your own ntfy server, with an access token or a user name and password and a priority and tags for each kind of alert; set it up under "Alerts and reports".
