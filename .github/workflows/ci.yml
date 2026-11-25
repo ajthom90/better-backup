@@ -343,7 +343,7 @@ jobs:
           go-version-file: go.mod
       - name: Check the scripts
         if: matrix.arch == 'amd64'
-        run: shellcheck -S error packaging/install.sh packaging/test/agent.sh packaging/scripts/*.sh packaging/macos/build.sh packaging/macos/uninstall.sh packaging/macos/scripts/* packaging/macos/build-server.sh packaging/macos/server/uninstall.sh packaging/macos/server/scripts/* packaging/test/server-macos.sh
+        run: shellcheck -S error packaging/install.sh packaging/test/agent.sh packaging/test/macos-signing.sh packaging/scripts/*.sh packaging/macos/build.sh packaging/macos/ci-signing.sh packaging/macos/uninstall.sh packaging/macos/scripts/* packaging/macos/build-server.sh packaging/macos/server/uninstall.sh packaging/macos/server/scripts/* packaging/test/server-macos.sh
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
@@ -406,6 +406,8 @@ jobs:
           # A newer package, for the installed agent to update itself to.
           packaging/macos/build.sh 99.0.0 next
           BB_NEXT_PACKAGE="$(ls next/better-backup-agent_99.0.0_*.pkg)" packaging/test/agent.sh "$(ls dist/better-backup-agent_*.pkg)" tools shots
+      - name: Check the signing setup
+        run: packaging/test/macos-signing.sh
       - name: Build the server package
         run: packaging/macos/build-server.sh "0.0.0-ci-$(git rev-parse --short=12 HEAD)" dist "$(ls dist/better-backup-agent_*.pkg)"
       - name: Install the server package and use it

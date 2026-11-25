@@ -263,11 +263,13 @@ System Settings, Privacy & Security, **Full Disk Access**, add
 `/usr/local/bin/bb-agent`. The agent restarts by itself once it has access.
 Without it backups still run, and leave those folders out with a warning.
 
-- Until the installer is signed with an Apple Developer ID, macOS refuses to
-  open it by double-click: right-click it and choose **Open**, or allow it
-  under System Settings, Privacy & Security, or install it from Terminal with
-  `sudo installer -pkg FILE.pkg -target /`. An unsigned agent also has to be
-  given Full Disk Access again after each update.
+- Installers built with the project's Apple Developer ID are signed and
+  notarized, and open like any other. An unsigned one (a build of your own,
+  or of a fork) macOS refuses to open by double-click: right-click it and
+  choose **Open**, or allow it under System Settings, Privacy & Security, or
+  install it from Terminal with `sudo installer -pkg FILE.pkg -target /`. An
+  unsigned agent also has to be given Full Disk Access again after each
+  update.
 - Without questions (scripts, management tools): put a file `enroll.conf`
   beside the package holding `code=bb1...` and optionally `name=...`, then run
   `sudo installer -pkg FILE.pkg -target /`. Or use the script below.
@@ -1205,8 +1207,6 @@ bb-server fetch --repo /mnt/new-disk/repo \
   restored as its own file). Windows keeps most system files as hard links
   into its component store, so a system state restored in place uses more
   disk space than before.
-- The macOS installer is not signed or notarized until the release workflow is
-  given an Apple Developer ID (see `.github/workflows/release.yml`).
 - Microsoft 365 backup has only met a stand-in for Microsoft Graph, and
   restores into a folder only. See the Microsoft 365 section for what it
   leaves out.
@@ -1248,6 +1248,15 @@ make recovery-arm64 # the same for ARM64 machines, in ./bin/recovery-arm64.iso
 ```
 
 The macOS installer is built on a Mac by `packaging/macos/build.sh VERSION`.
+The release and Docker workflows sign it with a Developer ID, have Apple
+notarize it and staple the ticket to it, and the release also signs and
+notarizes the Mac programs in the archives, when the repository has these
+secrets: `MACOS_APP_CERT_P12` and `MACOS_INSTALLER_CERT_P12` (the "Developer
+ID Application" and "Developer ID Installer" certificates, each exported
+with its key as a .p12 and base64-encoded), `MACOS_CERT_PASSWORD`,
+`APPLE_API_KEY_P8` (an App Store Connect API key, base64-encoded),
+`APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` and `APPLE_TEAM_ID`. Without them,
+as in a fork, everything is built unsigned.
 
 `make recovery` needs an Ubuntu 24.04 machine with the tools named at the top
 of `packaging/recovery/build.py`.
