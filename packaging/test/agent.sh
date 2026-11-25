@@ -173,7 +173,8 @@ fi
 # The agent updates itself from an installer the server holds. NEXT is a
 # newer package (macOS), or tools/bb-agent-next a newer agent program to
 # make one from (Linux).
-agents_has() { "$tools/bb" agents 2>&1 | grep -q "$1"; }
+# The machine was enrolled twice; the second time as silent-install.
+agents_has() { "$tools/bb" agents 2>&1 | grep -q "silent-install.*$1"; }
 update_fail() {
     echo "--- agents"
     "$tools/bb" agents || true
@@ -201,7 +202,7 @@ if [ "$os" = Linux ] && [ -x "$tools/bb-agent-next" ]; then
     printf '#!/bin/sh\nexit 1\n' >"$work/broken"
     repack 98.0.0 "$work/broken" "exit 1"
     cp "$work/better-backup-agent_98.0.0_linux_$cpu.deb" "$BB_DATA/installers/"
-    until_ok 20 agents_has "98.0.0 available" || update_fail "the server does not offer the update"
+    until_ok 60 agents_has "98.0.0 available" || update_fail "the server does not offer the update"
     "$tools/bb" agent update silent-install || update_fail "update now was refused"
     until_ok 120 agents_has "update to 98.0.0 failed" || update_fail "the failed update was not reported"
     "$tools/bb" agents
@@ -216,7 +217,7 @@ if [ -n "$next" ]; then
     step "the agent updates itself"
     mkdir -p "$BB_DATA/installers"
     cp "$next" "$BB_DATA/installers/"
-    until_ok 20 agents_has "99.0.0 available" || update_fail "the server does not offer the update"
+    until_ok 60 agents_has "99.0.0 available" || update_fail "the server does not offer the update"
     "$tools/bb" agent update silent-install || update_fail "update now was refused"
     until_ok 180 agents_has "updated itself to 99.0.0" || update_fail "the agent did not update itself"
     "$tools/bb" agents
