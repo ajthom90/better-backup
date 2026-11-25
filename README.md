@@ -107,8 +107,9 @@ What to know about ARM64:
   and most ARM laptops (Snapdragon PCs) will not find their disk or
   network with it. A whole-machine backup of those can still be restored
   as files and disks, and as disk images to attach to a virtual machine.
-  It has recovered an emulated ARM64 machine; nobody has used it on a real
-  one yet.
+  It has recovered ARM64 virtual machines in UTM on an Apple silicon Mac,
+  with QEMU (also with Secure Boot on) and with Apple's Virtualization;
+  nobody has used it on a real ARM64 machine yet.
 - A server of either kind hands out agent installers for both.
 
 ## Quick start
@@ -887,6 +888,13 @@ Things to know:
   "Microsoft Windows" before starting the restored Windows. Physical machines
   trust it as delivered.
 - The recovery disc needs about 1.5 GB of memory.
+- The recovery screen is also on the machine's first serial port (115200
+  baud) and on the console a hypervisor gives a virtual machine in place of
+  one (`hvc0`: Apple's Virtualization, Xen, a virtio console). Keys work
+  there as on the keyboard, and "C" opens the command line on the device it
+  was typed on. One exception is known: in UTM, a virtual machine with
+  Apple's Virtualization that has a keyboard shows the screen on its serial
+  port but takes no keys from it.
 - The machine must have the same kind of processor as the original: x64 or
   ARM64. The page warns when they differ.
 - Windows restored onto very different hardware may lack the driver for its

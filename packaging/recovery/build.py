@@ -44,6 +44,13 @@ WANTED = [
     "drivers/net/virtio_net.ko", "drivers/net/phy", "drivers/net/mdio", "drivers/net/usb",
     "drivers/usb/host", "drivers/usb/storage", "drivers/hid", "drivers/input/serio", "drivers/input/keyboard",
     "drivers/video/fbdev/hyperv_fb.ko", "drivers/gpu/drm/hyperv", "drivers/pci/controller",
+    # The screens of virtual machines whose firmware leaves no picture
+    # behind for the kernel to draw on: without its driver such a
+    # machine shows nothing, and so no recovery code. virtio is what
+    # KVM, UTM, Parallels and Apple's Virtualization give an ARM64
+    # machine.
+    "drivers/gpu/drm/virtio", "drivers/gpu/drm/tiny/bochs.ko", "drivers/gpu/drm/tiny/cirrus.ko",
+    "drivers/gpu/drm/vmwgfx", "drivers/gpu/drm/qxl",
     "drivers/mmc/host", "drivers/mmc/core", "drivers/md/dm-mod.ko",
 ]
 # Left out even though they sit in the directories above: large, and of
