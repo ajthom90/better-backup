@@ -106,8 +106,11 @@ Usage:
                                          keep a copy on another disk or share
   bb offsite set --s3-endpoint URL --s3-bucket NAME [--s3-region REGION]
         [--s3-prefix FOLDER] [--s3-access-key KEY] [--daily-at 03:00]
+        [--lock-days N [--lock-mode compliance|governance]]
                                          keep a copy in S3-compatible storage; the
-                                         secret key is read from $BB_S3_SECRET_KEY
+                                         secret key is read from $BB_S3_SECRET_KEY.
+                                         --lock-days locks the copy against deletion
+                                         (the bucket needs S3 Object Lock)
   bb offsite test                        check the copy's location can be used
   bb offsite run [--wait]                bring the copy up to date now
   bb offsite off                         stop updating the copy
@@ -148,6 +151,8 @@ var (
 	fAgent   = fs.String("agent", "", "")
 	fEvery   = fs.String("every", "", "")
 	fDaily   = fs.String("daily-at", "", "")
+	fLockD   = fs.Int("lock-days", 0, "")
+	fLockM   = fs.String("lock-mode", "", "")
 	fLimit   = fs.Int("limit", 20, "")
 	fTarget  = fs.String("target", "", "")
 	fOver    = fs.String("overwrite", "", "")
@@ -703,6 +708,13 @@ func main() {
 			fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 			if set["folder"] {
 				o.Kind, o.Folder = "folder", *fFolder
+				o.LockDays = 0 // a folder cannot be locked
+			}
+			if set["lock-days"] {
+				o.LockDays = *fLockD
+			}
+			if set["lock-mode"] {
+				o.LockMode = *fLockM
 			}
 			if set["s3-endpoint"] {
 				o.Kind, o.Endpoint = "s3", *fS3End
@@ -780,6 +792,13 @@ func printOffsite(st *api.OffsiteStatus) {
 	}
 	yes := map[bool]string{true: "yes", false: "no"}
 	fmt.Fprintf(tabs, "Updating the copy\t%s\n", yes[st.Enabled])
+	if st.LockDays > 0 {
+		until := "from the next copy on"
+		if st.LockedUntil != nil {
+			until = "everything until at least " + st.LockedUntil.Local().Format("2006-01-02")
+		}
+		fmt.Fprintf(tabs, "Locked against deletion\t%d days (%s)\n", st.LockDays, until)
+	}
 	if st.Kind == "folder" {
 		fmt.Fprintf(tabs, "Folder\t%s\n", st.Folder)
 	} else {

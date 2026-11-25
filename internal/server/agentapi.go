@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"io"
@@ -245,6 +246,19 @@ func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request, a *api.A
 		err = s.finish(j, api.StatusFailed, req.Error, nil, req.Warnings)
 	case j.Type == api.JobBackup:
 		var sn *tree.Snapshot
+		s.mu.Lock()
+		parent := s.parentLocked(a.ID, j.PolicyID)
+		var history []*tree.Snapshot
+		for _, h := range s.snaps {
+			if h.AgentID == a.ID && h.PolicyID == j.PolicyID {
+				history = append(history, h)
+			}
+		}
+		var data jobData
+		if d := s.jobData[j.ID]; d != nil {
+			data = *d
+		}
+		s.mu.Unlock()
 		if sn, err = s.commitSnapshot(a, j, &req); err != nil {
 			s.finish(j, api.StatusFailed, err.Error(), nil, req.Warnings)
 			fail(w, http.StatusBadRequest, err.Error())
@@ -253,6 +267,16 @@ func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request, a *api.A
 		j.SnapshotID = sn.ID
 		if req.Stats != nil && req.Stats.Warnings > 0 {
 			status = api.StatusWarning
+		}
+		if s.protection().Detect && j.PolicyID != "" {
+			if reasons := inspect(s.repo.Get, sn, parent, history, data); len(reasons) > 0 {
+				s.suspect(sn, parent, a, reasons)
+				status = api.StatusWarning
+				for _, r := range reasons {
+					req.Warnings = append(req.Warnings, "Looks like ransomware: "+r)
+				}
+				req.Warnings = append(req.Warnings, "Older backups of this policy are kept, whatever its retention rules say, until someone has looked at this one under “Ransomware protection”.")
+			}
 		}
 		err = s.finish(j, status, "", sn.Stats, req.Warnings)
 		s.applyRetention(j.PolicyID)
@@ -353,6 +377,20 @@ func (s *Server) handlePutChunk(w http.ResponseWriter, r *http.Request, a *api.A
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Pages of folder entries compress well whatever the files hold, and
+	// with small files they are much of an upload. Only file data says
+	// whether the files are encrypted.
+	s.mu.Lock()
+	if job := s.running[a.ID]; job != "" && !bytes.HasPrefix(data, []byte(`[{"name":`)) {
+		d := s.jobData[job]
+		if d == nil {
+			d = &jobData{}
+			s.jobData[job] = d
+		}
+		d.raw += int64(len(data))
+		d.wire += int64(len(body))
+	}
+	s.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -379,7 +417,9 @@ func (s *Server) handleGetChunk(w http.ResponseWriter, r *http.Request, a *api.A
 }
 
 // applyRetention forgets snapshots of a policy that its rules no longer
-// keep. Their data is reclaimed by the next garbage collection.
+// keep. They go the way of every deleted snapshot: set aside for the
+// delay, then given up. Snapshots under the retention lock stay, and so
+// does everything while a backup of the policy looks like ransomware.
 func (s *Server) applyRetention(policyID string) {
 	if policyID == "" {
 		return
@@ -388,6 +428,11 @@ func (s *Server) applyRetention(policyID string) {
 	if err != nil || p == nil {
 		return
 	}
+	if s.held(policyID) {
+		s.log.Warn("retention: nothing is forgotten while a backup of this policy looks like ransomware", "policy", p.Name)
+		return
+	}
+	prot, now := s.protection(), time.Now()
 	s.mu.Lock()
 	var snaps []*tree.Snapshot
 	for _, sn := range s.snaps {
@@ -397,7 +442,10 @@ func (s *Server) applyRetention(policyID string) {
 	}
 	s.mu.Unlock()
 	for _, sn := range forget(snaps, p.Retention) {
-		if err := s.deleteSnapshot(sn.ID); err != nil {
+		if !lockedUntil(sn, prot, now).IsZero() {
+			continue // forgotten by a later run, once the lock is over
+		}
+		if err := s.removeSnapshot(sn.ID, retentionUser); err != nil {
 			s.log.Error("retention: could not forget snapshot", "snapshot", sn.ID, "err", err)
 			continue
 		}

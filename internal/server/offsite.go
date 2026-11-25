@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +15,24 @@ import (
 )
 
 const offsiteSettingsKey = "offsite"
+
+// offsiteLockKey holds the date the last run locked the copy to.
+const offsiteLockKey = "offsite_locked_until"
+
+// offsiteLock is what the settings ask the copy to be locked with.
+func (s *Server) offsiteLock(o api.OffsiteSettings) *offsite.Lock {
+	if o.LockDays <= 0 {
+		return nil
+	}
+	l := &offsite.Lock{Days: o.LockDays, Mode: offsite.LockCompliance}
+	if o.LockMode == "governance" {
+		l.Mode = offsite.LockGovernance
+	}
+	if t := settingTime(s.setting(offsiteLockKey)); t != nil {
+		l.Until = *t
+	}
+	return l
+}
 
 // offsiteSettings returns the stored settings, including the secret key.
 func (s *Server) offsiteSettings() api.OffsiteSettings {
@@ -38,6 +57,18 @@ func checkOffsiteSettings(o *api.OffsiteSettings) error {
 	}
 	if o.Kind != "folder" && o.Kind != "s3" {
 		return errors.New(`kind must be "folder" or "s3"`)
+	}
+	o.LockMode = strings.ToLower(strings.TrimSpace(o.LockMode))
+	switch {
+	case o.LockDays < 0 || o.LockDays > maxProtectDays:
+		return fmt.Errorf("the days to lock the copy for must be between 0 and %d", maxProtectDays)
+	case o.LockDays > 0 && o.Kind != "s3":
+		return errors.New("only a copy in S3-compatible storage can be locked; a folder cannot")
+	case o.LockMode != "" && o.LockMode != "compliance" && o.LockMode != "governance":
+		return errors.New(`lock_mode must be "compliance" or "governance"`)
+	}
+	if o.LockDays == 0 {
+		o.LockMode = ""
 	}
 	if !o.Enabled {
 		return nil
@@ -66,6 +97,9 @@ func (s *Server) offsiteStatus() api.OffsiteStatus {
 	if js, err := s.jobs(`WHERE type = ? AND status = ? ORDER BY created DESC LIMIT 1`, api.JobOffsite, api.StatusSuccess); err == nil && len(js) > 0 {
 		st.LastSuccess = js[0].Finished
 	}
+	if st.LockDays > 0 {
+		st.LockedUntil = settingTime(s.setting(offsiteLockKey))
+	}
 	return st
 }
 
@@ -87,10 +121,15 @@ func (s *Server) handleSaveOffsite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o.Saved = time.Now()
+	old := s.offsiteSettings()
 	b, _ := json.Marshal(o)
 	if err := s.setSetting(offsiteSettingsKey, string(b)); err != nil {
 		s.internal(w, err)
 		return
+	}
+	// Another place starts without any locks.
+	if old.Endpoint != o.Endpoint || old.Bucket != o.Bucket || old.Prefix != o.Prefix || old.LockMode != o.LockMode {
+		s.setSetting(offsiteLockKey, "")
 	}
 	reply(w, http.StatusOK, s.offsiteStatus())
 }
@@ -121,6 +160,18 @@ func (s *Server) handleTestOffsite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var res api.OffsiteTest
+	if o := s.offsiteSettings(); o.LockDays > 0 {
+		l, ok := t.(offsite.Locker)
+		if !ok {
+			fail(w, http.StatusBadRequest, "only a copy in S3-compatible storage can be locked")
+			return
+		}
+		if err := l.CheckLock(ctx); err != nil {
+			fail(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		res.Locks = true
+	}
 	for _, o := range objs {
 		res.Objects++
 		res.Bytes += o.Size
@@ -208,7 +259,8 @@ func (s *Server) runOffsite(ctx context.Context) {
 	go func() {
 		defer cancel(nil)
 		var res offsite.Result
-		t, err := offsiteTarget(s.offsiteSettings())
+		settings := s.offsiteSettings()
+		t, err := offsiteTarget(settings)
 		if err == nil {
 			// Finish the pack being written, so the copy includes
 			// everything backed up so far.
@@ -218,7 +270,7 @@ func (s *Server) runOffsite(ctx context.Context) {
 					s.log.Error("saving the server's configuration into the repository", "err", serr)
 				}
 				last := time.Now()
-				res, err = offsite.Sync(ctx, s.cfg.RepoDir, t, func(r offsite.Result) {
+				res, err = offsite.Sync(ctx, s.cfg.RepoDir, t, s.offsiteLock(settings), func(r offsite.Result) {
 					if time.Since(last) < 2*time.Second {
 						return
 					}
@@ -227,6 +279,9 @@ func (s *Server) runOffsite(ctx context.Context) {
 					s.db.Exec(`UPDATE jobs SET progress = ?, heartbeat = ? WHERE id = ?`, string(b), ms(last), j.ID)
 				})
 			}
+		}
+		if res.LockedUntil != nil {
+			s.setSetting(offsiteLockKey, res.LockedUntil.UTC().Format(time.RFC3339))
 		}
 		s.mu.Lock()
 		s.offsiteBusy = false

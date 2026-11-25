@@ -13,6 +13,7 @@ import (
 	"net/mail"
 	"net/smtp"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -111,6 +112,22 @@ func (s *Server) handleSaveAlertSettings(w http.ResponseWriter, r *http.Request)
 	if err := checkAlertSettings(&a); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// Whoever got the alerts until now hears that this is changing: an
+	// intruder's first step is to make the server quiet.
+	if old := s.alertSettings(); (old.Enabled || old.Webhook != "") && alertsReduced(old, a) {
+		subject := "[better-backup] Security: The alert settings were changed"
+		body := fmt.Sprintf("%s, signed in from %s, changed where the better-backup server %s sends its alerts, or switched them off. This message went to where they were sent until now.\n\nIf this was not meant, look at “Alerts and reports” in the web UI and change that user's password.\n", who(r).name, remoteHost(r), serverName())
+		go func() {
+			if old.Enabled {
+				if err := sendMail(old, subject, body); err != nil {
+					s.log.Error("sending alert email", "subject", subject, "err", err)
+				}
+			}
+			if old.Webhook != "" {
+				postWebhook(s.ctx, old.Webhook, subject, body)
+			}
+		}()
 	}
 	b, _ := json.Marshal(a)
 	if err := s.setSetting(alertSettingsKey, string(b)); err != nil {
@@ -382,4 +399,23 @@ func sendMail(a api.AlertSettings, subject, body string) error {
 		return err
 	}
 	return c.Quit()
+}
+
+// alertsReduced reports whether new settings stop an alert from
+// reaching somewhere the old settings sent it.
+func alertsReduced(old, cur api.AlertSettings) bool {
+	if old.Enabled && (!cur.Enabled || old.Host != cur.Host) {
+		return true
+	}
+	if old.Webhook != "" && old.Webhook != cur.Webhook {
+		return true
+	}
+	if old.Enabled {
+		for _, to := range old.To {
+			if !slices.Contains(cur.To, to) {
+				return true
+			}
+		}
+	}
+	return false
 }

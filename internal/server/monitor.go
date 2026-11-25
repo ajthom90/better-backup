@@ -330,6 +330,14 @@ func (s *Server) health(now time.Time) (*api.Health, error) {
 	}
 
 	m := s.monitorSettings()
+	if sus, err := s.suspicions(`WHERE reviewed = 0`); err == nil {
+		for _, x := range sus {
+			issue("failed", "A backup of %s on %s looks like ransomware (policy \"%s\"). Older backups of the policy are kept until someone has looked at it under “Ransomware protection”.", x.Agent, x.Time.Local().Format("2006-01-02 15:04"), x.Policy)
+		}
+	}
+	if p := s.pendingProtection(); p != nil {
+		issue("warning", "The ransomware protection will be weakened on %s, as %s asked. It can be cancelled until then.", p.At.Local().Format("2006-01-02 15:04"), p.By)
+	}
 	if d := h.Disk; d.Known && m.DiskWarnPercent > 0 && d.Free*100 < d.Total*int64(m.DiskWarnPercent) {
 		issue("failed", "The disk that holds the repository is nearly full: %s free of %s.", byteSize(d.Free), byteSize(d.Total))
 	}

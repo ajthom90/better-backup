@@ -27,6 +27,8 @@ func (s *Server) background(ctx context.Context) {
 		s.scheduleVerify(time.Now())
 		s.recordUsage(time.Now())
 		s.sendSummary(time.Now())
+		s.applyPendingProtection(time.Now())
+		s.purgeTrash(time.Now())
 		s.maintain()
 		s.maybeSaveState()
 		s.runOffsite(ctx)
@@ -154,6 +156,10 @@ func (s *Server) gc() (any, error) {
 	s.mu.Lock()
 	snaps := make([]*tree.Snapshot, 0, len(s.snaps))
 	for _, sn := range s.snaps {
+		snaps = append(snaps, sn)
+	}
+	// Deleted snapshots keep their data until their time is up.
+	for _, sn := range s.trashed {
 		snaps = append(snaps, sn)
 	}
 	s.mu.Unlock()

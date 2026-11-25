@@ -362,6 +362,18 @@ func (s *Server) handleRecover(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.AsOf != nil {
+		l, ok := t.(offsite.Locker)
+		if !ok {
+			fail(w, http.StatusBadRequest, "Only a copy in a bucket with Object Lock can be taken as it was at an earlier time.")
+			return
+		}
+		if req.AsOf.After(time.Now()) {
+			fail(w, http.StatusBadRequest, "The time to take the copy from is in the future.")
+			return
+		}
+		t = l.AsOf(*req.AsOf)
+	}
 	// The key is checked against the copy before the long download.
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()

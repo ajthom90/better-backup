@@ -333,18 +333,6 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	reply(w, http.StatusOK, sn)
 }
 
-func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
-	if s.snapshot(r.PathValue("id")) == nil {
-		fail(w, http.StatusNotFound, "no such snapshot")
-		return
-	}
-	if err := s.deleteSnapshot(r.PathValue("id")); err != nil {
-		s.internal(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // handleList lists a directory inside a snapshot. With no path it lists
 // the snapshot's sources.
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {

@@ -123,6 +123,15 @@ active, and new jobs wait until they finish.
   saved into the repository as `state/server.bak`, sealed with the
   repository key, and travel with the offsite copy. A new, empty server can
   take over from them (`internal/server/setup.go`).
+- **Deleting.** Agents have no call that deletes. A deleted snapshot keeps
+  its record in the repository and is only listed in the server's `trash`
+  table until its delay has passed, so garbage collection and the offsite
+  copy treat it like any other. A retention lock refuses deletion of young
+  snapshots, changes that weaken these settings wait three days, and each
+  finished backup is compared with its parent for signs of ransomware
+  (`internal/server/protect.go`, `detect.go`). The offsite copy can be
+  locked with S3 Object Lock (`internal/offsite`, `Locker`), which is the
+  one protection that holds against whoever controls the server.
 - **The server holds the key.** This is what allows dedup across machines and
   restores that need no secret from the agent. It means whoever controls the
   server and its key can read the backups; protect both accordingly.
